@@ -1222,7 +1222,11 @@ InvalidKeyData
 		assert!(result.is_err());
 		// Check for actual error message that rustls_pemfile returns
 		let error_msg = result.unwrap_err().to_string();
-		assert!(error_msg.contains("failed to fill whole buffer") || error_msg.contains("no key") || error_msg.contains("unsupported key"));
+		assert!(
+			error_msg.contains("failed to fill whole buffer")
+				|| error_msg.contains("no key")
+				|| error_msg.contains("unsupported key")
+		);
 	}
 
 	#[test]

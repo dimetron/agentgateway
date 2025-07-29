@@ -555,7 +555,7 @@ AwEHoUQDQgAEwWSdCtU7tQGYtpNpJXSB5VN4yT1lRXzHh8UOgWWqiYXX1WYHk8vf
 
 		let result = parse_key(ec_key);
 		assert!(result.is_ok());
-		
+
 		let key = result.unwrap();
 		match key {
 			PrivateKeyDer::Sec1(_) => {}, // Expected for EC private keys
@@ -574,7 +574,7 @@ SGjfUH8wjCgRLFmKGfZSFZFh1xN9M5Bq6v1P6kNqW7nM7oA4VJWqKp5W
 
 		let result = parse_key(pkcs8_ec_key);
 		assert!(result.is_ok());
-		
+
 		let key = result.unwrap();
 		match key {
 			PrivateKeyDer::Pkcs8(_) => {}, // Expected for PKCS8 format

@@ -1,6 +1,4 @@
-// For now, the entire package is not linked up to anything so squash the warnings
-#![allow(unused)]
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Read;
@@ -44,9 +42,10 @@ pub mod types;
 mod ui;
 pub mod util;
 
-use agent_core::prelude::*;
 use control::caclient;
 use telemetry::{metrics, trc};
+
+use crate::telemetry::trc::Protocol;
 
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -58,11 +57,12 @@ pub struct NestedRawConfig {
 
 #[derive(serde::Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-/// RawConfig represents the inputs a user can pass in. Config represents the internal representation of this.
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+// RawConfig represents the inputs a user can pass in. Config represents the internal representation of this.
 pub struct RawConfig {
 	enable_ipv6: Option<bool>,
 
-	// Local XDS path. If not specified, the current configuration file will be used.
+	/// Local XDS path. If not specified, the current configuration file will be used.
 	local_xds_path: Option<PathBuf>,
 
 	ca_address: Option<String>,
@@ -74,56 +74,93 @@ pub struct RawConfig {
 	cluster_id: Option<String>,
 	network: Option<String>,
 
-	// Admin UI address in the format "ip:port"
+	/// Admin UI address in the format "ip:port"
 	admin_addr: Option<String>,
-	// Stats/metrics server address in the format "ip:port"
+	/// Stats/metrics server address in the format "ip:port"
 	stats_addr: Option<String>,
-	// Readiness probe server address in the format "ip:port"
+	/// Readiness probe server address in the format "ip:port"
 	readiness_addr: Option<String>,
 
 	auth_token: Option<String>,
 
+	#[serde(default, with = "serde_dur_option")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	connection_termination_deadline: Option<Duration>,
+	#[serde(default, with = "serde_dur_option")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	connection_min_termination_deadline: Option<Duration>,
 
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	worker_threads: Option<StringOrInt>,
 
 	tracing: Option<RawTracing>,
 	logging: Option<RawLogging>,
+	metrics: Option<RawMetrics>,
 
 	http2: Option<RawHTTP2>,
 }
 
-#[derive(serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema_de!)]
 pub struct RawHTTP2 {
 	window_size: Option<u32>,
 	connection_window_size: Option<u32>,
 	frame_size: Option<u32>,
 	pool_max_streams_per_conn: Option<u16>,
+	#[serde(deserialize_with = "serde_dur_option::deserialize")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	pool_unused_release_timeout: Option<Duration>,
 }
 
-#[derive(serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema_de!)]
 pub struct RawTracing {
 	otlp_endpoint: String,
+	#[serde(default)]
+	headers: HashMap<String, String>,
+	#[serde(default)]
+	otlp_protocol: Protocol,
 	fields: Option<RawLoggingFields>,
+	/// Expression to determine the amount of *random sampling*.
+	/// Random sampling will initiate a new trace span if the incoming request does not have a trace already.
+	/// This should evaluate to either a float between 0.0-1.0 (0-100%) or true/false.
+	/// This defaults to 'false'.
+	random_sampling: Option<StringBoolFloat>,
+	/// Expression to determine the amount of *client sampling*.
+	/// Client sampling determines whether to initiate a new trace span if the incoming request does have a trace already.
+	/// This should evaluate to either a float between 0.0-1.0 (0-100%) or true/false.
+	/// This defaults to 'true'.
+	client_sampling: Option<StringBoolFloat>,
 }
 
-#[derive(serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema_de!)]
 pub struct RawLogging {
 	filter: Option<String>,
 	fields: Option<RawLoggingFields>,
 }
 
-#[derive(serde::Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema_de!)]
+pub struct RawMetrics {
+	fields: Option<RawMetricFields>,
+}
+
+#[apply(schema_de!)]
+pub struct RawMetricFields {
+	#[serde(default)]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "std::collections::HashMap<String, String>")
+	)]
+	add: IndexMap<String, String>,
+}
+
+#[apply(schema_de!)]
 pub struct RawLoggingFields {
 	#[serde(default)]
 	remove: Vec<String>,
 	#[serde(default)]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "std::collections::HashMap<String, String>")
+	)]
 	add: IndexMap<String, String>,
 }
 
@@ -160,8 +197,63 @@ impl<'de> Deserialize<'de> for StringOrInt {
 	}
 }
 
+#[derive(Clone, Debug)]
+pub struct StringBoolFloat(String);
+
+impl<'de> Deserialize<'de> for StringBoolFloat {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		struct StringBoolFloatVisitor();
+
+		impl Visitor<'_> for StringBoolFloatVisitor {
+			type Value = StringBoolFloat;
+
+			fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+				formatter.write_str("string, bool, float, or int")
+			}
+
+			fn visit_str<E>(self, value: &str) -> Result<StringBoolFloat, E> {
+				Ok(StringBoolFloat(value.to_owned()))
+			}
+
+			fn visit_f64<E>(self, value: f64) -> Result<StringBoolFloat, E> {
+				Ok(StringBoolFloat(value.to_string()))
+			}
+
+			fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+				Ok(StringBoolFloat(v.to_string()))
+			}
+
+			fn visit_i64<E>(self, value: i64) -> Result<StringBoolFloat, E> {
+				Ok(StringBoolFloat(value.to_string()))
+			}
+		}
+
+		deserializer.deserialize_any(StringBoolFloatVisitor())
+	}
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for StringBoolFloat {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"StringBoolFloat".into()
+	}
+
+	fn schema_id() -> std::borrow::Cow<'static, str> {
+		"StringBoolFloat".into()
+	}
+
+	fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({
+			"type": ["string", "number", "boolean"]
+		})
+	}
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
 	pub network: Strng,
 	#[serde(with = "serde_dur")]
@@ -183,10 +275,20 @@ pub struct Config {
 	pub logging: crate::telemetry::log::Config,
 	pub dns: client::Config,
 	pub proxy_metadata: ProxyMetadata,
+	pub threading_mode: ThreadingMode,
+}
+
+#[derive(serde::Serialize, Copy, PartialOrd, PartialEq, Eq, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum ThreadingMode {
+	#[default]
+	Multithreaded,
+	// Experimental; do not use beyond testing
+	ThreadPerCore,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct XDSConfig {
 	/// XDS address to use. If unset, XDS will not be used.
 	pub address: Option<String>,
@@ -339,7 +441,7 @@ pub fn ipv6_enabled_on_localhost() -> io::Result<bool> {
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProxyMetadata {
 	pub instance_ip: String,
 	pub pod_name: String,

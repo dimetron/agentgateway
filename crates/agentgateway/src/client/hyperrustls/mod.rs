@@ -5,17 +5,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
-use http::Uri;
-use hyper::rt;
-use hyper_util::rt::TokioIo;
 use itertools::Itertools;
 use rustls_pki_types::ServerName;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
 use tower::Service;
 use tracing::debug;
 
-use crate::transport::stream;
 use crate::transport::stream::Socket;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -34,7 +29,7 @@ impl Service<SocketAddr> for HttpsConnector {
 	#[allow(clippy::type_complexity)]
 	type Future = Pin<Box<dyn Future<Output = Result<Socket, BoxError>> + Send>>;
 
-	fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+	fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
 		Poll::Ready(Ok(()))
 	}
 
@@ -54,7 +49,7 @@ impl Service<SocketAddr> for HttpsConnector {
 				.connect(hostname, Box::new(tcp))
 				.await
 				.map_err(io::Error::other)?;
-			let socket = Socket::from_tls(stream::Extension::new(), counter, tls.into())?;
+			let socket = Socket::from_tls(ext, counter, tls.into())?;
 			Ok(socket)
 		})
 	}

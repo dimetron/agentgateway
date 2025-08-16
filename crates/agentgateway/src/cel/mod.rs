@@ -3,25 +3,27 @@
 
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
+use std::net::IpAddr;
 use std::sync::Arc;
 
-use crate::http::backendtls::{BackendTLS, LocalBackendTLS};
+use agent_core::strng::Strng;
+use bytes::Bytes;
+pub use cel::Value;
+use cel::objects::Key;
+use cel::{Context, ExecutionError, ParseError, ParseErrors, Program};
+pub use functions::{FLATTEN_LIST, FLATTEN_LIST_RECURSIVE, FLATTEN_MAP, FLATTEN_MAP_RECURSIVE};
+use once_cell::sync::Lazy;
+use serde::{Serialize, Serializer};
+
 use crate::http::jwt::Claims;
+use crate::llm;
 use crate::llm::{LLMRequest, LLMResponse};
 use crate::serdes::*;
-use crate::telemetry::log::CelLogging;
-use crate::{json, llm};
-use agent_core::strng::Strng;
-use axum_core::body::Body;
-use bytes::Bytes;
-use cel_interpreter::extractors::{Arguments, This};
-use cel_interpreter::objects::{Key, Map, TryIntoValue, ValueType};
-use cel_interpreter::{Context, ExecutionError, FunctionContext, Program, ResolveResult, Value};
-use cel_parser::{Expression as CelExpression, ParseError};
-use http::Request;
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize, Serializer};
-use tiktoken_rs::ChatCompletionRequestMessage;
+use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
+use crate::types::discovery::Identity;
+
+mod functions;
+mod strings;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -29,6 +31,8 @@ pub enum Error {
 	Resolve(#[from] ExecutionError),
 	#[error("parse: {0}")]
 	Parse(#[from] ParseError),
+	#[error("parse: {0}")]
+	Parses(#[from] ParseErrors),
 	#[error("variable: {0}")]
 	Variable(String),
 }
@@ -39,6 +43,7 @@ impl From<Box<dyn std::error::Error>> for Error {
 	}
 }
 
+pub const SOURCE_ATTRIBUTE: &str = "source";
 pub const REQUEST_ATTRIBUTE: &str = "request";
 pub const REQUEST_BODY_ATTRIBUTE: &str = "request.body";
 pub const LLM_ATTRIBUTE: &str = "llm";
@@ -47,10 +52,21 @@ pub const LLM_COMPLETION_ATTRIBUTE: &str = "llm.completion";
 pub const RESPONSE_ATTRIBUTE: &str = "response";
 pub const JWT_ATTRIBUTE: &str = "jwt";
 pub const MCP_ATTRIBUTE: &str = "mcp";
+pub const ALL_ATTRIBUTES: &[&str] = &[
+	SOURCE_ATTRIBUTE,
+	REQUEST_ATTRIBUTE,
+	REQUEST_BODY_ATTRIBUTE,
+	LLM_ATTRIBUTE,
+	LLM_PROMPT_ATTRIBUTE,
+	LLM_COMPLETION_ATTRIBUTE,
+	RESPONSE_ATTRIBUTE,
+	JWT_ATTRIBUTE,
+	MCP_ATTRIBUTE,
+];
 
 pub struct Expression {
 	attributes: HashSet<String>,
-	expression: CelExpression,
+	expression: Program,
 	original_expression: String,
 }
 
@@ -73,8 +89,7 @@ impl Debug for Expression {
 
 fn root_context() -> Arc<Context<'static>> {
 	let mut ctx = Context::default();
-	ctx.add_function("json", fns::json_parse);
-	ctx.add_function("with", fns::with);
+	functions::insert_all(&mut ctx);
 	Arc::new(ctx)
 }
 
@@ -121,6 +136,7 @@ impl ContextBuilder {
 			// TODO: split headers and the rest?
 			headers: req.headers().clone(),
 			uri: req.uri().clone(),
+			path: req.uri().path().to_string(),
 			body: None,
 		});
 		self.attributes.contains(REQUEST_BODY_ATTRIBUTE)
@@ -141,6 +157,27 @@ impl ContextBuilder {
 		self.context.jwt = Some(info.clone())
 	}
 
+	pub fn with_source(&mut self, tcp: &TCPConnectionInfo, tls: Option<&TLSConnectionInfo>) {
+		if !self.attributes.contains(SOURCE_ATTRIBUTE) {
+			return;
+		}
+		self.context.source = Some(SourceContext {
+			address: tcp.peer_addr.ip(),
+			port: tcp.peer_addr.port(),
+			identity: tls.and_then(|t| t.src_identity.as_ref()).map(|m| match m {
+				Identity::Spiffe {
+					trust_domain,
+					namespace,
+					service_account,
+				} => IdentityContext {
+					trust_domain: trust_domain.clone(),
+					namespace: namespace.clone(),
+					service_account: service_account.clone(),
+				},
+			}),
+		})
+	}
+
 	pub fn with_llm_request(&mut self, info: &LLMRequest) -> bool {
 		if !self.attributes.contains(LLM_ATTRIBUTE) {
 			return false;
@@ -151,6 +188,7 @@ impl ContextBuilder {
 			request_model: info.request_model.clone(),
 			provider: info.provider.clone(),
 			input_tokens: info.input_tokens,
+			params: info.params.clone(),
 
 			response_model: None,
 			output_tokens: None,
@@ -177,7 +215,7 @@ impl ContextBuilder {
 			o.total_tokens = info.total_tokens;
 			if let Some(pt) = info.input_tokens_from_response {
 				// Better info, override
-				o.input_tokens = pt;
+				o.input_tokens = Some(pt);
 			}
 			o.response_model = info.provider_model.clone();
 			// Not always set
@@ -200,6 +238,7 @@ impl ContextBuilder {
 			response,
 			jwt,
 			llm,
+			source,
 		} = &self.context;
 
 		ctx.add_variable_from_value(REQUEST_ATTRIBUTE, opt_to_value(request)?);
@@ -207,6 +246,7 @@ impl ContextBuilder {
 		ctx.add_variable_from_value(JWT_ATTRIBUTE, opt_to_value(jwt)?);
 		ctx.add_variable_from_value(MCP_ATTRIBUTE, opt_to_value(&mcp)?);
 		ctx.add_variable_from_value(LLM_ATTRIBUTE, opt_to_value(llm)?);
+		ctx.add_variable_from_value(SOURCE_ATTRIBUTE, opt_to_value(source)?);
 
 		Ok(Executor { ctx })
 	}
@@ -218,7 +258,7 @@ impl ContextBuilder {
 
 impl Executor<'_> {
 	pub fn eval(&self, expr: &Expression) -> Result<Value, Error> {
-		Ok(Value::resolve(&expr.expression, &self.ctx)?)
+		Ok(expr.expression.execute(&self.ctx)?)
 	}
 	pub fn eval_bool(&self, expr: &Expression) -> bool {
 		match self.eval(expr) {
@@ -234,22 +274,38 @@ pub struct Executor<'a> {
 impl Expression {
 	pub fn new(original_expression: impl Into<String>) -> Result<Self, Error> {
 		let original_expression = original_expression.into();
-		let expression = cel_parser::parse(&original_expression)?;
+		let expression = Program::compile(&original_expression)?;
 
-		let mut props = Vec::with_capacity(5);
-		properties(&expression, &mut props, &mut Vec::default());
+		let mut props: Vec<Vec<&str>> = Vec::with_capacity(5);
+		properties(
+			&expression.expression().expr,
+			&mut props,
+			&mut Vec::default(),
+		);
 
+		let include_all = expression.references().functions().contains(&"variables");
 		// For now we only look at the first level. We could be more precise
 		let mut attributes: HashSet<String> = props
 			.into_iter()
-			.filter_map(|tokens| match tokens.as_slice() {
-				["request", "body", ..] => Some(REQUEST_BODY_ATTRIBUTE.to_string()),
-				["llm", "prompt", ..] => Some(LLM_PROMPT_ATTRIBUTE.to_string()),
-				["llm", "completion", ..] => Some(LLM_COMPLETION_ATTRIBUTE.to_string()),
-				[first, ..] => Some(first.to_string()),
-				_ => None,
+			.flat_map(|tokens| match tokens.as_slice() {
+				["request", "body", ..] => vec![
+					REQUEST_ATTRIBUTE.to_string(),
+					REQUEST_BODY_ATTRIBUTE.to_string(),
+				],
+				["llm", "prompt", ..] => vec![LLM_ATTRIBUTE.to_string(), LLM_PROMPT_ATTRIBUTE.to_string()],
+				["llm", "completion", ..] => vec![
+					LLM_ATTRIBUTE.to_string(),
+					LLM_COMPLETION_ATTRIBUTE.to_string(),
+				],
+				[first, ..] => vec![first.to_string()],
+				_ => Vec::default(),
 			})
 			.collect();
+		if include_all {
+			ALL_ATTRIBUTES.iter().for_each(|attr| {
+				attributes.insert(attr.to_string());
+			});
+		}
 
 		Ok(Self {
 			attributes,
@@ -259,17 +315,17 @@ impl Expression {
 	}
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Default)]
+#[apply(schema_ser!)]
 pub struct ExpressionContext {
 	pub request: Option<RequestContext>,
 	pub response: Option<ResponseContext>,
 	pub jwt: Option<Claims>,
 	pub llm: Option<LLMContext>,
+	pub source: Option<SourceContext>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_ser!)]
 pub struct RequestContext {
 	#[serde(with = "http_serde::method")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
@@ -278,6 +334,8 @@ pub struct RequestContext {
 	#[serde(with = "http_serde::uri")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
 	pub uri: ::http::Uri,
+
+	pub path: String,
 
 	#[serde(with = "http_serde::header_map")]
 	#[cfg_attr(
@@ -289,23 +347,36 @@ pub struct RequestContext {
 	pub body: Option<Bytes>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_ser!)]
 pub struct ResponseContext {
 	#[serde(with = "http_serde::status_code")]
 	#[cfg_attr(feature = "schema", schemars(with = "u16"))]
 	pub code: ::http::StatusCode,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_ser!)]
+pub struct SourceContext {
+	address: IpAddr,
+	port: u16,
+	identity: Option<IdentityContext>,
+}
+
+#[apply(schema_ser!)]
+pub struct IdentityContext {
+	trust_domain: Strng,
+	namespace: Strng,
+	service_account: Strng,
+}
+
+#[apply(schema_ser!)]
 pub struct LLMContext {
 	streaming: bool,
 	request_model: Strng,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	response_model: Option<Strng>,
 	provider: Strng,
-	input_tokens: u64,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	input_tokens: Option<u64>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	output_tokens: Option<u64>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -314,64 +385,83 @@ pub struct LLMContext {
 	prompt: Option<Vec<llm::SimpleChatCompletionMessage>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	completion: Option<Vec<String>>,
+	params: llm::LLMRequestParams,
 }
 
-fn create_context<'a>() -> Context<'a> {
-	Context::default()
-}
-
-fn properties<'e>(exp: &'e CelExpression, all: &mut Vec<Vec<&'e str>>, path: &mut Vec<&'e str>) {
+fn properties<'e>(
+	exp: &'e cel::common::ast::Expr,
+	all: &mut Vec<Vec<&'e str>>,
+	path: &mut Vec<&'e str>,
+) {
+	use cel::common::ast::Expr::*;
 	match exp {
-		CelExpression::Arithmetic(e1, _, e2)
-		| CelExpression::Relation(e1, _, e2)
-		| CelExpression::Ternary(e1, _, e2)
-		| CelExpression::Or(e1, e2)
-		| CelExpression::And(e1, e2) => {
-			properties(e1, all, path);
-			properties(e2, all, path);
-		},
-		CelExpression::Unary(_, e) => {
-			properties(e, all, path);
-		},
-		CelExpression::Member(e, a) => {
-			if let cel_parser::Member::Attribute(attr) = &**a {
-				path.insert(0, attr.as_str())
+		Unspecified => {},
+		Call(call) => {
+			if let Some(t) = &call.target {
+				properties(&t.expr, all, path)
 			}
-			properties(e, all, path);
-		},
-		CelExpression::FunctionCall(_, target, args) => {
-			// The attributes of the values returned by functions are skipped.
-			path.clear();
-			if let Some(target) = target {
-				properties(target, all, path);
-			}
-			for e in args {
-				properties(e, all, path);
+			for arg in &call.args {
+				properties(&arg.expr, all, path)
 			}
 		},
-		CelExpression::List(e) => {
-			for e in e {
-				properties(e, all, path);
+		Select(e) => {
+			path.insert(0, e.field.as_str());
+			properties(&e.operand.expr, all, path);
+		},
+		Comprehension(call) => {
+			properties(&call.iter_range.expr, all, path);
+			{
+				let v = &call.iter_var;
+				if !v.starts_with("@") {
+					path.insert(0, v.as_str());
+					all.push(path.clone());
+					path.clear();
+				}
+			}
+			properties(&call.loop_step.expr, all, path);
+		},
+		List(e) => {
+			for elem in &e.elements {
+				properties(&elem.expr, all, path);
 			}
 		},
-		CelExpression::Map(v) => {
-			for (e1, e2) in v {
-				properties(e1, all, path);
-				properties(e2, all, path);
+		Map(v) => {
+			for entry in &v.entries {
+				match &entry.expr {
+					cel::common::ast::EntryExpr::StructField(field) => {
+						properties(&field.value.expr, all, path);
+					},
+					cel::common::ast::EntryExpr::MapEntry(map_entry) => {
+						properties(&map_entry.value.expr, all, path);
+					},
+				}
 			}
 		},
-		CelExpression::Atom(_) => {},
-		CelExpression::Ident(v) => {
-			path.insert(0, v.as_str());
-			all.push(path.clone());
-			path.clear();
+		Struct(v) => {
+			for entry in &v.entries {
+				match &entry.expr {
+					cel::common::ast::EntryExpr::StructField(field) => {
+						properties(&field.value.expr, all, path);
+					},
+					cel::common::ast::EntryExpr::MapEntry(map_entry) => {
+						properties(&map_entry.value.expr, all, path);
+					},
+				}
+			}
+		},
+		Literal(_) => {},
+		Ident(v) => {
+			if !v.starts_with("@") {
+				path.insert(0, v.as_str());
+				all.push(path.clone());
+				path.clear();
+			}
 		},
 	}
 }
 
 pub struct Attribute {
 	path: Path,
-	cel_type: Option<ValueType>,
 }
 
 impl Debug for Attribute {
@@ -447,39 +537,7 @@ fn opt_to_value<S: Serialize>(v: &Option<S>) -> Result<Value, Error> {
 }
 
 fn to_value(v: impl Serialize) -> Result<Value, Error> {
-	cel_interpreter::to_value(v).map_err(|e| Error::Variable(e.to_string()))
-}
-
-mod fns {
-	use std::sync::Arc;
-
-	use cel_interpreter::extractors::{Identifier, This};
-	use cel_interpreter::objects::ValueType;
-	use cel_interpreter::{ExecutionError, FunctionContext, ResolveResult, Value};
-	use cel_parser::Expression;
-
-	use crate::cel::to_value;
-
-	pub fn with(
-		ftx: &FunctionContext,
-		This(this): This<Value>,
-		ident: Identifier,
-		expr: Expression,
-	) -> ResolveResult {
-		let mut ptx = ftx.ptx.new_inner_scope();
-		ptx.add_variable_from_value(&ident, this);
-		ptx.resolve(&expr)
-	}
-
-	pub fn json_parse(ftx: &FunctionContext, v: Value) -> ResolveResult {
-		let sv = match v {
-			Value::String(b) => serde_json::from_str(b.as_str()),
-			Value::Bytes(b) => serde_json::from_slice(b.as_ref()),
-			_ => return Err(ftx.error("invalid type")),
-		};
-		let sv: serde_json::Value = sv.map_err(|e| ftx.error(e))?;
-		to_value(sv).map_err(|e| ftx.error(e))
-	}
+	cel::to_value(v).map_err(|e| Error::Variable(e.to_string()))
 }
 
 #[cfg(any(test, feature = "internal_benches"))]

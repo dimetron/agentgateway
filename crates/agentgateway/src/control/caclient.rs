@@ -2,20 +2,16 @@ use std::cmp;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ::http::Uri;
 use rustls::client::Resumption;
 use rustls::server::VerifierBuilderError;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use rustls_pemfile::Item;
 use rustls_pki_types::PrivateKeyDer;
-use tokio::sync::{Mutex, RwLock, watch};
-use tokio::time::sleep_until;
+use tokio::sync::watch;
 use tonic::IntoRequest;
-use tonic::body::Body;
-use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use x509_parser::certificate::X509Certificate;
 
 use crate::types::discovery::Identity;
@@ -28,8 +24,8 @@ pub mod istio {
 	}
 }
 
+use istio::ca::IstioCertificateRequest;
 use istio::ca::istio_certificate_service_client::IstioCertificateServiceClient;
-use istio::ca::{IstioCertificateRequest, IstioCertificateResponse};
 
 use crate::control::{AuthSource, RootCert};
 use crate::http::backendtls::BackendTLS;
@@ -198,7 +194,7 @@ impl WorkloadCertificate {
 			raw_client_cert_verifier,
 			Some(trust_domain.clone()),
 		);
-		let mut sc = ServerConfig::builder_with_provider(transport::tls::provider())
+		let sc = ServerConfig::builder_with_provider(transport::tls::provider())
 			.with_protocol_versions(transport::tls::ALL_TLS_VERSIONS)
 			.expect("server config must be valid")
 			.with_client_cert_verifier(client_cert_verifier)
@@ -224,6 +220,7 @@ fn parse_key(mut key: &[u8]) -> Result<PrivateKeyDer<'static>, Error> {
 		.ok_or_else(|| Error::CertificateParse("no key".to_string()))?;
 	match parsed {
 		Item::Pkcs8Key(c) => Ok(PrivateKeyDer::Pkcs8(c)),
+		Item::Sec1Key(c) => Ok(PrivateKeyDer::Sec1(c)),
 		_ => Err(Error::CertificateParse("no key".to_string())),
 	}
 }
@@ -319,7 +316,6 @@ enum CertificateState {
 
 #[derive(Debug)]
 pub struct CaClient {
-	config: Config,
 	state: watch::Receiver<CertificateState>,
 	_fetcher_handle: tokio::task::JoinHandle<()>,
 }
@@ -339,7 +335,6 @@ impl CaClient {
 		});
 
 		Ok(Self {
-			config,
 			state: state_rx,
 			_fetcher_handle: fetcher_handle,
 		})
@@ -449,7 +444,7 @@ impl CaClient {
 		let private_key = csr.private_key;
 
 		// Create request
-		let mut request = tonic::Request::new(IstioCertificateRequest {
+		let request = tonic::Request::new(IstioCertificateRequest {
 			csr: csr.csr,
 			validity_duration: config.secret_ttl.as_secs() as i64,
 			metadata: None, // We don't need impersonation for single cert
@@ -537,5 +532,59 @@ mod csr {
 				private_key: private_key.into(),
 			})
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_parse_key_ec_private() {
+		let ec_key = b"-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIGfhD3tZlZOmw7LfyyERnPCyOnzmqiy1VcwiK36ro1H5oAoGCCqGSM49
+AwEHoUQDQgAEwWSdCtU7tQGYtpNpJXSB5VN4yT1lRXzHh8UOgWWqiYXX1WYHk8vf
+63XQuFFo4YbnXLIPdRxfxk9HzwyPw8jW8Q==
+-----END EC PRIVATE KEY-----";
+
+		let result = parse_key(ec_key);
+		assert!(result.is_ok());
+
+		let key = result.unwrap();
+		match key {
+			PrivateKeyDer::Sec1(_) => {}, // Expected for EC private keys
+			_ => panic!("Expected SEC1 (EC) private key format"),
+		}
+	}
+
+	#[test]
+	fn test_parse_key_pkcs8_ec() {
+		// PKCS8 wrapped EC key should also work
+		let pkcs8_ec_key = b"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7oRJ3/tWjzNRdSXj
+k2kj5FhI/GKfGpvAJbDe6A4VlzuhRANCAASTGTFE0FdYwKqcaUEZ3VhqKlpZLjY/
+SGjfUH8wjCgRLFmKGfZSFZFh1xN9M5Bq6v1P6kNqW7nM7oA4VJWqKp5W
+-----END PRIVATE KEY-----";
+
+		let result = parse_key(pkcs8_ec_key);
+		assert!(result.is_ok());
+
+		let key = result.unwrap();
+		match key {
+			PrivateKeyDer::Pkcs8(_) => {}, // Expected for PKCS8 format
+			_ => panic!("Expected PKCS8 private key format"),
+		}
+	}
+
+	#[test]
+	fn test_parse_key_unsupported() {
+		let unsupported_key = b"-----BEGIN CERTIFICATE-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4f6wg4PvmdHJzX...
+-----END CERTIFICATE-----";
+
+		let result = parse_key(unsupported_key);
+		assert!(result.is_err());
+		// Just verify it fails - the actual error message depends on the input format
+		let _error = result.unwrap_err();
 	}
 }

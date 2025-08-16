@@ -1,12 +1,9 @@
 use std::str::FromStr;
 
 use ::http::{HeaderValue, Method, StatusCode, header};
-use duration_str::HumanFormat;
 use serde::de::Error;
-use serde::ser::SerializeMap;
 
-use crate::http::{Request, Response, filters};
-use crate::types::agent::{HostRedirect, PathRedirect};
+use crate::http::{PolicyResponse, Request, filters};
 use crate::*;
 
 #[derive(Default, Debug, Clone)]
@@ -76,9 +73,7 @@ where
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_ser!)]
 #[cfg_attr(feature = "schema", schemars(with = "CorsSerde"))]
 pub struct Cors {
 	allow_credentials: bool,
@@ -106,20 +101,20 @@ impl<'de> serde::Deserialize<'de> for Cors {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
-struct CorsSerde {
+pub struct CorsSerde {
 	#[serde(default)]
-	allow_credentials: bool,
+	pub allow_credentials: bool,
 	#[serde(default)]
-	allow_headers: Vec<String>,
+	pub allow_headers: Vec<String>,
 	#[serde(default)]
-	allow_methods: Vec<String>,
+	pub allow_methods: Vec<String>,
 	#[serde(default)]
-	allow_origins: Vec<String>,
+	pub allow_origins: Vec<String>,
 	#[serde(default)]
-	expose_headers: Vec<String>,
+	pub expose_headers: Vec<String>,
 	#[serde(default, with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
-	max_age: Option<Duration>,
+	pub max_age: Option<Duration>,
 }
 
 impl TryFrom<CorsSerde> for Cors {
@@ -143,7 +138,7 @@ impl Cors {
 	/// Apply applies the CORS header. It seems a lot of implementations handle this differently wrt when
 	/// to add or not add headers, and when to forward the request.
 	/// We follow Envoy semantics here (with forwardNotMatchingPreflights=true)
-	pub fn apply(&self, req: &mut Request) -> Result<CorsResponse, filters::Error> {
+	pub fn apply(&self, req: &mut Request) -> Result<PolicyResponse, filters::Error> {
 		// If no origin, return immediately
 		let Some(origin) = req.headers().get(header::ORIGIN) else {
 			return Ok(Default::default());
@@ -178,7 +173,7 @@ impl Cors {
 				rb = rb.header(header::ACCESS_CONTROL_MAX_AGE, h);
 			}
 			let response = rb.body(crate::http::Body::empty())?;
-			return Ok(CorsResponse {
+			return Ok(PolicyResponse {
 				direct_response: Some(response),
 				response_headers: None,
 			});
@@ -194,7 +189,7 @@ impl Cors {
 		}
 		// For actual requests, we would need to add CORS headers to the response
 		// but since we only have access to the request here, we return None
-		Ok(CorsResponse {
+		Ok(PolicyResponse {
 			direct_response: None,
 			response_headers: Some(response_headers),
 		})
@@ -202,9 +197,3 @@ impl Cors {
 }
 
 const HEADER_VALUE_TRUE: http::HeaderValue = HeaderValue::from_static("true");
-
-#[derive(Debug, Default)]
-pub struct CorsResponse {
-	pub direct_response: Option<Response>,
-	pub response_headers: Option<http::HeaderMap>,
-}

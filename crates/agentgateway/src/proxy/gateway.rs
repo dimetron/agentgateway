@@ -12,17 +12,17 @@ use futures_util::FutureExt;
 use http::StatusCode;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto;
+use net2::unix::UnixTcpBuilderExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, event, info, info_span, warn};
 
-use crate::ProxyInputs;
 use crate::store::Event;
-use crate::telemetry::metrics::TCPLabels;
-use crate::transport::stream::{BytesCounter, Extension, LoggingMode, Socket};
+use crate::transport::stream::{Extension, LoggingMode, Socket};
 use crate::types::agent::{Bind, BindName, BindProtocol, Listener, ListenerProtocol};
+use crate::{ProxyInputs, client};
 
 #[cfg(test)]
 #[path = "gateway_test.rs"]
@@ -63,15 +63,42 @@ impl Gateway {
 			}
 
 			debug!("add bind {}", b.address);
-			let task =
-				js.spawn(Self::run_bind(self.pi.clone(), subdrain.clone(), b.clone()).in_current_span());
-			active.insert(b.address, task);
+			if self.pi.cfg.threading_mode == crate::ThreadingMode::ThreadPerCore {
+				let core_ids = core_affinity::get_core_ids().unwrap();
+				let _ = core_ids
+					.into_iter()
+					.map(|id| {
+						let subdrain = subdrain.clone();
+						let pi = self.pi.clone();
+						let b = b.clone();
+						std::thread::spawn(move || {
+							let res = core_affinity::set_for_current(id);
+							if !res {
+								panic!("failed to set current CPU")
+							}
+							tokio::runtime::Builder::new_current_thread()
+								.enable_all()
+								.build()
+								.unwrap()
+								.block_on(async {
+									let _ = Self::run_bind(pi.clone(), subdrain.clone(), b.clone())
+										.in_current_span()
+										.await;
+								})
+						})
+					})
+					.collect::<Vec<_>>();
+			} else {
+				let task =
+					js.spawn(Self::run_bind(self.pi.clone(), subdrain.clone(), b.clone()).in_current_span());
+				active.insert(b.address, task);
+			}
 		};
 		for bind in initial_binds {
 			handle_bind(&mut js, Event::Add(bind))
 		}
 
-		let mut wait = drain.wait_for_drain();
+		let wait = drain.wait_for_drain();
 		tokio::pin!(wait);
 		loop {
 			tokio::select! {
@@ -106,7 +133,23 @@ impl Gateway {
 		let min_deadline = pi.cfg.termination_min_deadline;
 		let max_deadline = pi.cfg.termination_max_deadline;
 		let name = b.key.clone();
-		let listener = TcpListener::bind(b.address).await?; // TODO: nodelay
+		let (pi, listener) = if pi.cfg.threading_mode == crate::ThreadingMode::ThreadPerCore {
+			let mut pi = Arc::unwrap_or_clone(pi);
+			let client = client::Client::new(&pi.cfg.dns, None);
+			pi.upstream = client;
+			let pi = Arc::new(pi);
+			let builder = if b.address.is_ipv4() {
+				net2::TcpBuilder::new_v4()
+			} else {
+				net2::TcpBuilder::new_v6()
+			};
+			let listener = builder?.reuse_port(true)?.bind(b.address)?.listen(1024)?;
+			listener.set_nonblocking(true)?;
+			let listener = tokio::net::TcpListener::from_std(listener)?;
+			(pi, listener)
+		} else {
+			(pi, TcpListener::bind(b.address).await?)
+		};
 		info!(bind = name.as_str(), "started bind");
 		let component = format!("bind {name}");
 
@@ -131,6 +174,7 @@ impl Gateway {
 			// Having a weak reference allows us to listen() forever without blocking, but create blockers for accepted connections.
 			let (mut upgrader, weak) = drain.into_weak();
 			let (inner_trigger, inner_drain) = drain::new();
+			drop(inner_drain);
 			let handle_stream = |stream: TcpStream, upgrader: &DrainUpgrader| {
 				let mut stream = Socket::from_tcp(stream).expect("todo");
 				stream.with_logging(LoggingMode::Downstream);
@@ -179,7 +223,7 @@ impl Gateway {
 			loop {
 				tokio::select! {
 					Ok((stream, _peer)) = listener.accept() => handle_stream(stream, &upgrader),
-					res = &mut drained_for_minimum => {
+					_ = &mut drained_for_minimum => {
 						// We are done! exit.
 						// This will stop accepting new connections
 						return;
@@ -199,7 +243,6 @@ impl Gateway {
 		drain: DrainWatcher,
 	) {
 		let bind_protocol = bind_protocol(inputs.clone(), bind_name.clone());
-		let tcp_info = raw_stream.tcp();
 		event!(
 			target: "downstream connection",
 			parent: None,
@@ -286,7 +329,7 @@ impl Gateway {
 		inputs: Arc<ProxyInputs>,
 		selected_listener: Option<Arc<Listener>>,
 		stream: Socket,
-		drain: DrainWatcher,
+		_drain: DrainWatcher,
 	) {
 		let selected_listener = match selected_listener {
 			Some(l) => l,
@@ -351,8 +394,6 @@ impl Gateway {
 			Self::serve_connect(bind_name.clone(), inp.clone(), req, ext, graceful)
 				.instrument(info_span!("inbound"))
 		};
-		// TODO proper drain and watch
-		let (_trigger, watcher) = drain::new();
 
 		let (_, force_shutdown) = watch::channel(());
 		let ext = Arc::new(tls.get_ext());
@@ -360,7 +401,7 @@ impl Gateway {
 			cfg.hbone.clone(),
 			tls,
 			ext,
-			watcher,
+			drain,
 			force_shutdown,
 			request_handler,
 		);
@@ -448,9 +489,5 @@ fn build_response(status: StatusCode) -> ::http::Response<()> {
 
 /// InboundError represents an error with an associated status code.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct InboundError(anyhow::Error, StatusCode);
-impl InboundError {
-	pub fn build(code: StatusCode) -> impl Fn(anyhow::Error) -> Self {
-		move |err| InboundError(err, code)
-	}
-}

@@ -23,7 +23,9 @@ agent-hbone.workspace = true
 agent-xds.workspace = true
 anyhow.workspace = true
 arc-swap.workspace = true
+async-openai.workspace = true
 async-trait.workspace = true
+aws_event_stream_parser.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sigv4.workspace = true
@@ -102,6 +104,7 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 tokio_sse_codec.workspace = true
 tonic.workspace = true
+tonic-prost.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 tower-serve-static.workspace = true
@@ -112,16 +115,23 @@ x509-parser.workspace = true
 serde_urlencoded.workspace = true
 percent-encoding.workspace = true
 http-serde.workspace = true
-cel-parser.workspace = true
-cel-interpreter = { workspace = true, features = ["json", "regex", "chrono"] }
-tikv-jemallocator = {workspace = true, optional = true}
-jemalloc_pprof = {workspace = true, optional = true}
-frozen-collections = "0.8.0"
-value-bag = { workspace = true, features = ["value-bag-serde1"] }
+cel.workspace = true
+tikv-jemallocator = { workspace = true, optional = true }
+jemalloc_pprof = { workspace = true, optional = true }
+frozen-collections.workspace = true
+value-bag.workspace = true
+net2.workspace = true
+core_affinity.workspace = true
+macro_rules_attribute.workspace = true
+heck.workspace = true
+async-compression.workspace = true
+
 [build-dependencies]
 anyhow.workspace = true
 prost-build.workspace = true
+tonic-prost-build.workspace = true
 tonic-build.workspace = true
+protox.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
@@ -138,6 +148,10 @@ assigning_clones = "allow"
 # This doesn't understand `strng` which we use everywhere
 borrow_interior_mutable_const = "allow"
 declare_interior_mutable_const = "allow"
+
+[lints.rust]
+# This rule makes code more confusing
+mismatched_lifetime_syntaxes = "allow"
 
 [[bench]]
 name = "bench_tests"

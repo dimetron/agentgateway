@@ -5,16 +5,15 @@ use std::time::Duration;
 use std::{cmp, env};
 
 use agent_core::prelude::*;
-use anyhow::anyhow;
-use hickory_resolver::config::ResolveHosts;
+use serde::de::DeserializeOwned;
 
 use crate::control::caclient;
-use crate::telemetry::log::LoggingFields;
+use crate::telemetry::log::{LoggingFields, MetricFields};
 use crate::telemetry::trc;
 use crate::types::discovery::Identity;
 use crate::{
-	Address, Config, ConfigSource, NestedRawConfig, RawConfig, XDSConfig, cel, client, serdes,
-	telemetry,
+	Address, Config, ConfigSource, NestedRawConfig, StringOrInt, ThreadingMode, XDSConfig, cel,
+	client, serdes, telemetry,
 };
 
 pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Result<Config> {
@@ -43,7 +42,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		.or(filename)
 		.map(ConfigSource::File);
 
-	let (resolver_cfg, mut resolver_opts) = hickory_resolver::system_conf::read_system_conf()?;
+	let (resolver_cfg, resolver_opts) = hickory_resolver::system_conf::read_system_conf()?;
 
 	let xds = {
 		let address = validate_uri(empty_to_none(parse("XDS_ADDRESS")?).or(raw.xds_address))?;
@@ -80,7 +79,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 	} else {
 		None
 	};
-	let ca_address = validate_uri(empty_to_none(parse("CA_ADDRESS")?))?;
+	let ca_address = validate_uri(empty_to_none(parse("CA_ADDRESS")?).or(raw.ca_address))?;
 	let ca = if let Some(addr) = ca_address {
 		let td = parse("TRUST_DOMAIN")?
 			.or(raw.trust_domain)
@@ -147,9 +146,17 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		.or(raw.connection_min_termination_deadline)
 		.unwrap_or_default();
 	let termination_max_deadline =
-		parse_duration("CONNECTION_TERMINATION_DEADLINE")?.or(raw.connection_min_termination_deadline);
+		parse_duration("CONNECTION_TERMINATION_DEADLINE")?.or(raw.connection_termination_deadline);
 	let otlp = empty_to_none(parse("OTLP_ENDPOINT")?)
 		.or(raw.tracing.as_ref().map(|t| t.otlp_endpoint.clone()));
+	let otlp_headers = raw
+		.tracing
+		.as_ref()
+		.map(|t| t.headers.clone())
+		.unwrap_or_default();
+	let otlp_protocol = parse_serde("OTLP_PROTOCOL")?
+		.or(raw.tracing.as_ref().map(|t| t.otlp_protocol))
+		.unwrap_or_default();
 	// Parse admin_addr from environment variable or config file
 	let admin_addr = parse::<String>("ADMIN_ADDR")?
 		.or(raw.admin_addr)
@@ -169,6 +176,12 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		.transpose()?
 		.unwrap_or(Address::SocketAddr(SocketAddr::new(bind_wildcard, 15021)));
 
+	let threading_mode = if parse::<String>("THREADING_MODE")?.as_deref() == Some("thread_per_core") {
+		ThreadingMode::ThreadPerCore
+	} else {
+		ThreadingMode::default()
+	};
+
 	Ok(crate::Config {
 		network: network.into(),
 		admin_addr,
@@ -177,8 +190,9 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		self_addr,
 		xds,
 		ca,
-		num_worker_threads: parse_worker_threads()?,
+		num_worker_threads: parse_worker_threads(raw.worker_threads)?,
 		termination_min_deadline,
+		threading_mode,
 		termination_max_deadline: match termination_max_deadline {
 			Some(period) => period,
 			None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
@@ -201,10 +215,14 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		},
 		tracing: trc::Config {
 			endpoint: otlp,
+			headers: otlp_headers,
+			protocol: otlp_protocol,
+
 			fields: Arc::new(
 				raw
 					.tracing
-					.and_then(|f| f.fields)
+					.as_ref()
+					.and_then(|f| f.fields.clone())
 					.map(|fields| {
 						Ok::<_, anyhow::Error>(LoggingFields {
 							remove: fields.remove.into_iter().collect(),
@@ -218,6 +236,20 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 					.transpose()?
 					.unwrap_or_default(),
 			),
+			random_sampling: raw
+				.tracing
+				.as_ref()
+				.and_then(|t| t.random_sampling.as_ref().map(|c| c.0.as_str()))
+				.map(cel::Expression::new)
+				.transpose()?
+				.map(Arc::new),
+			client_sampling: raw
+				.tracing
+				.as_ref()
+				.and_then(|t| t.client_sampling.as_ref().map(|c| c.0.as_str()))
+				.map(cel::Expression::new)
+				.transpose()?
+				.map(Arc::new),
 		},
 		logging: telemetry::log::Config {
 			filter: raw
@@ -234,6 +266,22 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 					.map(|fields| {
 						Ok::<_, anyhow::Error>(LoggingFields {
 							remove: fields.remove.into_iter().collect(),
+							add: fields
+								.add
+								.iter()
+								.map(|(k, v)| cel::Expression::new(v).map(|v| (k.clone(), Arc::new(v))))
+								.collect::<Result<_, _>>()?,
+						})
+					})
+					.transpose()?
+					.unwrap_or_default(),
+			),
+			metric_fields: Arc::new(
+				raw
+					.metrics
+					.and_then(|f| f.fields)
+					.map(|fields| {
+						Ok::<_, anyhow::Error>(MetricFields {
 							add: fields
 								.add
 								.iter()
@@ -315,6 +363,15 @@ where
 	}
 }
 
+fn parse_serde<T: DeserializeOwned>(env: &str) -> anyhow::Result<Option<T>> {
+	match env::var(env) {
+		Ok(val) => serde_json::from_str(&val)
+			.map(|v| Some(v))
+			.map_err(|e| anyhow::anyhow!("invalid env var {}={} ({})", env, val, e.to_string())),
+		Err(_) => Ok(None),
+	}
+}
+
 fn parse_default<T: FromStr>(env: &str, default: T) -> anyhow::Result<T>
 where
 	<T as FromStr>::Err: std::error::Error + Sync + Send,
@@ -330,15 +387,12 @@ fn parse_duration(env: &str) -> anyhow::Result<Option<Duration>> {
 		})
 		.transpose()
 }
-fn parse_duration_default(env: &str, default: Duration) -> anyhow::Result<Duration> {
-	parse_duration(env).map(|v| v.unwrap_or(default))
-}
 
 pub fn empty_to_none<A: AsRef<str>>(inp: Option<A>) -> Option<A> {
-	if let Some(inner) = &inp {
-		if inner.as_ref().is_empty() {
-			return None;
-		}
+	if let Some(inner) = &inp
+		&& inner.as_ref().is_empty()
+	{
+		return None;
 	}
 	inp
 }
@@ -355,8 +409,8 @@ fn validate_uri(uri_str: Option<String>) -> anyhow::Result<Option<String>> {
 }
 
 /// Parse worker threads configuration, supporting both fixed numbers and percentages
-fn parse_worker_threads() -> anyhow::Result<usize> {
-	match parse::<String>("WORKER_THREADS")? {
+fn parse_worker_threads(cfg: Option<StringOrInt>) -> anyhow::Result<usize> {
+	match parse::<String>("WORKER_THREADS")?.or_else(|| cfg.map(|cfg| cfg.0)) {
 		Some(value) => {
 			if let Some(percent_str) = value.strip_suffix('%') {
 				// Parse as percentage

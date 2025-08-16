@@ -3,6 +3,7 @@ syntax = "proto3";
 package agentgateway.dev.resource;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
 
 option go_package = "github.com/agentgateway/agentgateway/go/api;api";
 
@@ -13,6 +14,7 @@ message Resource {
     Route route = 3;
     Backend backend = 4;
     Policy policy = 5;
+    TCPRoute tcp_route = 6;
   }
 }
 
@@ -62,10 +64,73 @@ message Route {
   TrafficPolicy traffic_policy = 9;
 }
 
+message TCPRoute {
+  // Unique key
+  string key = 1;
+  string listener_key = 2;
+  // User facing rule name. May not be unique.
+  string rule_name = 3;
+  // User facing route name May not be unique.
+  string route_name = 4;
+  repeated string hostnames = 5;
+  repeated RouteBackend backends = 6;
+}
+
 message TrafficPolicy {
   google.protobuf.Duration backend_request_timeout = 1;
   google.protobuf.Duration request_timeout = 2;
+  Retry retry = 3;
 }
+
+message Retry {
+  repeated int32 retry_status_codes = 1;
+  int32 attempts = 2;
+  google.protobuf.Duration backoff = 3;
+}
+
+message BackendAuthPolicy {
+  oneof kind {
+    Passthrough passthrough = 1;
+    Key key = 2;
+    Gcp gcp = 3;
+    Aws aws = 4;
+  }
+}
+
+// No fields needed for passthrough authentication.
+message Passthrough {}
+
+// Contains a secret for authentication, e.g. an API key.
+message Key {
+  string secret = 1;
+}
+
+// GCP-specific backend authentication.
+message Gcp {}
+
+// AWS-specific backend authentication.
+message Aws {
+  oneof kind {
+    AwsExplicitConfig explicit_config = 1;
+    AwsImplicit implicit = 2;
+  }
+}
+
+// Explicit AWS credentials configuration
+message AwsExplicitConfig {
+  // AWS Access Key ID for authentication
+  string access_key_id = 1;
+  // AWS Secret Access Key for authentication  
+  string secret_access_key = 2;
+  // AWS Region (e.g., "us-west-2", "us-east-1")
+  string region = 3;
+  // Optional session token for temporary credentials
+  optional string session_token = 4;
+  // TODO: make service configurable
+}
+
+// Use implicit AWS authentication (environment variables, IAM roles, etc.)
+message AwsImplicit {}
 
 message RouteMatch {
   PathMatch path = 1;
@@ -110,7 +175,24 @@ message RouteFilter {
     RequestRedirect request_redirect = 3;
     UrlRewrite url_rewrite = 4;
     RequestMirror request_mirror = 5;
+    DirectResponse direct_response = 6;
+    CORS cors = 7;
   }
+}
+
+message CORS {
+  bool allow_credentials = 1;
+  repeated string allow_headers = 2;
+  repeated string allow_methods = 3;
+  repeated string allow_origins = 4;
+  repeated string expose_headers = 5;
+  // max_age is in seconds, use google.protobuf.Duration if available, otherwise uint64 for seconds
+  google.protobuf.Duration max_age = 6;
+}
+
+message DirectResponse {
+  uint32 status = 1;
+  bytes body = 2;
 }
 
 message HeaderModifier {
@@ -120,12 +202,9 @@ message HeaderModifier {
 }
 
 message RequestMirror {
-  oneof kind {
-    string service = 1;
-  }
+  BackendReference backend = 1;
   // 0-100
   double percentage = 2;
-  int32 port = 3;
 }
 
 message RequestRedirect {
@@ -153,16 +232,8 @@ message Header {
 }
 
 message RouteBackend {
-  oneof kind {
-    // A service (could be Service, ServiceEntry, etc) in "<ns>/<hostname>" format
-    // These are joined with the service discovery.
-    string service = 1;
-    // A Backend object.
-    // Format is "<ns>/<name>". Joined with the Backend object
-    string backend = 5;
-  }
+  BackendReference backend = 1;
   int32 weight = 2;
-  int32 port = 3;
   repeated RouteFilter filters = 4;
 }
 
@@ -192,8 +263,37 @@ message PolicySpec {
     google.protobuf.Duration fill_interval = 3;
     Type type = 4;
   }
+  message ExternalAuth {
+    BackendReference target = 1;
+    map<string, string> context = 2;
+  }
+  message A2a {
+  }
+  message InferenceRouting {
+    enum FailureMode {
+      UNKNOWN = 0;
+      FAIL_CLOSED = 1;
+      FAIL_OPEN = 2;
+    }
+    BackendReference endpoint_picker = 1;
+    FailureMode failure_mode = 2;
+  }
+  message BackendTLS {
+    google.protobuf.BytesValue cert = 1;
+    google.protobuf.BytesValue key = 2;
+    // Root to verify. If not set, system certs will be used.
+    // If no verification is desired, use 'insecure'
+    google.protobuf.BytesValue root = 3;
+    // Disable all verification
+    google.protobuf.BoolValue insecure = 4;
+  }
   oneof kind {
     LocalRateLimit local_rate_limit = 1;
+    ExternalAuth ext_authz = 2;
+    A2a a2a = 3;
+    InferenceRouting inference_routing = 4;
+    BackendTLS backend_tls = 5;
+    BackendAuthPolicy auth = 6;
   }
 }
 
@@ -225,22 +325,24 @@ message AIBackend {
   }
   Override override = 1;
   message OpenAI {
-    string model = 1;
+    google.protobuf.StringValue model = 1;
   }
   message Gemini {
-    string model = 1;
+    google.protobuf.StringValue model = 1;
   }
   message Vertex {
-    string model = 1;
+    google.protobuf.StringValue model = 1;
     string region = 2;
     string project_id = 3;
   }
   message Anthropic {
-    string model = 1;
+    google.protobuf.StringValue model = 1;
   }
   message Bedrock {
-    string model = 1;
+    google.protobuf.StringValue model = 1;
     string region = 2;
+    google.protobuf.StringValue guardrail_identifier = 3;
+    google.protobuf.StringValue guardrail_version = 4;
   }
   oneof provider {
     OpenAI openai = 2;
@@ -252,7 +354,15 @@ message AIBackend {
 }
 
 message MCPBackend {
+  enum StatefulMode {
+    STATEFUL = 0;
+    STATELESS = 1;
+  }
   repeated MCPTarget targets = 2;
+  // Whether or not this backend should serve stateful MCP connections.
+  // We set this at the backend level because it would be illegal/nonsensical
+  // to mix stateful and stateless targets in the same backend.
+  StatefulMode stateful_mode = 3;
 }
 
 message MCPTarget {
@@ -262,14 +372,21 @@ message MCPTarget {
     STREAMABLE_HTTP = 2;
   }
   string name = 1;
+  BackendReference backend = 2;
+  string path = 3;
+  Protocol protocol = 4;
+}
+
+message BackendReference {
   oneof kind {
     // A service (could be Service, ServiceEntry, etc) in "<ns>/<hostname>" format
     // These are joined with the service discovery.
-    string service = 2;
+    string service = 1;
     // A Backend object.
-    // Format is "<ns>/<name>". Joined with the Backend object
-    string backend = 3;
+    // Format is "<ns>/<name>". Joined with the Backend object.
+    // Must be of type StaticBackend.
+    string backend = 2;
   }
-  int32 port = 4;
-  Protocol protocol = 5;
+  // Port, used only with 'service' type
+  uint32 port = 3;
 }

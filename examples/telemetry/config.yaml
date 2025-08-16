@@ -2,13 +2,13 @@
 config:
   tracing:
     otlpEndpoint: http://localhost:4317
+    randomSampling: true
 binds:
 - port: 3000
   listeners:
   - routes:
     - backends:
       - mcp:
-          name: default
           targets:
           - name: everything
             stdio:

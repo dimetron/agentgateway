@@ -1,15 +1,12 @@
 mod dns;
 mod hyperrustls;
 
-use std::fmt::Display;
 use std::str::FromStr;
 use std::task;
 
 use ::http::Uri;
 use ::http::uri::{Authority, Scheme};
-use axum::body::to_bytes;
 use hyper_util_fork::rt::TokioIo;
-use rand::prelude::IteratorRandom;
 use rustls_pki_types::{DnsName, ServerName};
 use tracing::event;
 
@@ -18,8 +15,6 @@ use crate::proxy::ProxyError;
 use crate::transport::hbone::WorkloadKey;
 use crate::transport::stream::{LoggingMode, Socket};
 use crate::transport::{hbone, stream};
-use crate::types::agent;
-use crate::types::agent::ListenerProtocol::TLS;
 use crate::types::agent::Target;
 use crate::*;
 
@@ -104,10 +99,10 @@ impl tower::Service<::http::Extensions> for Connector {
 	}
 
 	fn call(&mut self, mut dst: ::http::Extensions) -> Self::Future {
-		let mut it = self.clone();
+		let it = self.clone();
 
 		Box::pin(async move {
-			let PoolKey(target, ep, transport, ver) =
+			let PoolKey(target, ep, transport, _) =
 				dst.remove::<PoolKey>().expect("pool key must be set");
 
 			match transport {
@@ -244,7 +239,6 @@ impl Client {
 		let dest = match &target {
 			Target::Address(addr) => *addr,
 			Target::Hostname(hostname, port) => {
-				// TODO we need caching here!
 				let ip = self
 					.resolver
 					.resolve(hostname.clone())
@@ -257,13 +251,11 @@ impl Client {
 			let scheme = transport.scheme();
 			// Strip the port from the hostname if its the default already
 			// The hyper client does this for HTTP/1.1 but not for HTTP2
-			if let Some(a) = uri.authority.as_mut() {
-				if (scheme == Scheme::HTTPS && a.port_u16() == Some(443))
-					|| (scheme == Scheme::HTTP && a.port_u16() == Some(80))
-				{
-					*a =
-						Authority::from_str(a.host()).expect("host must be valid since it was already a host");
-				}
+			if let Some(a) = uri.authority.as_mut()
+				&& ((scheme == Scheme::HTTPS && a.port_u16() == Some(443))
+					|| (scheme == Scheme::HTTP && a.port_u16() == Some(80)))
+			{
+				*a = Authority::from_str(a.host()).expect("host must be valid since it was already a host");
 			}
 			uri.scheme = Some(scheme);
 			Ok(())
@@ -272,15 +264,26 @@ impl Client {
 		let version = req.version();
 		let transport_name = transport.name();
 		let target_name = target.to_string();
-		req
-			.extensions_mut()
-			.insert(PoolKey(target, dest, transport, version));
-		trace!(?req, "sending request");
+		let key = PoolKey(target, dest, transport, version);
+		trace!(?req, ?key, "sending request");
+		req.extensions_mut().insert(key);
 		let method = req.method().clone();
 		let uri = req.uri().clone();
 		let path = uri.path();
 		let host = uri.authority().to_owned();
-		let resp = self.client.request(req).await;
+		// const TIMEOUT: Option<Duration> = Some(Duration::from_secs(5));
+		const TIMEOUT: Option<Duration> = None;
+		let resp = match TIMEOUT {
+			Some(to) => match tokio::time::timeout(to, self.client.request(req)).await {
+				Ok(res) => res.map_err(ProxyError::UpstreamCallFailed),
+				Err(_) => Err(ProxyError::RequestTimeout),
+			},
+			None => self
+				.client
+				.request(req)
+				.await
+				.map_err(ProxyError::UpstreamCallFailed),
+		};
 		let dur = format!("{}ms", start.elapsed().as_millis());
 		event!(
 			target: "upstream request",
@@ -299,10 +302,6 @@ impl Client {
 
 			duration = dur,
 		);
-		Ok(
-			resp
-				.map_err(ProxyError::UpstreamCallFailed)?
-				.map(http::Body::new),
-		)
+		Ok(resp?.map(http::Body::new))
 	}
 }

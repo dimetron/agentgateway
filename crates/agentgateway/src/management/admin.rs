@@ -1,23 +1,19 @@
 // Originally derived from https://github.com/istio/ztunnel (Apache 2.0 licensed)
 
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use agent_core::drain::DrainWatcher;
 use agent_core::version::BuildInfo;
 use agent_core::{signal, telemetry};
-use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
-use http_body_util::Full;
 use hyper::Request;
 use hyper::body::Incoming;
 use hyper::header::{CONTENT_TYPE, HeaderValue};
 use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use tracing_subscriber::filter;
 
 use super::hyper_helpers::{Server, empty_response, plaintext_response};
@@ -195,12 +191,6 @@ async fn handle_dashboard(_req: Request<Incoming>) -> Response {
 	response
 }
 
-fn rfc3339(t: SystemTime) -> String {
-	use chrono::prelude::{DateTime, Utc};
-	let dt: DateTime<Utc> = t.into();
-	dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-}
-
 #[cfg(target_os = "linux")]
 async fn handle_pprof(_req: Request<Incoming>) -> anyhow::Result<Response> {
 	use pprof::protos::Message;
@@ -245,7 +235,7 @@ async fn handle_server_shutdown(
 
 async fn handle_config_dump(
 	handlers: &[Arc<dyn ConfigDumpHandler>],
-	mut dump: ConfigDump,
+	dump: ConfigDump,
 ) -> anyhow::Result<Response> {
 	let serde_json::Value::Object(mut kv) = serde_json::to_value(&dump)? else {
 		anyhow::bail!("config dump is not a key-value pair")
@@ -337,15 +327,15 @@ fn change_log_level(reset: bool, level: &str) -> Response {
 	if !reset && level.is_empty() {
 		return list_loggers();
 	}
-	if !level.is_empty() {
-		if let Err(_e) = validate_log_level(level) {
-			// Invalid level provided
-			return plaintext_response(
-				hyper::StatusCode::BAD_REQUEST,
-				format!("Invalid level provided: {level}\n{HELP_STRING}"),
-			);
-		};
-	}
+	if !level.is_empty()
+		&& let Err(_e) = validate_log_level(level)
+	{
+		// Invalid level provided
+		return plaintext_response(
+			hyper::StatusCode::BAD_REQUEST,
+			format!("Invalid level provided: {level}\n{HELP_STRING}"),
+		);
+	};
 	match telemetry::set_level(reset, level) {
 		Ok(_) => list_loggers(),
 		Err(e) => plaintext_response(
@@ -378,7 +368,7 @@ async fn handle_jemalloc_pprof_heapgen(_req: Request<Incoming>) -> anyhow::Resul
 	Ok(
 		::http::Response::builder()
 			.status(hyper::StatusCode::OK)
-			.body(Bytes::from(pprof).into())
+			.body(bytes::Bytes::from(pprof).into())
 			.expect("builder with known status code should not fail"),
 	)
 }
@@ -391,9 +381,4 @@ async fn handle_jemalloc_pprof_heapgen(_req: Request<Incoming>) -> anyhow::Resul
 			.body("jemalloc not enabled".into())
 			.expect("builder with known status code should not fail"),
 	)
-}
-
-fn base64_encode(data: String) -> String {
-	use base64::Engine;
-	STANDARD.encode(data)
 }

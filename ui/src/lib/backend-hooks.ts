@@ -11,6 +11,7 @@ import {
   validateBackendForm,
   createBackendFromForm,
   getAvailableRoutes,
+  canDeleteBackend,
 } from "./backend-utils";
 
 export interface BackendWithContext {
@@ -108,7 +109,7 @@ export const useBackendFormState = () => {
         formWithDefaults.selectedRouteIndex = firstRoute.routeIndex.toString();
       }
     }
-    
+
     setBackendForm(formWithDefaults);
     setSelectedBackendType("mcp");
   };
@@ -146,6 +147,13 @@ export const useBackendFormState = () => {
     }));
   };
 
+  const updateMcpStateful = (stateful: boolean) => {
+    setBackendForm((prev) => ({
+      ...prev,
+      mcpStateful: stateful,
+    }));
+  };
+
   const parseAndUpdateUrl = (index: number, url: string) => {
     const { host, port, path } = parseUrl(url);
 
@@ -176,6 +184,7 @@ export const useBackendFormState = () => {
     removeMcpTarget,
     updateMcpTarget,
     parseAndUpdateUrl,
+    updateMcpStateful,
   };
 };
 
@@ -306,9 +315,16 @@ export const useBackendOperations = () => {
       const listener = bind?.listeners.find((l) => l.name === backendContext.listener.name);
       const route = listener?.routes?.[backendContext.routeIndex];
 
-      if (route?.backends) {
-        route.backends.splice(backendContext.backendIndex, 1);
+      if (!route?.backends) {
+        throw new Error("Route or backends not found");
       }
+
+      const deleteCheck = canDeleteBackend(route, route.backends.length);
+      if (!deleteCheck.canDelete) {
+        throw new Error(deleteCheck.reason);
+      }
+
+      route.backends.splice(backendContext.backendIndex, 1);
 
       await updateConfig(config);
       await refreshListeners();
@@ -317,7 +333,17 @@ export const useBackendOperations = () => {
       toast.success("Backend deleted successfully");
     } catch (err) {
       console.error("Error deleting backend:", err);
-      toast.error("Failed to delete backend");
+
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes("backend policies currently only work with exactly 1 backend")) {
+        toast.error(
+          "Cannot delete backend: Backend policies require exactly 1 backend. Please remove backend policies first."
+        );
+      } else if (errorMessage.includes("backend policies")) {
+        toast.error(errorMessage);
+      } else {
+        toast.error("Failed to delete backend");
+      }
     } finally {
       setIsSubmitting(false);
     }

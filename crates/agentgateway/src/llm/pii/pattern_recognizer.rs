@@ -5,22 +5,15 @@ use super::recognizer_result::RecognizerResult;
 
 #[derive(Debug)]
 pub struct Pattern {
+	#[allow(dead_code)]
 	pub name: String,
 	pub regex: Regex,
 	pub score: f32,
 }
 
-pub trait PatternValidator {
-	fn validate(&self, pattern_text: &str) -> Option<bool> {
-		None
-	}
-	fn invalidate(&self, pattern_text: &str) -> Option<bool> {
-		None
-	}
-}
-
 pub struct PatternRecognizer {
 	patterns: Vec<Pattern>,
+	#[allow(dead_code)]
 	context: Vec<String>,
 	entity_type: String,
 	// validator: Option<&'a dyn PatternValidator>,
@@ -57,8 +50,8 @@ impl Recognizer for PatternRecognizer {
 			for cap in pattern.regex.captures_iter(text) {
 				if let Some(matched) = cap.get(0) {
 					let candidate = matched.as_str();
-					let mut score = pattern.score;
-					let mut valid = true;
+					let score = pattern.score;
+					let valid = true;
 					// if let Some(validator) = self.validator {
 					//     if let Some(false) = validator.validate(candidate) {
 					//         valid = false;

@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use arc_swap::{ArcSwap, ArcSwapOption};
-use async_trait::async_trait;
+use arc_swap::ArcSwapOption;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::{IntoName, ResolveError, TokioResolver};
-use hyper_rustls::ResolveServerName;
+use hickory_resolver::{ResolveError, TokioResolver};
 
 use crate::*;
 
@@ -54,7 +52,6 @@ pub struct CacheEntry {
 	entries: ArcSwapOption<CircularBuffer<IpAddr>>,
 	notify: tokio::sync::Notify,
 	background_task: ArcSwapOption<tokio::task::JoinHandle<()>>,
-	valid_after: arc_swap::ArcSwap<Instant>,
 }
 
 impl CacheEntry {
@@ -141,7 +138,7 @@ impl Resolver {
 }
 
 impl CachedResolver {
-	pub fn new(config: ResolverConfig, mut opts: ResolverOpts) -> Self {
+	pub fn new(config: ResolverConfig, opts: ResolverOpts) -> Self {
 		let mut rb =
 			hickory_resolver::Resolver::builder_with_config(config, TokioConnectionProvider::default());
 		*rb.options_mut() = opts;
@@ -167,7 +164,6 @@ impl CachedResolver {
 					entries: Default::default(),
 					notify: Default::default(),
 					background_task: Default::default(),
-					valid_after: arc_swap::ArcSwap::from_pointee(Instant::now()),
 				});
 
 				cache.insert(name.clone(), entry.clone());

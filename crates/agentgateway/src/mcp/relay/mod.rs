@@ -1,17 +1,16 @@
-use std::any::{Any, TypeId};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
-use std::fmt::{Debug, Formatter};
-use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::ops::DerefMut;
+use std::sync::{Arc, LazyLock};
 
+use agent_core::bow::OwnedOrBorrowed;
 use agent_core::metrics::Recorder;
 use agent_core::prelude::Strng;
 use agent_core::trcng;
-use http::header::AUTHORIZATION;
+use agent_core::version::BuildInfo;
+use http::HeaderValue;
 use http::request::Parts;
-use http::{HeaderMap, HeaderName, HeaderValue};
 use itertools::Itertools;
 use opentelemetry::global::BoxedSpan;
 use opentelemetry::trace::{SpanContext, SpanKind, TraceContextExt, TraceState, Tracer};
@@ -24,17 +23,18 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
+use crate::ProxyInputs;
 use crate::cel::ContextBuilder;
-use crate::client;
 use crate::http::jwt::Claims;
 use crate::mcp::rbac;
-use crate::mcp::rbac::{Identity, RuleSets};
+use crate::mcp::rbac::{Identity, McpAuthorizationSet};
+use crate::mcp::relay::pool::ConnectionPool;
+use crate::mcp::relay::upstream::UpstreamTarget;
 use crate::mcp::sse::{MCPInfo, McpBackendGroup};
-use crate::store::Stores;
+use crate::proxy::httpproxy::PolicyClient;
 use crate::telemetry::log::AsyncLog;
 use crate::telemetry::trc::TraceParent;
-use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
-use crate::types::agent::{McpAuthorization, McpBackend};
+use crate::transport::stream::TLSConnectionInfo;
 
 type McpError = ErrorData;
 
@@ -43,6 +43,19 @@ mod pool;
 pub mod upstream;
 
 const DELIMITER: &str = "_";
+
+static AGW_INITIALIZE: LazyLock<InitializeRequestParam> =
+	LazyLock::new(|| InitializeRequestParam {
+		protocol_version: ProtocolVersion::V_2025_03_26,
+		capabilities: ClientCapabilities {
+			// TODO(keithmattix): where do we document these?
+			..Default::default()
+		},
+		client_info: Implementation {
+			name: "agentgateway".to_string(),
+			version: BuildInfo::new().version.to_string(),
+		},
+	});
 
 #[derive(Clone, Debug)]
 pub struct RqCtx {
@@ -69,18 +82,21 @@ impl RqCtx {
 pub struct Relay {
 	pool: Arc<RwLock<pool::ConnectionPool>>,
 	metrics: Arc<metrics::Metrics>,
-	policies: RuleSets,
+	policies: McpAuthorizationSet,
 	// If we have 1 target only, we don't prefix everything with 'target_'.
 	// Else this is empty
 	default_target_name: Option<String>,
+	stateful: bool,
 }
 
 impl Relay {
 	pub fn new(
+		pi: Arc<ProxyInputs>,
 		backend: McpBackendGroup,
 		metrics: Arc<metrics::Metrics>,
-		policies: RuleSets,
-		client: client::Client,
+		policies: McpAuthorizationSet,
+		client: PolicyClient,
+		stateful: bool,
 	) -> Self {
 		let default_target_name = if backend.targets.len() != 1 {
 			None
@@ -88,10 +104,13 @@ impl Relay {
 			Some(backend.targets[0].name.to_string())
 		};
 		Self {
-			pool: Arc::new(RwLock::new(pool::ConnectionPool::new(client, backend))),
+			pool: Arc::new(RwLock::new(pool::ConnectionPool::new(
+				pi, client, backend, stateful,
+			))),
 			metrics,
 			policies,
 			default_target_name,
+			stateful,
 		}
 	}
 
@@ -133,7 +152,6 @@ impl Relay {
 				None,
 			));
 		};
-		let otelc = trcng::extract_context_from_request(&http.headers);
 		let traceparent = http.extensions.get::<TraceParent>();
 		let mut ctx = Context::new();
 		if let Some(tp) = traceparent {
@@ -146,7 +164,6 @@ impl Relay {
 			));
 		}
 		let claims = http.extensions.get::<Claims>();
-		let tcp = http.extensions.get::<TCPConnectionInfo>();
 		let tls = http.extensions.get::<TLSConnectionInfo>();
 		let id = tls
 			.and_then(|tls| tls.src_identity.as_ref())
@@ -172,10 +189,74 @@ impl Relay {
 			.start_with_context(tracer, &rq_ctx.context);
 		Ok((_span, rq_ctx, log, cel))
 	}
+
+	async fn list_conns<'a>(
+		&self,
+		context: &RequestContext<RoleServer>,
+		pool: &'a mut ConnectionPool,
+	) -> Result<Vec<(Strng, &'a upstream::UpstreamTarget)>, McpError> {
+		Ok(match self.stateful {
+			true => pool
+				.list()
+				.await
+				.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?,
+			false => {
+				// In stateless mode, we want to initialize the connects to the backend each time.
+				// Since we're not proxying the downstream client's initialize capabilities, we use
+				// agentgateway's capabilities instead.
+				pool
+					.initialize(&context.peer, AGW_INITIALIZE.clone())
+					.await
+					.map_err(|e| {
+						McpError::internal_error(
+							format!("Failed to initialize connections for stateless backend: {e}"),
+							None,
+						)
+					})?
+			},
+		})
+	}
+
+	async fn get_conn<'a>(
+		&self,
+		context: &RequestContext<RoleServer>,
+		rq_ctx: &RqCtx,
+		pool: &'a mut ConnectionPool,
+		service_name: &str,
+	) -> Result<OwnedOrBorrowed<'a, UpstreamTarget>, McpError> {
+		Ok(match self.stateful {
+			true => OwnedOrBorrowed::Borrowed(
+				pool
+					.get(rq_ctx, &context.peer, service_name)
+					.await
+					.map_err(|_e| {
+						McpError::invalid_request(format!("Service {service_name} not found"), None)
+					})?,
+			),
+			false => {
+				// In stateless mode, we want to initialize the connects to the backend each time.
+				// Since we're not proxying the downstream client's initialize capabilities, we use
+				// agentgateway's capabilities instead.
+				let ct = tokio_util::sync::CancellationToken::new(); //TODO
+				let svc = pool
+					.stateless_connect(&ct, service_name, &context.peer, AGW_INITIALIZE.clone())
+					.await
+					.map_err(|_e| {
+						McpError::invalid_request(format!("Service {service_name} not found"), None)
+					})?;
+				OwnedOrBorrowed::Owned(svc)
+			},
+		})
+	}
 }
 
 impl Relay {
 	pub async fn remove_target(&self, name: &str) -> Result<(), tokio::task::JoinError> {
+		if !self.stateful {
+			// In stateless mode, removing a target is a no-op
+			tracing::debug!("stateless mode, not removing target: {}", name);
+			return Ok(());
+		}
 		tracing::info!("removing target: {}", name);
 		let mut pool = self.pool.write().await;
 		match pool.remove(name).await {
@@ -200,20 +281,20 @@ impl ServerHandler for Relay {
 	#[instrument(level = "debug", skip_all)]
 	fn get_info(&self) -> ServerInfo {
 		ServerInfo {
-            protocol_version: ProtocolVersion::V_2025_03_26,
-            capabilities: ServerCapabilities {
-                completions: None,
-                experimental: None,
-                logging: None,
-                prompts: Some(PromptsCapability::default()),
-                resources: Some(ResourcesCapability::default()),
-                tools: Some(ToolsCapability::default()),
-            },
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string(),
-            ),
-        }
+                protocol_version: ProtocolVersion::V_2025_03_26,
+                capabilities: ServerCapabilities {
+                    completions: None,
+                    experimental: None,
+                    logging: None,
+                    prompts: Some(PromptsCapability::default()),
+                    resources: Some(ResourcesCapability::default()),
+                    tools: Some(ToolsCapability::default()),
+                },
+                server_info: Implementation::from_build_env(),
+                instructions: Some(
+                    "This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string(),
+                ),
+            }
 	}
 
 	// The client will send an initialize request with their parameters. We will return our own static support
@@ -222,13 +303,13 @@ impl ServerHandler for Relay {
 		request: InitializeRequestParam,
 		context: RequestContext<RoleServer>,
 	) -> Result<InitializeResult, McpError> {
-		let (_span, ref rq_ctx) = Self::setup_request(&context.extensions, "initialize")?;
+		let (_span, _) = Self::setup_request(&context.extensions, "initialize")?;
 
 		// List servers and initialize the ones that are not initialized
 		let mut pool = self.pool.write().await;
 		// Initialize all targets
-		let connections = pool
-			.initialize(rq_ctx, &context.peer, request)
+		let _ = pool
+			.initialize(&context.peer, request)
 			.await
 			.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?;
 
@@ -245,12 +326,8 @@ impl ServerHandler for Relay {
 		context: RequestContext<RoleServer>,
 	) -> std::result::Result<ListResourcesResult, McpError> {
 		let (_span, ref rq_ctx) = Self::setup_request(&context.extensions, "list_resources")?;
-
 		let mut pool = self.pool.write().await;
-		let connections = pool
-			.list()
-			.await
-			.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?;
+		let connections = self.list_conns(&context, pool.deref_mut()).await?;
 		let all = connections.into_iter().map(|(_name, svc)| {
 			let request = request.clone();
 			async move {
@@ -282,10 +359,7 @@ impl ServerHandler for Relay {
 		let (_span, ref rq_ctx) = Self::setup_request(&context.extensions, "list_resource_templates")?;
 
 		let mut pool = self.pool.write().await;
-		let connections = pool
-			.list()
-			.await
-			.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?;
+		let connections = self.list_conns(&context, pool.deref_mut()).await?;
 		let all = connections.into_iter().map(|(_name, svc)| {
 			let request = request.clone();
 			async move {
@@ -324,10 +398,7 @@ impl ServerHandler for Relay {
 		let (_span, ref rq_ctx) = Self::setup_request(&context.extensions, "list_prompts")?;
 
 		let mut pool = self.pool.write().await;
-		let connections = pool
-			.list()
-			.await
-			.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?;
+		let connections = self.list_conns(&context, pool.deref_mut()).await?;
 
 		let all = connections.into_iter().map(|(_name, svc)| {
 			let request = request.clone();
@@ -367,12 +438,12 @@ impl ServerHandler for Relay {
 	}
 
 	#[instrument(
-        level = "debug",
-        skip_all,
-        fields(
+            level = "debug",
+            skip_all,
+            fields(
         name=%request.uri,
-        ),
-    )]
+            ),
+        )]
 	async fn read_resource(
 		&self,
 		request: ReadResourceRequestParam,
@@ -392,15 +463,13 @@ impl ServerHandler for Relay {
 		) {
 			return Err(McpError::invalid_request("not allowed", None));
 		}
-
-		let mut pool = self.pool.write().await;
-		let service_arc = pool
-			.get(rq_ctx, &context.peer, service_name)
-			.await
-			.map_err(|_e| McpError::invalid_request(format!("Service {service_name} not found"), None))?;
 		let req = ReadResourceRequestParam {
 			uri: resource.to_string(),
 		};
+		let mut pool = self.pool.write().await;
+		let service = self
+			.get_conn(&context, rq_ctx, pool.deref_mut(), service_name)
+			.await?;
 
 		self.metrics.clone().record(
 			metrics::GetResourceCall {
@@ -410,7 +479,7 @@ impl ServerHandler for Relay {
 			},
 			(),
 		);
-		match service_arc.read_resource(req, rq_ctx).await {
+		match service.read_resource(req, rq_ctx).await {
 			Ok(r) => Ok(r),
 			Err(e) => Err(e.into()),
 		}
@@ -442,14 +511,13 @@ impl ServerHandler for Relay {
 			return Err(McpError::invalid_request("not allowed", None));
 		}
 		let mut pool = self.pool.write().await;
-		let svc = pool
-			.get(rq_ctx, &context.peer, service_name)
-			.await
-			.map_err(|_e| McpError::invalid_request(format!("Service {service_name} not found"), None))?;
 		let req = GetPromptRequestParam {
 			name: prompt.to_string(),
 			arguments: request.arguments,
 		};
+		let svc = self
+			.get_conn(&context, rq_ctx, pool.deref_mut(), service_name)
+			.await?;
 
 		self.metrics.clone().record(
 			metrics::GetPromptCall {
@@ -469,15 +537,11 @@ impl ServerHandler for Relay {
 	async fn list_tools(
 		&self,
 		request: Option<PaginatedRequestParam>,
-		mut context: RequestContext<RoleServer>,
+		context: RequestContext<RoleServer>,
 	) -> std::result::Result<ListToolsResult, McpError> {
 		let (_span, ref rq_ctx, _, cel) = Self::setup_request_log(&context.extensions, "list_tools")?;
 		let mut pool = self.pool.write().await;
-		let connections = pool
-			.list()
-			.await
-			.map_err(|e| McpError::internal_error(format!("Failed to list connections: {e}"), None))?;
-		let multi = connections.len() > 1;
+		let connections = self.list_conns(&context, pool.deref_mut()).await?;
 		let all = connections.into_iter().map(|(_name, svc_arc)| {
 			let request = request.clone();
 			let cel = cel.clone();
@@ -528,66 +592,66 @@ impl ServerHandler for Relay {
 	}
 
 	#[instrument(
-        level = "debug",
-        skip_all,
-        fields(
+            level = "debug",
+            skip_all,
+            fields(
         name=%request.name,
-        ),
-    )]
-	async fn call_tool(
+            ),
+        )]
+	fn call_tool(
 		&self,
 		request: CallToolRequestParam,
 		context: RequestContext<RoleServer>,
-	) -> std::result::Result<CallToolResult, McpError> {
-		let (_span, ref rq_ctx, log, cel) = Self::setup_request_log(&context.extensions, "call_tool")?;
-		let tool_name = request.name.to_string();
-		let (service_name, tool) = self.parse_resource_name(&tool_name)?;
-		log.non_atomic_mutate(|l| {
-			l.tool_call_name = Some(tool.to_string());
-			l.target_name = Some(service_name.to_string());
-		});
-		if !self.policies.validate(
-			&rbac::ResourceType::Tool(rbac::ResourceId::new(
-				service_name.to_string(),
-				tool.to_string(),
-			)),
-			cel.as_ref(),
-		) {
-			return Err(McpError::invalid_request("not allowed", None));
-		}
-		let mut pool = self.pool.write().await;
-		let svc = pool
-			.get(rq_ctx, &context.peer, service_name)
-			.await
-			.map_err(|_e| McpError::invalid_request(format!("Service {service_name} not found"), None))?;
-		let req = CallToolRequestParam {
-			name: Cow::Owned(tool.to_string()),
-			arguments: request.arguments,
-		};
-
-		self.metrics.record(
-			metrics::ToolCall {
-				server: service_name.to_string(),
-				name: tool.to_string(),
-				params: vec![],
-			},
-			(),
-		);
-
-		match svc.call_tool(req, rq_ctx).await {
-			Ok(r) => Ok(r),
-			Err(e) => {
-				self.metrics.record(
-					metrics::ToolCallError {
-						server: service_name.to_string(),
-						name: tool.to_string(),
-						error_type: e.error_code(),
-						params: vec![],
-					},
-					(),
-				);
-				Err(e.into())
-			},
-		}
+	) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+		Box::pin(async move {
+			let (_span, ref rq_ctx, log, cel) =
+				Self::setup_request_log(&context.extensions, "call_tool")?;
+			let tool_name = request.name.to_string();
+			let (service_name, tool) = self.parse_resource_name(&tool_name)?;
+			log.non_atomic_mutate(|l| {
+				l.tool_call_name = Some(tool.to_string());
+				l.target_name = Some(service_name.to_string());
+			});
+			if !self.policies.validate(
+				&rbac::ResourceType::Tool(rbac::ResourceId::new(
+					service_name.to_string(),
+					tool.to_string(),
+				)),
+				cel.as_ref(),
+			) {
+				return Err(McpError::invalid_request("not allowed", None));
+			}
+			let mut pool = self.pool.write().await;
+			let req = CallToolRequestParam {
+				name: Cow::Owned(tool.to_string()),
+				arguments: request.arguments,
+			};
+			let svc = self
+				.get_conn(&context, rq_ctx, pool.deref_mut(), service_name)
+				.await?;
+			self.metrics.record(
+				metrics::ToolCall {
+					server: service_name.to_string(),
+					name: tool.to_string(),
+					params: vec![],
+				},
+				(),
+			);
+			match svc.call_tool(req, rq_ctx).await {
+				Ok(r) => Ok(r),
+				Err(e) => {
+					self.metrics.record(
+						metrics::ToolCallError {
+							server: service_name.to_string(),
+							name: tool.to_string(),
+							error_type: e.error_code(),
+							params: vec![],
+						},
+						(),
+					);
+					Err(e.into())
+				},
+			}
+		})
 	}
 }

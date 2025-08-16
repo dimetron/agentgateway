@@ -2,9 +2,9 @@ use std::num::NonZeroU16;
 
 use regex;
 
+use crate::http::StatusCode;
 use crate::http::filters::{RequestRedirect, UrlRewrite};
 use crate::http::tests_common::*;
-use crate::http::{Body, HeaderName, Request, Response, StatusCode, Uri};
 use crate::types::agent::{HostRedirect, PathMatch, PathRedirect};
 use crate::*;
 
@@ -131,25 +131,11 @@ fn redirection_test() {
 		status: None,
 	};
 
-	let redirect_301 = RequestRedirect {
-		scheme: None,
-		authority: None,
-		path: None,
-		status: Some(StatusCode::MOVED_PERMANENTLY),
-	};
-
 	let redirect_307 = RequestRedirect {
 		scheme: None,
 		authority: None,
 		path: None,
 		status: Some(StatusCode::TEMPORARY_REDIRECT),
-	};
-
-	let redirect_308 = RequestRedirect {
-		scheme: None,
-		authority: None,
-		path: None,
-		status: Some(StatusCode::PERMANENT_REDIRECT),
 	};
 
 	let match_exact = PathMatch::Exact("/exact".into());

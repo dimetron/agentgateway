@@ -1,7 +1,6 @@
-use std::time::Instant;
+#![allow(dead_code)]
 
 use once_cell::sync::Lazy;
-use tracing::warn;
 
 use crate::llm::pii::email_recognizer::EmailRecognizer;
 use crate::llm::pii::phone_recognizer::PhoneRecognizer;
@@ -15,9 +14,6 @@ mod recognizer;
 mod recognizer_result;
 mod url_recognizer;
 mod us_ssn_recognizer;
-
-pub static URL: Lazy<Box<dyn Recognizer + Sync + Send + 'static>> =
-	Lazy::new(|| Box::new(url_recognizer::UrlRecognizer::new()));
 
 pub static EMAIL: Lazy<Box<dyn Recognizer + Sync + Send + 'static>> =
 	Lazy::new(|| Box::new(EmailRecognizer::new()));
@@ -33,7 +29,7 @@ pub static SSN: Lazy<Box<dyn Recognizer + Sync + Send + 'static>> =
 
 #[allow(clippy::borrowed_box)]
 pub fn recognizer(r: &Box<dyn Recognizer + Sync + Send + 'static>, text: &str) {
-	let results = r.recognize(text);
+	let _results = r.recognize(text);
 	// TODO: actually return!
 }
 

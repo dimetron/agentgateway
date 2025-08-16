@@ -7,12 +7,28 @@ pub mod tcpproxy;
 pub use gateway::Gateway;
 use hyper_util_fork::client::legacy::Error as HyperError;
 
-use crate::http::{Body, HeaderValue, Response, StatusCode};
-use crate::types::agent::{
-	Backend, BackendReference, RouteBackend, RouteBackendReference, SimpleBackend,
-	SimpleBackendReference,
-};
+use crate::http::{HeaderValue, Response, StatusCode};
+use crate::types::agent::{Backend, BackendReference, SimpleBackend, SimpleBackendReference};
 use crate::*;
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProxyResponse {
+	#[error("{0}")]
+	Error(#[from] ProxyError),
+	#[error("direct response")]
+	DirectResponse(Box<Response>),
+}
+
+impl ProxyResponse {
+	pub fn downcast(self) -> ProxyError {
+		match self {
+			ProxyResponse::Error(e) => e,
+			ProxyResponse::DirectResponse(_) => ProxyError::ProcessingString(
+				"attempted to return a direct response in an invalid context".to_string(),
+			),
+		}
+	}
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProxyError {
@@ -55,7 +71,11 @@ pub enum ProxyError {
 	#[error("processing failed: {0}")]
 	ProcessingString(String),
 	#[error("rate limit exceeded")]
-	RateLimitExceeded,
+	RateLimitExceeded {
+		limit: u64,
+		remaining: u64,
+		reset_seconds: u64,
+	},
 	#[error("rate limit failed")]
 	RateLimitFailed,
 	#[error("invalid request")]
@@ -74,7 +94,7 @@ impl ProxyError {
 			_ => false,
 		}
 	}
-	pub fn as_response(&self) -> Response {
+	pub fn into_response(self) -> Response {
 		let code = match self {
 			ProxyError::BindNotFound => StatusCode::NOT_FOUND,
 			ProxyError::ListenerNotFound => StatusCode::NOT_FOUND,
@@ -103,15 +123,32 @@ impl ProxyError {
 			ProxyError::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
 			ProxyError::Processing(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::ProcessingString(_) => StatusCode::SERVICE_UNAVAILABLE,
-			ProxyError::RateLimitExceeded => StatusCode::TOO_MANY_REQUESTS,
+			ProxyError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 			ProxyError::RateLimitFailed => StatusCode::TOO_MANY_REQUESTS,
 		};
 		let msg = self.to_string();
-		::http::Response::builder()
+		let mut rb = ::http::Response::builder()
 			.status(code)
-			.header(hyper::header::CONTENT_TYPE, "text/plain")
-			.body(http::Body::from(msg))
-			.unwrap()
+			.header(hyper::header::CONTENT_TYPE, "text/plain");
+
+		// Apply per-error headers
+		if let ProxyError::RateLimitExceeded {
+			limit,
+			remaining,
+			reset_seconds,
+		} = self
+		{
+			if let Ok(hv) = HeaderValue::try_from(limit.to_string()) {
+				rb = rb.header(http::x_headers::X_RATELIMIT_LIMIT, hv)
+			}
+			if let Ok(hv) = HeaderValue::try_from(remaining.to_string()) {
+				rb = rb.header(http::x_headers::X_RATELIMIT_REMAINING, hv)
+			}
+			if let Ok(hv) = HeaderValue::try_from(reset_seconds.to_string()) {
+				rb = rb.header(http::x_headers::X_RATELIMIT_RESET, hv)
+			}
+		}
+		rb.body(http::Body::from(msg)).unwrap()
 	}
 }
 
@@ -126,7 +163,7 @@ pub fn resolve_backend(b: &BackendReference, pi: &ProxyInputs) -> Result<Backend
 				.ok_or(ProxyError::ServiceNotFound)?;
 			Backend::Service(svc, *port)
 		},
-		BackendReference::Backend(name) => {
+		BackendReference::Backend(_) => {
 			let be = pi
 				.stores
 				.read_binds()
@@ -153,7 +190,7 @@ pub fn resolve_simple_backend(
 				.ok_or(ProxyError::ServiceNotFound)?;
 			SimpleBackend::Service(svc, *port)
 		},
-		SimpleBackendReference::Backend(name) => {
+		SimpleBackendReference::Backend(_) => {
 			let be = pi
 				.stores
 				.read_binds()

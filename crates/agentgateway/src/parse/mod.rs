@@ -1,3 +1,4 @@
+pub mod aws_sse;
 pub mod passthrough;
 pub mod sse;
 pub mod transform;

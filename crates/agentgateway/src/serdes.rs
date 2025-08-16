@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
+use std::io;
 use std::path::PathBuf;
-use std::{fs, io};
 
 use anyhow::Context;
 #[cfg(feature = "schema")]
@@ -8,7 +8,7 @@ pub use schemars::JsonSchema;
 use secrecy::SecretString;
 use serde::de::DeserializeOwned;
 use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serializer};
 pub use serde_with;
 
 use crate::client::Client;
@@ -17,15 +17,14 @@ use crate::http::Body;
 /// Serde yaml represents things different than just as "JSON in YAML format".
 /// We don't want this. Instead, we transcode YAML via the JSON module.
 pub mod yamlviajson {
-	use futures_util::AsyncReadExt;
-	use serde::{Deserialize, de, ser};
-	use serde_yaml::to_writer;
+
+	use serde::{de, ser};
 
 	pub fn from_str<T>(s: &str) -> anyhow::Result<T>
 	where
 		T: for<'de> de::Deserialize<'de>,
 	{
-		let mut de_yaml = serde_yaml::Deserializer::from_str(s);
+		let de_yaml = serde_yaml::Deserializer::from_str(s);
 		let mut buf = Vec::with_capacity(128);
 		{
 			let mut se_json = serde_json::Serializer::new(&mut buf);
@@ -41,10 +40,18 @@ pub mod yamlviajson {
 		let js = serde_json::to_string(value)?;
 		let mut buf = Vec::with_capacity(128);
 		let mut se_yaml = serde_yaml::Serializer::new(&mut buf);
-		let mut de_serde = serde_yaml::Deserializer::from_str(&js);
+		let de_serde = serde_yaml::Deserializer::from_str(&js);
 		serde_transcode::transcode(de_serde, &mut se_yaml)?;
 		Ok(String::from_utf8(buf)?)
 	}
+}
+
+pub use macro_rules_attribute::{apply, attribute_alias};
+
+attribute_alias! {
+		#[apply(schema_de!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
+		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
+		#[apply(schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
 }
 
 pub fn is_default<T: Default + PartialEq>(t: &T) -> bool {
@@ -52,7 +59,6 @@ pub fn is_default<T: Default + PartialEq>(t: &T) -> bool {
 }
 
 pub mod serde_dur {
-	use std::fmt::Display;
 
 	use duration_str::HumanFormat;
 	pub use duration_str::deserialize_duration as deserialize;
@@ -64,7 +70,6 @@ pub mod serde_dur {
 }
 
 pub mod serde_dur_option {
-	use std::fmt::Display;
 
 	use duration_str::HumanFormat;
 	pub use duration_str::deserialize_option_duration as deserialize;
@@ -113,7 +118,7 @@ pub fn ser_debug<S: Serializer, T: Debug>(t: &T, serializer: S) -> Result<S::Ok,
 	serializer.serialize_str(&format!("{t:?}"))
 }
 
-pub fn ser_redact<S: Serializer, T>(t: &T, serializer: S) -> Result<S::Ok, S::Error> {
+pub fn ser_redact<S: Serializer, T>(_: &T, serializer: S) -> Result<S::Ok, S::Error> {
 	serializer.serialize_str("<redacted>")
 }
 

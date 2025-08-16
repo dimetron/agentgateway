@@ -5,15 +5,11 @@ use std::thread;
 use agent_core::prelude::*;
 use agent_core::{drain, metrics, readiness, signal, trcng};
 use prometheus_client::registry::Registry;
-use serde_json::Value;
 use tokio::task::JoinSet;
 
 use crate::control::caclient;
-use crate::management::admin::ConfigDumpHandler;
 use crate::telemetry::trc;
 use crate::telemetry::trc::Tracer;
-use crate::transport::hbone;
-use crate::types::agent::Policy;
 use crate::{Config, ProxyInputs, client, mcp, proxy, state_manager};
 
 pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
@@ -25,7 +21,7 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 			endpoint: config.tracing.endpoint.clone(),
 		},
 		tags: Default::default(),
-	});
+	})?;
 	let shutdown = signal::Shutdown::new();
 	// Setup a drain channel. drain_tx is used to trigger a drain, which will complete
 	// once all drain_rx handlers are dropped.
@@ -45,7 +41,6 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	)
 	.await
 	.context("readiness server starts")?;
-	let readiness_address = readiness_server.address();
 	// Run the readiness server in the data plane worker pool.
 	data_plane_pool.send(DataPlaneTask {
 		block_shutdown: false,
@@ -88,6 +83,7 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	// Run the XDS state manager in the current tokio worker pool.
 	tokio::spawn(state_mgr.run());
 
+	#[allow(unused_mut)]
 	let mut admin_server = crate::management::admin::Service::new(
 		config.clone(),
 		stores.clone(),
@@ -98,6 +94,8 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	.context("admin server starts")?;
 	#[cfg(feature = "ui")]
 	admin_server.set_admin_handler(Arc::new(crate::ui::UiHandler::new(config.clone())));
+	#[cfg(feature = "ui")]
+	info!("serving UI at http://{}/ui", config.admin_addr);
 
 	let sub_registry = metrics::sub_registry(&mut registry);
 	let tracer = trc::Tracer::new(&config.tracing)?;
@@ -115,7 +113,6 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 				&mut registry,
 				None, // TODO custom tags
 			)),
-			client.clone(),
 			drain_rx.clone(),
 		),
 	};
@@ -145,7 +142,6 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 		crate::management::metrics_server::Server::new(config.stats_addr, drain_rx.clone(), registry)
 			.await
 			.context("stats server starts")?;
-	let metrics_address = metrics_server.address();
 	// Run the metrics sever in the current tokio worker pool.
 	metrics_server.spawn();
 	tokio::task::spawn_blocking(|| {

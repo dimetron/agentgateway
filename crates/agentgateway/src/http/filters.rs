@@ -1,23 +1,17 @@
 use ::http::header::InvalidHeaderName;
 use ::http::response;
 use ::http::uri::InvalidUri;
-use anyhow::anyhow;
 
 use crate::http::uri::Scheme;
 use crate::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Uri};
-use crate::types::agent::{
-	Backend, HostRedirect, PathMatch, PathRedirect, SimpleBackend, SimpleBackendReference,
-};
+use crate::types::agent::{HostRedirect, PathMatch, PathRedirect, SimpleBackendReference};
 use crate::*;
 
 #[cfg(test)]
 #[path = "filters_test.rs"]
 mod tests;
 
-#[serde_with::serde_as]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct HeaderModifier {
 	#[serde(default, skip_serializing_if = "is_default")]
 	#[serde_as(as = "serde_with::Map<_, _>")]
@@ -44,9 +38,7 @@ impl HeaderModifier {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct RequestRedirect {
 	#[serde(
 		default,
@@ -99,9 +91,7 @@ impl RequestRedirect {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct UrlRewrite {
 	#[serde(skip_serializing_if = "is_default")]
 	pub authority: Option<HostRedirect>,
@@ -132,9 +122,7 @@ impl UrlRewrite {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct DirectResponse {
 	pub body: Bytes,
 	#[serde(with = "http_serde::status_code")]
@@ -143,7 +131,7 @@ pub struct DirectResponse {
 }
 
 impl DirectResponse {
-	pub fn apply(&self, req: &mut Request) -> Result<Response, Error> {
+	pub fn apply(&self) -> Result<Response, Error> {
 		response::Builder::new()
 			.status(self.status)
 			.body(http::Body::from(self.body.clone()))

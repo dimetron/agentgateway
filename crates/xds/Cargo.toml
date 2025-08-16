@@ -8,7 +8,7 @@ rust-version = "1.85"
 path = "src/lib.rs"
 
 [dependencies]
-agent-core .workspace = true
+agent-core.workspace = true
 anyhow.workspace = true
 async-stream.workspace = true
 prometheus-client.workspace = true
@@ -18,9 +18,11 @@ split-iter.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tonic.workspace = true
+tonic-prost.workspace = true
 tracing.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true
 prost-build.workspace = true
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
+protox.workspace = true

@@ -5,11 +5,9 @@ binds:
   - routes:
     - backends:
       - mcp:
-          name: default
           targets:
           - name: openapi
             openapi:
               schema:
                 file: ./examples/openapi/openapi.json
-              host: localhost
-              port: 8080
+              host: localhost:8080

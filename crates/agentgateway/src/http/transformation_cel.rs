@@ -1,21 +1,12 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-
-use ::http::header::InvalidHeaderValue;
-use ::http::{HeaderName, HeaderValue, Request, header};
+use ::http::{HeaderName, HeaderValue, header};
 use agent_core::prelude::Strng;
-use http_body_util::BodyExt;
-use minijinja::value::Object;
-use minijinja::{Environment, Value, context};
-use serde_with::{SerializeAs, TryFromInto, serde_as};
+use serde_with::{SerializeAs, serde_as};
 
-use crate::cel::{Attribute, ContextBuilder, Executor, Expression, ExpressionContext};
+use crate::cel::{ContextBuilder, Executor, Expression};
 use crate::{cel, *};
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Default)]
+#[apply(schema_de!)]
 pub struct LocalTransformationConfig {
 	#[serde(default)]
 	pub request: Option<LocalTransform>,
@@ -23,10 +14,8 @@ pub struct LocalTransformationConfig {
 	pub response: Option<LocalTransform>,
 }
 
-#[serde_as]
-#[derive(Default, Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Default)]
+#[apply(schema_de!)]
 pub struct LocalTransform {
 	#[serde(default)]
 	#[serde_as(as = "serde_with::Map<_, _>")]
@@ -149,8 +138,8 @@ where
 
 fn eval_header_value(exec: &Executor, expr: &Expression) -> anyhow::Result<HeaderValue> {
 	Ok(match exec.eval(expr) {
-		Ok(cel_interpreter::Value::String(b)) => HeaderValue::from_str(b.as_str())?,
-		Ok(cel_interpreter::Value::Bytes(b)) => HeaderValue::from_bytes(b.as_slice())?,
+		Ok(cel::Value::String(b)) => HeaderValue::from_str(b.as_str())?,
+		Ok(cel::Value::Bytes(b)) => HeaderValue::from_bytes(b.as_slice())?,
 		// Probably we could support this by parsing it
 		Ok(v) => anyhow::bail!("invalid response type: {v:?}"),
 		Err(e) => anyhow::bail!("invalid response: {}", e),
@@ -171,10 +160,10 @@ impl Transformation {
 	pub fn apply_request(
 		&self,
 		req: &mut crate::http::Request,
-		ctx: &ContextBuilder,
+		exec: &cel::Executor<'_>,
 	) -> anyhow::Result<()> {
 		let (mut parts, mut body) = std::mem::take(req).into_parts();
-		let res = Self::apply(&mut parts.headers, &mut body, self.request.as_ref(), ctx);
+		let res = Self::apply(&mut parts.headers, &mut body, self.request.as_ref(), exec);
 		*req = http::Request::from_parts(parts, body);
 		res
 	}
@@ -184,7 +173,12 @@ impl Transformation {
 		ctx: &ContextBuilder,
 	) -> anyhow::Result<()> {
 		let (mut parts, mut body) = std::mem::take(req).into_parts();
-		let res = Self::apply(&mut parts.headers, &mut body, self.response.as_ref(), ctx);
+		let res = Self::apply(
+			&mut parts.headers,
+			&mut body,
+			self.response.as_ref(),
+			&ctx.build()?,
+		);
 		*req = http::Response::from_parts(parts, body);
 		res
 	}
@@ -192,12 +186,11 @@ impl Transformation {
 		headers: &mut crate::http::HeaderMap,
 		body: &mut http::Body,
 		cfg: &TransformerConfig,
-		ctx: &ContextBuilder,
+		exec: &cel::Executor<'_>,
 	) -> anyhow::Result<()> {
-		let exec = ctx.build()?;
 		for (k, v) in &cfg.add {
 			// If it fails, skip the header
-			if let Ok(v) = eval_header_value(&exec, v) {
+			if let Ok(v) = eval_header_value(exec, v) {
 				headers.append(k.clone(), v);
 			} else {
 				// Need to sanitize it, so a failed execution cannot mean the user can set arbitrary headers.
@@ -205,7 +198,7 @@ impl Transformation {
 			}
 		}
 		for (k, v) in &cfg.set {
-			if let Ok(v) = eval_header_value(&exec, v) {
+			if let Ok(v) = eval_header_value(exec, v) {
 				headers.insert(k.clone(), v);
 			}
 		}
@@ -214,7 +207,7 @@ impl Transformation {
 		}
 		if let Some(b) = &cfg.body {
 			// If it fails, set an empty body
-			let b = eval_body(&exec, b).unwrap_or_default();
+			let b = eval_body(exec, b).unwrap_or_default();
 			*body = http::Body::from(b);
 			headers.remove(&header::CONTENT_LENGTH);
 		}

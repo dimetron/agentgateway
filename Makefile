@@ -14,21 +14,28 @@ KIND_CLUSTER_NAME ?= agentgateway
 docker:
 	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) -t $(IMAGE_FULL_NAME) . --progress=plain
 
-.PHONY: docker-ext
-docker-ext:
-	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) -t $(IMAGE_FULL_NAME)-ext -f Dockerfile.ext .
+.PHONY: docker-musl
+docker-musl:
+	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) -t $(IMAGE_FULL_NAME)-musl --build-arg=BUILDER=musl . --progress=plain
 
 CARGO_BUILD_ARGS ?=
 # build
 .PHONY: build
 build:
 	cargo build --release --features ui $(CARGO_BUILD_ARGS)
+.PHONY: build-target
+build-target:
+	cargo build --release --features ui $(CARGO_BUILD_ARGS) --target $(TARGET)
 
 # lint
 .PHONY: lint
 lint:
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
+
+fix-lint:
+	cargo clippy --fix --allow-staged --allow-dirty --workspace
+	cargo fmt
 
 # test
 .PHONY: test
@@ -42,13 +49,12 @@ clean:
 
 objects := $(wildcard examples/*/config.json)
 
-.PHONY: install-go-tools
-install-go-tools:
-	go install github.com/golang/protobuf/protoc-gen-go
-
+.PHONY: check-clean-repo
+check-clean-repo:
+	@common/scripts/check_clean_repo.sh
 
 .PHONY: gen
-gen: generate-apis generate-schema
+gen: generate-apis generate-schema fix-lint
 	@:
 
 .PHONY: generate-schema
@@ -57,21 +63,21 @@ generate-schema:
 
 # Code generation for xds apis
 .PHONY: generate-apis
-generate-apis: install-go-tools
-	@protoc --proto_path=./crates/agentgateway/proto/ \
-		--go_out=./go/api \
-		--go_opt=paths=source_relative \
-		./crates/agentgateway/proto/resource.proto
-	@protoc --proto_path=./crates/agentgateway/proto/ \
-		--go_out=./go/api \
-		--go_opt=paths=source_relative \
-		./crates/agentgateway/proto/workload.proto
+generate-apis:
+	@PATH=./common/tools:$(PATH) buf generate --path crates/agentgateway/proto/resource.proto --path crates/agentgateway/proto/workload.proto
 
+.PHONY: run-validation-deps
+run-validation-deps:
+	@common/scripts/manage-validation-deps.sh start
+
+.PHONY: stop-validation-deps
+stop-validation-deps:
+	@common/scripts/manage-validation-deps.sh stop
 
 CONFIG_FILES := $(wildcard examples/*/config.yaml)
 
 .PHONY: validate
-validate: $(CONFIG_FILES)
+validate: run-validation-deps $(CONFIG_FILES) stop-validation-deps
 
 .PHONY: $(CONFIG_FILES)
 $(CONFIG_FILES):

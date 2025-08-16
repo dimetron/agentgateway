@@ -1,6 +1,6 @@
 ---
 source: crates/agentgateway/src/llm/tests.rs
-description: "anthropic: full_input"
+description: "bedrock: request_full"
 info:
   model: gpt-4-turbo-preview
   messages:
@@ -32,6 +32,10 @@ info:
   response_format:
     type: json_object
   seed: 42
+  tool_choice:
+    type: function
+    function:
+      name: my_function
   tools:
     - type: function
       function:
@@ -50,7 +54,6 @@ info:
                 - fahrenheit
           required:
             - location
-  tool_choice: auto
   functions:
     - name: calculate_fibonacci
       description: Calculate the nth Fibonacci number using an optimized algorithm
@@ -67,12 +70,12 @@ info:
   function_call: auto
 ---
 {
+  "modelId": "gpt-4-turbo-preview",
   "messages": [
     {
       "role": "user",
       "content": [
         {
-          "type": "text",
           "text": "Please analyze this code snippet and explain what it does: function fibonacci(n) { return n <= 1 ? n : fibonacci(n-1) + fibonacci(n-2); }"
         }
       ]
@@ -81,7 +84,6 @@ info:
       "role": "assistant",
       "content": [
         {
-          "type": "text",
           "text": "This is a recursive implementation of the Fibonacci sequence. It calculates the nth Fibonacci number by adding the previous two numbers."
         }
       ]
@@ -90,19 +92,62 @@ info:
       "role": "user",
       "content": [
         {
-          "type": "text",
           "text": "Can you optimize it for better performance?"
         }
       ]
     }
   ],
-  "system": "You are a helpful assistant that specializes in technical documentation and code analysis.",
-  "model": "gpt-4-turbo-preview",
-  "max_tokens": 1000,
-  "stop_sequences": [
-    "\n\n",
-    "END"
+  "system": [
+    {
+      "text": "You are a helpful assistant that specializes in technical documentation and code analysis."
+    }
   ],
-  "temperature": 0.7,
-  "top_p": 0.9
+  "inferenceConfig": {
+    "maxTokens": 1000,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "stopSequences": [
+      "\n\n",
+      "END"
+    ]
+  },
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "name": "get_weather",
+          "description": "Get the current weather in a given location",
+          "inputSchema": {
+            "json": {
+              "type": "object",
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                  "type": "string",
+                  "enum": [
+                    "celsius",
+                    "fahrenheit"
+                  ]
+                }
+              },
+              "required": [
+                "location"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "tool_choice": {
+      "tool": {
+        "name": "my_function"
+      }
+    }
+  },
+  "requestMetadata": {
+    "user_id": "user_12345"
+  }
 }

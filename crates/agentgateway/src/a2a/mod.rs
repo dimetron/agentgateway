@@ -1,15 +1,13 @@
-use axum::body::to_bytes;
-use http::{Method, Request, header};
-use serde_json::{Value, json};
+use http::{Request, header};
+use serde_json::Value;
 use tracing::warn;
 
 use crate::http::{Body, Response, filters};
-use crate::llm::AIError;
+use crate::json;
 use crate::types::agent::A2aPolicy;
-use crate::{json, parse};
 
 pub async fn apply_to_request(pol: Option<&A2aPolicy>, req: &mut Request<Body>) -> RequestType {
-	let Some(pol) = pol else {
+	if pol.is_none() {
 		return RequestType::Unknown;
 	};
 	// Possible options are POST a JSON-RPC message or GET /.well-known/agent.json
@@ -21,7 +19,9 @@ async fn classify_request(req: &mut Request<Body>) -> RequestType {
 	// Possible options are POST a JSON-RPC message or GET /.well-known/agent.json
 	// For agent card, we will process only on the response
 	match (req.method(), req.uri().path()) {
-		(m, "/.well-known/agent.json") if m == http::Method::GET => {
+		// agent-card.json: v0.3.0+
+		// agent.json: older versions
+		(m, "/.well-known/agent.json" | "/.well-known/agent-card.json") if m == http::Method::GET => {
 			// In case of rewrite, use the original so we know where to send them back to
 			let uri = req
 				.extensions()
@@ -63,7 +63,9 @@ pub async fn apply_to_response(
 	a2a_type: RequestType,
 	resp: &mut Response,
 ) -> anyhow::Result<()> {
-	let Some(pol) = pol else { return Ok(()) };
+	if pol.is_none() {
+		return Ok(());
+	};
 	match a2a_type {
 		RequestType::AgentCard(uri) => {
 			// For agent card, we need to mutate the request to insert the proper URL to reach it
@@ -77,11 +79,12 @@ pub async fn apply_to_response(
 			};
 			// Keep the original URL the found the agent at, but strip the agent card suffix.
 			// Note: this won't work in the case they are hosting their agent in other locations.
-			let new_uri = uri
-				.path()
-				.strip_suffix("/.well-known/agent.json")
-				.map(|p| uri.to_string().replace(uri.path(), p))
-				.unwrap_or(uri.to_string());
+			let path = uri.path();
+			let path = path.strip_suffix("/.well-known/agent.json").unwrap_or(path);
+			let path = path
+				.strip_suffix("/.well-known/agent-card.json")
+				.unwrap_or(path);
+			let new_uri = uri.to_string().replace(uri.path(), path);
 
 			*url_field = Value::String(new_uri);
 

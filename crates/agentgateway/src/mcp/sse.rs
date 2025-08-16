@@ -1,65 +1,42 @@
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::ops::IndexMut;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
-use a2a_sdk::SendTaskStreamingResponseResult::Status;
 use agent_core::drain::DrainWatcher;
 use agent_core::prelude::Strng;
-use agent_core::trcng;
 use anyhow::Result;
-use axum::extract::{ConnectInfo, OptionalFromRequestParts, Query, State};
+use axum::Json;
+use axum::extract::Query;
 use axum::http::StatusCode;
-use axum::http::header::HeaderMap;
-use axum::http::request::Parts;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, RequestPartsExt, Router};
 use axum_core::extract::FromRequest;
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::typed_header::TypedHeaderRejection;
+use bytes::Bytes;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
 use http::Method;
-use http_body_util::BodyExt;
 use itertools::Itertools;
-use rmcp::RoleServer;
 use rmcp::model::{ClientJsonRpcMessage, GetExtensions};
-use rmcp::service::{TxJsonRpcMessage, serve_server_with_ct};
-use rmcp::transport::async_rw::JsonRpcMessageCodec;
+use rmcp::service::serve_server_with_ct;
 use rmcp::transport::common::server_side_http::session_id as generate_streamable_session_id;
-use rmcp::transport::sse_server::{PostEventQuery, SseServerConfig};
+use rmcp::transport::sse_server::PostEventQuery;
 use rmcp::transport::streamable_http_server::SessionId;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{SseServer, StreamableHttpServerConfig, StreamableHttpService};
-use serde_json::{Value, json};
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio::io::{self};
-use tokio::sync::RwLock;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tower::ServiceExt;
 use tracing::warn;
-use url::form_urlencoded;
 
 use crate::cel::ContextBuilder;
 use crate::http::jwt::Claims;
 use crate::http::*;
-use crate::json::{from_body, to_body};
-use crate::llm::LLMRequest;
-use crate::mcp::rbac::RuleSets;
+use crate::json::from_body;
+use crate::mcp::relay;
 use crate::mcp::relay::Relay;
-use crate::mcp::{rbac, relay};
+use crate::proxy::httpproxy::PolicyClient;
 use crate::store::{BackendPolicies, Stores};
 use crate::telemetry::log::AsyncLog;
-use crate::types::agent::{
-	BackendName, McpAuthentication, McpBackend, McpIDP, McpTarget as TypeMcpTarget, McpTargetSpec,
-	PolicyTarget, Target,
-};
-use crate::{client, json, mcp};
+use crate::types::agent::{BackendName, McpAuthentication, McpBackend, McpIDP, PolicyTarget};
+use crate::{ProxyInputs, json};
 
 type SseTxs =
 	Arc<std::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
@@ -74,42 +51,36 @@ pub struct MCPInfo {
 pub struct App {
 	state: Stores,
 	metrics: Arc<relay::metrics::Metrics>,
-	drain: DrainWatcher,
+	_drain: DrainWatcher,
 	session: Arc<LocalSessionManager>,
-	client: client::Client,
 
 	sse_txs: SseTxs,
 }
 
 impl App {
-	pub fn new(
-		state: Stores,
-		metrics: Arc<relay::metrics::Metrics>,
-		client: client::Client,
-		drain: DrainWatcher,
-	) -> Self {
+	pub fn new(state: Stores, metrics: Arc<relay::metrics::Metrics>, drain: DrainWatcher) -> Self {
 		let session: Arc<LocalSessionManager> = Arc::new(Default::default());
 		Self {
 			state,
 			metrics,
-			drain,
+			_drain: drain,
 			session,
-			client,
 			sse_txs: Default::default(),
 		}
 	}
 
 	pub async fn serve(
 		&self,
+		pi: Arc<ProxyInputs>,
 		name: BackendName,
-		backends: McpBackend,
+		backend: McpBackend,
 		mut req: Request,
 		log: AsyncLog<MCPInfo>,
 	) -> Response {
 		let (backends, authorization_policies, authn) = {
 			let binds = self.state.read_binds();
 			let (authorization_policies, authn) = binds.mcp_policies(name.clone());
-			let nt = backends
+			let nt = backend
 				.targets
 				.iter()
 				.map(|t| {
@@ -130,10 +101,9 @@ impl App {
 				authn,
 			)
 		};
-		let state = self.state.clone();
 		let metrics = self.metrics.clone();
 		let sm = self.session.clone();
-		let client = self.client.clone();
+		let client = PolicyClient { inputs: pi.clone() };
 
 		// Store an empty value, we will populate each field async
 		log.store(Some(MCPInfo::default()));
@@ -142,10 +112,8 @@ impl App {
 		let mut ctx = ContextBuilder::new();
 		authorization_policies.register(&mut ctx);
 		let needs_body = ctx.with_request(&req);
-		if needs_body {
-			if let Ok(body) = crate::http::inspect_body(req.body_mut()).await {
-				ctx.with_request_body(body);
-			}
+		if needs_body && let Ok(body) = crate::http::inspect_body(req.body_mut()).await {
+			ctx.with_request_body(body);
 		}
 		if let Some(jwt) = req.extensions().get::<Claims>() {
 			ctx.with_jwt(jwt);
@@ -154,36 +122,46 @@ impl App {
 		// MCP context is added later
 		req.extensions_mut().insert(Arc::new(ctx));
 
+		// Check if authentication is required and JWT token is missing
+		if let Some(_) = &authn
+			&& req.extensions().get::<Claims>().is_none()
+			&& !Self::is_well_known_endpoint(req.uri().path())
+		{
+			return Self::create_auth_required_response(&req).into_response();
+		}
+
 		match (req.uri().path(), req.method(), authn) {
 			("/sse", m, _) if m == Method::GET => Self::sse_get_handler(
 				self.sse_txs.clone(),
 				Relay::new(
+					pi.clone(),
 					backends.clone(),
 					metrics.clone(),
 					authorization_policies.clone(),
 					client.clone(),
+					backend.stateful,
 				),
 			)
 			.await
 			.into_response(),
 			("/sse", m, _) if m == Method::POST => self.sse_post_handler(req).await.into_response(),
-			("/.well-known/oauth-protected-resource", _, Some(auth)) => self
-				.protected_resource_metadata(req, auth)
-				.await
-				.into_response(),
-			("/.well-known/oauth-authorization-server", _, Some(auth)) => self
-				.authorization_server_metadata(req, auth)
-				.await
-				.map_err(|e| {
-					warn!("authorization_server_metadata error: {}", e);
-					StatusCode::INTERNAL_SERVER_ERROR
-				})
-				.into_response(),
-			("/client-registration", _, Some(auth)) => self
-				.client_registration(req, auth)
+			(path, _, Some(auth)) if path.ends_with("client-registration") => self
+				.client_registration(req, auth, client.clone())
 				.await
 				.map_err(|e| {
 					warn!("client_registration error: {}", e);
+					StatusCode::INTERNAL_SERVER_ERROR
+				})
+				.into_response(),
+			(path, _, Some(auth)) if path.starts_with("/.well-known/oauth-protected-resource") => self
+				.protected_resource_metadata(req, auth)
+				.await
+				.into_response(),
+			(path, _, Some(auth)) if path.starts_with("/.well-known/oauth-authorization-server") => self
+				.authorization_server_metadata(req, auth, client.clone())
+				.await
+				.map_err(|e| {
+					warn!("authorization_server_metadata error: {}", e);
 					StatusCode::INTERNAL_SERVER_ERROR
 				})
 				.into_response(),
@@ -192,20 +170,28 @@ impl App {
 				let streamable = StreamableHttpService::new(
 					move || {
 						Ok(Relay::new(
+							pi.clone(),
 							backends.clone(),
 							metrics.clone(),
 							authorization_policies.clone(),
 							client.clone(),
+							backend.stateful,
 						))
 					},
 					sm,
 					StreamableHttpServerConfig {
+						stateful_mode: backend.stateful,
 						..Default::default()
 					},
 				);
 				streamable.handle(req).await.map(axum::body::Body::new)
 			},
 		}
+	}
+
+	fn is_well_known_endpoint(path: &str) -> bool {
+		path.starts_with("/.well-known/oauth-protected-resource")
+			|| path.starts_with("/.well-known/oauth-authorization-server")
 	}
 }
 
@@ -233,23 +219,58 @@ pub struct McpTarget {
 }
 
 impl App {
-	async fn protected_resource_metadata(
-		&self,
-		req: Request,
-		auth: McpAuthentication,
-	) -> Json<Value> {
-		let new_uri = Self::get_redirect_url(&req, "/.well-known/oauth-protected-resource");
-		// We will unconditionally redirect them back to our own proxy -- not the Authorization Server.
-		Json(json!({
-			"resource": format!("{}/mcp", new_uri),
-			// "authorization_servers": ["https://dev-d1dqcqi4qgzwvabi.us.auth0.com"],
-			"authorization_servers": [format!("{new_uri}")],
-			"scopes_supported": auth.scopes,
-			"bearer_methods_supported": ["header"],
-			// "resource_documentation": "http://lo/docs",
-			"mcp_protocol_version": "2025-06-18",
-			"resource_type": "mcp-server"
-		}))
+	fn create_auth_required_response(req: &Request) -> Response {
+		let request_path = req.uri().path();
+		let proxy_url = Self::get_redirect_url(req, request_path);
+		let www_authenticate_value = format!(
+			"Bearer resource_metadata=\"{proxy_url}/.well-known/oauth-protected-resource{request_path}\""
+		);
+
+		::http::Response::builder()
+			.status(StatusCode::UNAUTHORIZED)
+			.header("www-authenticate", www_authenticate_value)
+			.header("content-type", "application/json")
+			.body(axum::body::Body::from(Bytes::from(
+				r#"{"error":"unauthorized","error_description":"JWT token required"}"#,
+			)))
+			.unwrap_or_else(|_| {
+				::http::Response::builder()
+					.status(StatusCode::INTERNAL_SERVER_ERROR)
+					.body(axum::body::Body::empty())
+					.unwrap()
+			})
+	}
+
+	async fn protected_resource_metadata(&self, req: Request, auth: McpAuthentication) -> Response {
+		let new_uri = Self::strip_oauth_protected_resource_prefix(&req);
+
+		// Determine the issuer to use - either use the same request URL and path that it was initially with,
+		// or else keep the auth.issuer
+		let issuer = if auth.provider.is_some() {
+			// When a provider is configured, use the same request URL with the well-known prefix stripped
+			Self::strip_oauth_protected_resource_prefix(&req)
+		} else {
+			// No provider configured, use the original issuer
+			auth.issuer
+		};
+
+		let json_body = auth.resource_metadata.to_rfc_json(new_uri, issuer);
+
+		::http::Response::builder()
+			.status(StatusCode::OK)
+			.header("content-type", "application/json")
+			.header("access-control-allow-origin", "*")
+			.header("access-control-allow-methods", "GET, OPTIONS")
+			.header("access-control-allow-headers", "content-type")
+			.body(axum::body::Body::from(Bytes::from(
+				serde_json::to_string(&json_body).unwrap_or_default(),
+			)))
+			.unwrap_or_else(|_| {
+				::http::Response::builder()
+					.status(StatusCode::INTERNAL_SERVER_ERROR)
+					.body(axum::body::Body::empty())
+					.unwrap()
+			})
 	}
 
 	fn get_redirect_url(req: &Request, strip_base: &str) -> String {
@@ -266,19 +287,38 @@ impl App {
 			.unwrap_or(uri.to_string())
 	}
 
+	fn strip_oauth_protected_resource_prefix(req: &Request) -> String {
+		let uri = req
+			.extensions()
+			.get::<filters::OriginalUrl>()
+			.map(|u| u.0.clone())
+			.unwrap_or_else(|| req.uri().clone());
+
+		let path = uri.path();
+		const OAUTH_PREFIX: &str = "/.well-known/oauth-protected-resource";
+
+		// Remove the oauth-protected-resource prefix and keep the remaining path
+		if let Some(remaining_path) = path.strip_prefix(OAUTH_PREFIX) {
+			uri.to_string().replace(path, remaining_path)
+		} else {
+			// If the prefix is not found, return the original URI
+			uri.to_string()
+		}
+	}
+
 	async fn authorization_server_metadata(
 		&self,
 		req: Request,
 		auth: McpAuthentication,
-	) -> anyhow::Result<Json<Value>> {
-		let new_uri = Self::get_redirect_url(&req, "/.well-known/oauth-authorization-server");
+		client: PolicyClient,
+	) -> anyhow::Result<Response> {
 		let ureq = ::http::Request::builder()
 			.uri(format!(
 				"{}/.well-known/oauth-authorization-server",
 				auth.issuer
 			))
 			.body(Body::empty())?;
-		let upstream = self.client.simple_call(ureq).await?;
+		let upstream = client.simple_call(ureq).await?;
 		let mut resp: serde_json::Value = from_body(upstream.into_body()).await?;
 		match &auth.provider {
 			Some(McpIDP::Auth0 {}) => {
@@ -299,24 +339,42 @@ impl App {
 				// Keycloak doesn't do CORS for client registrations
 				// https://github.com/keycloak/keycloak/issues/39629
 				// We can workaround this by proxying it
+
+				let current_uri = req
+					.extensions()
+					.get::<filters::OriginalUrl>()
+					.map(|u| u.0.clone())
+					.unwrap_or_else(|| req.uri().clone());
 				let Some(serde_json::Value::String(re)) =
 					json::traverse_mut(&mut resp, &["registration_endpoint"])
 				else {
 					anyhow::bail!("registration_endpoint missing");
 				};
-				*re = format!("{new_uri}/client-registration");
+				*re = format!("{current_uri}/client-registration");
 			},
 			_ => {},
 		}
-		Ok(Json(resp))
+
+		let response = ::http::Response::builder()
+			.status(StatusCode::OK)
+			.header("content-type", "application/json")
+			.header("access-control-allow-origin", "*")
+			.header("access-control-allow-methods", "GET, OPTIONS")
+			.header("access-control-allow-headers", "content-type")
+			.body(axum::body::Body::from(Bytes::from(serde_json::to_string(
+				&resp,
+			)?)))
+			.map_err(|e| anyhow::anyhow!("Failed to build response: {}", e))?;
+
+		Ok(response)
 	}
 
 	async fn client_registration(
 		&self,
 		req: Request,
 		auth: McpAuthentication,
+		client: PolicyClient,
 	) -> anyhow::Result<Response> {
-		let new_uri = Self::get_redirect_url(&req, "/.well-known/oauth-authorization-server");
 		let ureq = ::http::Request::builder()
 			.uri(format!(
 				"{}/clients-registrations/openid-connect",
@@ -324,14 +382,26 @@ impl App {
 			))
 			.method(Method::POST)
 			.body(req.into_body())?;
-		let upstream = self.client.simple_call(ureq).await?;
+
+		let mut upstream = client.simple_call(ureq).await?;
+
+		// Add CORS headers to the response
+		let headers = upstream.headers_mut();
+		headers.insert("access-control-allow-origin", "*".parse().unwrap());
+		headers.insert(
+			"access-control-allow-methods",
+			"POST, OPTIONS".parse().unwrap(),
+		);
+		headers.insert(
+			"access-control-allow-headers",
+			"content-type".parse().unwrap(),
+		);
+
 		Ok(upstream)
 	}
 
 	async fn sse_post_handler(&self, req: Request) -> Result<StatusCode, StatusCode> {
 		// Extract query parameters
-		let uri = req.uri();
-		let query = uri.query().unwrap_or("");
 		let Query(PostEventQuery { session_id }) =
 			Query::<PostEventQuery>::try_from_uri(req.uri()).map_err(|_| StatusCode::BAD_REQUEST)?;
 

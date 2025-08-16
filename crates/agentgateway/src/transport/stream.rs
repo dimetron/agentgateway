@@ -3,7 +3,7 @@ use std::io::{Error, IoSlice};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Instant;
 
@@ -15,20 +15,13 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsStream;
 use tracing::event;
 
+use crate::types::discovery::Identity;
+
 #[derive(Debug, Clone)]
 pub struct TCPConnectionInfo {
 	pub peer_addr: SocketAddr,
 	pub local_addr: SocketAddr,
 	pub start: Instant,
-}
-
-#[derive(Debug, Clone)]
-pub struct Identity {}
-
-impl Display for Identity {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str("{}")
-	}
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
@@ -166,9 +159,8 @@ impl Socket {
 				_ => None,
 			};
 			let (_, ssl) = tls.get_ref();
-			// TODO: derive some useful info from the cert
 			TLSConnectionInfo {
-				src_identity: None, // TODO
+				src_identity: crate::transport::tls::identity_from_connection(ssl),
 				negotiated_alpn: ssl.alpn_protocol().map(Alpn::from),
 				server_name,
 			}

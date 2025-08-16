@@ -48,10 +48,6 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
     - name: Build UI
       run: | 
         cd ui
@@ -67,30 +63,6 @@ jobs:
       run: make build
       env:
         CARGO_BUILD_ARGS: "--target ${{ matrix.target }} -F ${{ matrix.features }}"
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-    - name: Lint
-      run: make lint
 
   test:
     runs-on: ubuntu-latest
@@ -108,14 +80,35 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Add Go bin to PATH
+      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
     - name: Test
       run: make test
     - name: Validate
       run: make validate
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Add Go bin to PATH
+      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+    - name: Generation
+      run: make gen check-clean-repo
+    - name: Lint
+      run: make lint
 
   docker:
     strategy:
@@ -127,45 +120,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     - name: Build
       env:
         DOCKER_BUILDER: "docker buildx"
+        DOCKER_BUILD_ARGS: "--cache-from type=registry,ref=ghcr.io/agentgateway/agentgateway:buildcache"
       run: make docker
-
-  check-code-gen:
-    if: ${{ !github.event.pull_request.draft }}
-    timeout-minutes: 20
-    name: Check Generated Code
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version-file: go.mod
-    - name: Install Protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-    - name: Generate and Check Diff
-      id: generate
-      run: |
-        make gen
-    - name: Create Diff
-      if: failure()
-      run: |
-        mkdir -p _output
-        git add -N .
-        git --no-pager diff >> _output/code-gen.diff
-    - name: Upload diff
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: code-gen.diff
-        path: _output/code-gen.diff

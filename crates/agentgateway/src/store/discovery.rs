@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use agent_xds::XdsUpdate;
 use itertools::Itertools;
-use serde::Serialize;
 use tokio::sync::watch::Sender;
 use tracing::{Level, instrument};
 use types::discovery::{NamespacedHostname, NetworkAddress};
@@ -16,7 +15,6 @@ use types::proto::workload::{
 	Address as XdsAddress, PortList, Service as XdsService, Workload as XdsWorkload,
 };
 
-use crate::types::agent::{Bind, TargetedPolicy};
 use crate::types::discovery::{Endpoint, InboundProtocol, NetworkMode, Service, Workload};
 use crate::*;
 
@@ -39,7 +37,6 @@ impl Store {
 	pub fn new() -> Store {
 		Store {
 			workloads: WorkloadStore {
-				local_node: None,
 				insert_notifier: Sender::new(()),
 				by_addr: Default::default(),
 				by_uid: Default::default(),
@@ -78,7 +75,7 @@ impl Store {
 		self.workloads.insert(workload.clone());
 		self
 			.services
-			.insert_endpoint_for_services(&workload, &services);
+			.insert_endpoint_for_services(&workload, &services)?;
 
 		Ok(())
 	}
@@ -91,10 +88,11 @@ impl Store {
 	)]
 	pub fn insert_service(&mut self, service: XdsService) -> anyhow::Result<()> {
 		debug!("handling insert");
-		let mut service = Service::try_from(&service)?;
-		self.insert_service_internal(service)
+		let service = Service::try_from(&service)?;
+		self.insert_service_internal(service);
+		Ok(())
 	}
-	pub fn insert_service_internal(&mut self, mut service: Service) -> anyhow::Result<()> {
+	pub fn insert_service_internal(&mut self, mut service: Service) {
 		// If the service already exists, add existing endpoints into the new service.
 		if let Some(prev) = self
 			.services
@@ -110,7 +108,6 @@ impl Store {
 		}
 
 		self.services.insert(service);
-		Ok(())
 	}
 
 	fn remove(&mut self, xds_name: &Strng) {
@@ -164,7 +161,6 @@ impl Store {
 /// A WorkloadStore encapsulates all information about workloads in the mesh
 #[derive(Debug)]
 pub struct WorkloadStore {
-	local_node: Option<Strng>,
 	// TODO this could be expanded to Sender<Workload> + a full subscriber/streaming
 	// model, but for now just notifying watchers to wake when _any_ insert happens
 	// is simpler (and only requires a channelsize of 1)
@@ -209,10 +205,9 @@ impl WorkloadStore {
 					for wip in prev.workload_ips.iter() {
 						if let Entry::Occupied(mut o) =
 							self.by_addr.entry(network_addr(prev.network.clone(), *wip))
+							&& o.get_mut().remove_uid(prev.uid.clone())
 						{
-							if o.get_mut().remove_uid(prev.uid.clone()) {
-								o.remove();
-							}
+							o.remove();
 						}
 					}
 				}
@@ -575,7 +570,7 @@ impl StoreUpdater {
 		services: Vec<Service>,
 		workloads: Vec<LocalWorkload>,
 		prev: PreviousState,
-	) -> PreviousState {
+	) -> anyhow::Result<PreviousState> {
 		let mut s = self.state.write().expect("mutex acquired");
 		let mut old_workloads = prev.workloads;
 		let mut old_services = prev.services;
@@ -596,7 +591,7 @@ impl StoreUpdater {
 				.into_iter()
 				.map(|(k, v)| (k, PortList::from(v)))
 				.collect();
-			s.services.insert_endpoint_for_services(&w, &services);
+			s.services.insert_endpoint_for_services(&w, &services)?;
 			old_workloads.remove(&w.uid);
 			next_state.workloads.insert(w.uid.clone());
 		}
@@ -615,7 +610,7 @@ impl StoreUpdater {
 				s.services.remove_endpoint(&prev);
 			}
 		}
-		next_state
+		Ok(next_state)
 	}
 }
 

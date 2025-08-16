@@ -1,12 +1,13 @@
 use serde::de::Error;
 use serde::ser::SerializeMap;
 
-use crate::http::Request;
 use crate::llm::LLMRequest;
-use crate::types::agent::{HostRedirect, PathRedirect};
+use crate::proxy::ProxyError;
 use crate::*;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(with = "RateLimitSerde"))]
 pub struct RateLimit {
 	ratelimit: Arc<ratelimit::Ratelimiter>,
 	pub limit_type: RateLimitType,
@@ -31,28 +32,22 @@ impl<'de> serde::Deserialize<'de> for RateLimit {
 	}
 }
 
-impl Debug for RateLimit {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("RateLimit").finish()
-	}
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[apply(schema!)]
 pub struct RateLimitSerde {
 	#[serde(default)]
 	pub max_tokens: u64,
 	#[serde(default)]
 	pub tokens_per_fill: u64,
 	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
 	pub fill_interval: Duration,
 	#[serde(default)]
 	#[serde(rename = "type")]
 	pub limit_type: RateLimitType,
 }
 
-#[derive(Default, Debug, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
+#[derive(Default, Eq, PartialEq)]
 pub enum RateLimitType {
 	#[serde(rename = "requests")]
 	#[default]
@@ -76,18 +71,51 @@ impl TryFrom<RateLimitSerde> for RateLimit {
 }
 
 impl RateLimit {
-	pub fn check_request(&self, req: &Request) -> bool {
+	pub fn check_request(&self) -> Result<(), ProxyError> {
 		if self.limit_type != RateLimitType::Requests {
-			return true;
+			return Ok(());
 		}
-		self.ratelimit.try_wait().is_ok()
+		// TODO: return headers on success, not just failure
+		self
+			.ratelimit
+			.try_wait()
+			.map_err(|(limit, remaining, reset)| ProxyError::RateLimitExceeded {
+				limit,
+				remaining,
+				reset_seconds: reset.as_secs(),
+			})
 	}
-	// TODO: add true-up for the response toke usage
-	pub fn check_llm_request(&self, req: &LLMRequest) -> bool {
+
+	pub fn check_llm_request(&self, req: &LLMRequest) -> Result<(), ProxyError> {
 		if self.limit_type != RateLimitType::Tokens {
-			return true;
+			return Ok(());
 		}
-		self.ratelimit.try_wait_n(req.input_tokens).is_ok()
+		if let Some(it) = req.input_tokens {
+			// If we tokenized the request, check to make sure we permit that many tokens
+			// We will add the response tokens in `amend_tokens`
+			self
+				.ratelimit
+				.try_wait_n(it)
+				.map_err(|(limit, remaining, reset)| ProxyError::RateLimitExceeded {
+					limit,
+					remaining,
+					reset_seconds: reset.as_secs(),
+				})
+		} else {
+			// Otherwise, make sure at least 1 token is allowed.
+			// Note this may lead to large over-allowance, especially with fast fill_intervals.
+			let avail = self.ratelimit.available_refill();
+			if avail > 0 {
+				Ok(())
+			} else {
+				Err(ProxyError::RateLimitExceeded {
+					limit: self.ratelimit.max_tokens(),
+					remaining: avail,
+					reset_seconds: (self.ratelimit.next_refill() - clocksource::precise::Instant::now())
+						.as_secs(),
+				})
+			}
+		}
 	}
 
 	/// Remove tokens from the rate limiter after the fact. This is useful for true-up
@@ -103,8 +131,6 @@ impl RateLimit {
 // Forked from https://github.com/pelikan-io/rustcommon/tree/main/ratelimit to provide some additional functions
 mod ratelimit {
 	use core::sync::atomic::{AtomicU64, Ordering};
-	use std::cmp;
-	use std::ops::Add;
 
 	use clocksource::precise::{AtomicInstant, Duration, Instant};
 	use thiserror::Error;
@@ -128,6 +154,7 @@ mod ratelimit {
 		refill_interval: Duration,
 	}
 
+	#[derive(Debug)]
 	pub struct Ratelimiter {
 		available: AtomicU64,
 		dropped: AtomicU64,
@@ -148,31 +175,20 @@ mod ratelimit {
 			Builder::new(amount, interval)
 		}
 
-		/// Return the current effective rate of the Ratelimiter in tokens/second
-		pub fn rate(&self) -> f64 {
-			let parameters = self.parameters;
-
-			parameters.refill_amount as f64 * 1_000_000_000.0
-				/ parameters.refill_interval.as_nanos() as f64
-		}
-
-		/// Return the current interval between refills.
-		pub fn refill_interval(&self) -> Duration {
-			self.parameters.refill_interval
-		}
-
-		/// Return the current number of tokens to be added on each refill.
-		pub fn refill_amount(&self) -> u64 {
-			self.parameters.refill_amount
-		}
-
 		/// Returns the maximum number of tokens that can
 		pub fn max_tokens(&self) -> u64 {
 			self.parameters.capacity
 		}
 
 		/// Returns the number of tokens currently available.
+		#[allow(dead_code)]
 		pub fn available(&self) -> u64 {
+			self.available.load(Ordering::Relaxed)
+		}
+
+		/// Returns the number of tokens currently available. This will refill if needed;
+		pub fn available_refill(&self) -> u64 {
+			let _ = self.refill(Instant::now());
 			self.available.load(Ordering::Relaxed)
 		}
 
@@ -183,6 +199,7 @@ mod ratelimit {
 
 		/// Returns the number of tokens that have been dropped due to bucket
 		/// overflowing.
+		#[allow(dead_code)]
 		pub fn dropped(&self) -> u64 {
 			self.dropped.load(Ordering::Relaxed)
 		}
@@ -197,7 +214,7 @@ mod ratelimit {
 				return;
 			}
 
-			self
+			let _ = self
 				.available
 				.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
 					if tokens_to_remove < 0 {
@@ -230,7 +247,7 @@ mod ratelimit {
 				// acquire read lock for refill parameters
 				parameters = self.parameters;
 
-				intervals = ((time - refill_at).as_nanos() / parameters.refill_interval.as_nanos() + 1);
+				intervals = (time - refill_at).as_nanos() / parameters.refill_interval.as_nanos() + 1;
 
 				// calculate when the following refill would be
 				let next_refill =
@@ -269,16 +286,20 @@ mod ratelimit {
 		/// Non-blocking function to "wait" for a single token. On success, a single
 		/// token has been acquired. On failure, a `Duration` hinting at when the
 		/// next refill would occur is returned.
-		pub fn try_wait(&self) -> Result<(), core::time::Duration> {
+		pub fn try_wait(&self) -> Result<(), (u64, u64, core::time::Duration)> {
 			self.try_wait_n(1)
 		}
 
 		/// Non-blocking function to "wait" for multiple tokens. On success, all requested
 		/// tokens have been acquired. On failure, a `Duration` hinting at when the
 		/// next refill would occur is returned. Either all tokens are acquired or none.
-		pub fn try_wait_n(&self, n: u64) -> Result<(), core::time::Duration> {
+		pub fn try_wait_n(&self, n: u64) -> Result<(), (u64, u64, core::time::Duration)> {
 			if n == 0 || n > self.parameters.capacity {
-				return Err(core::time::Duration::from_nanos(0));
+				return Err((
+					self.parameters.capacity,
+					self.available.load(Ordering::Acquire),
+					core::time::Duration::from_nanos(0),
+				));
 			}
 
 			// We have an outer loop that drives the refilling of the token bucket.
@@ -313,7 +334,7 @@ mod ratelimit {
 								// Refill failed and there weren't enough tokens already
 								// available. We return the error which contains a
 								// duration until the next refill.
-								return Err(e);
+								return Err((self.parameters.capacity, available, e));
 							},
 						}
 					}
@@ -422,27 +443,6 @@ mod ratelimit {
 		use std::time::{Duration, Instant};
 
 		use super::*;
-
-		macro_rules! approx_eq {
-			($value:expr, $target:expr) => {
-				let value: f64 = $value;
-				let target: f64 = $target;
-				assert!(value >= target * 0.999, "{value} >= {}", target * 0.999);
-				assert!(value <= target * 1.001, "{value} <= {}", target * 1.001);
-			};
-		}
-
-		// test that the configured rate and calculated effective rate are close
-		#[test]
-		pub fn rate() {
-			// amount + interval
-			let rl = Ratelimiter::builder(4, Duration::from_nanos(333))
-				.max_tokens(4)
-				.build()
-				.unwrap();
-
-			approx_eq!(rl.rate(), 12012012.0);
-		}
 
 		// quick test that a ratelimiter yields tokens at the desired rate
 		#[test]

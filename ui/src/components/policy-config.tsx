@@ -144,6 +144,19 @@ export function PolicyConfig() {
 
       setRoutes(allRoutes);
 
+      if (selectedRoute) {
+        const updatedSelectedRoute = allRoutes.find(
+          (r) =>
+            r.bind.port === selectedRoute.bind.port &&
+            r.listener.name === selectedRoute.listener.name &&
+            r.routeIndex === selectedRoute.routeIndex &&
+            r.routeType === selectedRoute.routeType
+        );
+        if (updatedSelectedRoute) {
+          setSelectedRoute(updatedSelectedRoute);
+        }
+      }
+
       // Auto-expand binds with routes
       const bindsWithRoutes = new Set<number>();
       allRoutes.forEach(({ bind }) => bindsWithRoutes.add(bind.port));
@@ -161,11 +174,13 @@ export function PolicyConfig() {
   }, []);
 
   const getAvailablePolicyTypes = (routeType: "http" | "tcp") => {
-    return Object.entries(POLICY_TYPES).filter(([_, info]) => {
-      if (routeType === "http") return !info.tcpOnly;
-      if (routeType === "tcp") return !info.httpOnly;
-      return true;
-    }).sort((a, b) => a[1].name.localeCompare(b[1].name));
+    return Object.entries(POLICY_TYPES)
+      .filter(([_, info]) => {
+        if (routeType === "http") return !info.tcpOnly;
+        if (routeType === "tcp") return !info.httpOnly;
+        return true;
+      })
+      .sort((a, b) => a[1].name.localeCompare(b[1].name));
   };
 
   const hasPolicyType = (routeContext: RouteWithContext, type: PolicyType) => {

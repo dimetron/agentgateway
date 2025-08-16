@@ -1,32 +1,15 @@
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::time::SystemTime;
+use ::http::{HeaderMap, StatusCode};
 
-use ::http::uri::Authority;
-use ::http::{HeaderMap, StatusCode, Uri};
-use anyhow::anyhow;
-use bytes::Bytes;
-use http_body::Frame;
-use http_body_util::BodyStream;
-use itertools::Itertools;
-use prost_types::Timestamp;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::ReceiverStream;
-
-use crate::client::{Client, Transport};
-use crate::control::AuthSource;
-use crate::http::backendtls::BackendTLS;
-use crate::http::ext_proc::GrpcChannel;
-use crate::http::filters::DirectResponse;
-use crate::http::remoteratelimit::proto::RateLimitDescriptor;
+use crate::cel::{Executor, Expression};
+use crate::http::ext_proc::GrpcReferenceChannel;
+use crate::http::localratelimit::RateLimitType;
 use crate::http::remoteratelimit::proto::rate_limit_descriptor::Entry;
 use crate::http::remoteratelimit::proto::rate_limit_service_client::RateLimitServiceClient;
-use crate::http::{HeaderName, HeaderValue, PolicyResponse, Request, Response};
+use crate::http::remoteratelimit::proto::{RateLimitDescriptor, RateLimitRequest};
+use crate::http::{HeaderName, HeaderValue, PolicyResponse, Request};
 use crate::proxy::ProxyError;
-use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
-use crate::types::agent;
-use crate::types::agent::{Backend, Target};
+use crate::proxy::httpproxy::PolicyClient;
+use crate::types::agent::SimpleBackendReference;
 use crate::*;
 
 #[allow(warnings)]
@@ -35,64 +18,163 @@ pub mod proto {
 	tonic::include_proto!("envoy.service.ratelimit.v3");
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteRateLimit {
-	pub target: Target,
-	pub descriptors: HashMap<String, Descriptor>,
+	pub domain: String,
+	pub target: Arc<SimpleBackendReference>,
+	pub descriptors: Arc<DescriptorSet>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Descriptor {
-	#[serde(serialize_with = "ser_display", deserialize_with = "de_parse")]
-	RequestHeader(HeaderName),
-	Static(Strng),
+struct Descriptor(String, cel::Expression);
+
+#[apply(schema!)]
+pub struct DescriptorSet(Vec<DescriptorEntry>);
+
+#[apply(schema!)]
+pub struct DescriptorEntry {
+	#[serde(deserialize_with = "de_descriptors")]
+	#[cfg_attr(feature = "schema", schemars(with = "Vec<KV>"))]
+	entries: Arc<Vec<Descriptor>>,
+	#[serde(default)]
+	#[serde(rename = "type")]
+	pub limit_type: RateLimitType,
+}
+
+#[derive(serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+struct KV {
+	key: String,
+	value: String,
+}
+
+fn de_descriptors<'de: 'a, 'a, D>(deserializer: D) -> Result<Arc<Vec<Descriptor>>, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let raw = Vec::<KV>::deserialize(deserializer)?;
+	let parsed: Vec<_> = raw
+		.into_iter()
+		.map(|i| cel::Expression::new(i.value).map(|v| Descriptor(i.key, v)))
+		.collect::<Result<_, _>>()
+		.map_err(|e| serde::de::Error::custom(e.to_string()))?;
+	Ok(Arc::new(parsed))
+}
+
+#[derive(Debug)]
+pub struct LLMResponseAmend {
+	base: RemoteRateLimit,
+	client: PolicyClient,
+	request: proto::RateLimitRequest,
+}
+
+impl LLMResponseAmend {
+	pub fn amend_tokens(mut self, tokens: i64) {
+		// We cannot currently do negative amendments, so if its negative just skip
+		// The input is not the cost, but the delta, so if we get -5 we should have a cost of 5
+		let Ok(tokens) = (tokens).try_into() else {
+			return;
+		};
+		self
+			.request
+			.descriptors
+			.iter_mut()
+			.for_each(|d| d.hits_addend = Some(tokens));
+		// Ignore the response
+		tokio::task::spawn(async move {
+			let _ = self.base.check_internal(self.client, self.request).await;
+		});
+	}
 }
 
 impl RemoteRateLimit {
-	pub async fn check(
+	fn build_request(
 		&self,
-		client: Client,
-		req: &mut Request,
-	) -> Result<PolicyResponse, ProxyError> {
-		let mut entries = Vec::with_capacity(self.descriptors.len());
-		for (k, lookup) in &self.descriptors {
-			let value = match lookup {
-				Descriptor::RequestHeader(k) => {
-					let Some(hv) = req.headers().get(k) else {
-						// If not found, its not a match
-						return Ok(Default::default());
-					};
-					hv.to_str()
-						.map_err(|_| ProxyError::InvalidRequest)?
-						.to_string()
-				},
-				Descriptor::Static(v) => v.to_string(),
-			};
-			let entry = Entry {
-				key: k.clone(),
-				value,
-			};
-			entries.push(entry);
+		exec: &Executor<'_>,
+		limit_type: RateLimitType,
+		cost: Option<u64>,
+	) -> RateLimitRequest {
+		let mut descriptors = Vec::with_capacity(self.descriptors.0.len());
+		for entries in self
+			.descriptors
+			.0
+			.iter()
+			.filter(|e| e.limit_type == limit_type)
+		{
+			if let Some(rl_entries) = Self::eval_descriptor(exec, &entries.entries) {
+				descriptors.push(RateLimitDescriptor {
+					entries: rl_entries,
+					limit: None,
+					hits_addend: cost,
+				});
+			}
 		}
-		let request = proto::RateLimitRequest {
-			domain: "crd".to_string(),
-			descriptors: vec![RateLimitDescriptor {
-				// TODO: do we ever need multiple
-				entries,
-				limit: None,
-				hits_addend: None,
-			}],
+
+		proto::RateLimitRequest {
+			domain: self.domain.clone(),
+			descriptors,
+			// Ignored; we always set the per-descriptor one which allows distinguishing empty vs 0
 			hits_addend: 0,
+		}
+	}
+	pub async fn check_llm(
+		&self,
+		client: PolicyClient,
+		req: &mut Request,
+		exec: &Executor<'_>,
+		cost: u64,
+	) -> Result<(PolicyResponse, Option<LLMResponseAmend>), ProxyError> {
+		if !self
+			.descriptors
+			.0
+			.iter()
+			.any(|d| d.limit_type == RateLimitType::Tokens)
+		{
+			// Nothing to do
+			return Ok((PolicyResponse::default(), None));
+		}
+		let request = self.build_request(exec, RateLimitType::Tokens, Some(cost));
+		let cr = self.check_internal(client.clone(), request.clone()).await;
+		let r = LLMResponseAmend {
+			base: self.clone(),
+			client,
+			request,
 		};
 
-		trace!("connecting to {}", self.target);
-		let chan = GrpcChannel {
+		cr.and_then(|pr| (Self::apply(req, pr).map(|x| (x, Some(r)))))
+	}
+
+	pub async fn check(
+		&self,
+		client: PolicyClient,
+		req: &mut Request,
+		exec: &Executor<'_>,
+	) -> Result<PolicyResponse, ProxyError> {
+		// This is on the request path
+		if !self
+			.descriptors
+			.0
+			.iter()
+			.any(|d| d.limit_type == RateLimitType::Requests)
+		{
+			// Nothing to do
+			return Ok(PolicyResponse::default());
+		}
+		let request = self.build_request(exec, RateLimitType::Requests, None);
+		let cr = self.check_internal(client, request).await?;
+		Self::apply(req, cr)
+	}
+
+	async fn check_internal(
+		&self,
+		client: PolicyClient,
+		request: proto::RateLimitRequest,
+	) -> Result<proto::RateLimitResponse, ProxyError> {
+		trace!("connecting to {:?}", self.target);
+		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
-			// TODO: lookup policy, don't hardcode
-			// transport: Transport::Tls(agent::INSECURE_TRUST.clone()),
-			transport: Transport::Plaintext,
 			client,
 		};
 		let mut client = RateLimitServiceClient::new(chan);
@@ -104,7 +186,10 @@ impl RemoteRateLimit {
 		let cr = resp.map_err(|_| ProxyError::RateLimitFailed)?;
 
 		let cr = cr.into_inner();
+		Ok(cr)
+	}
 
+	fn apply(req: &mut Request, cr: proto::RateLimitResponse) -> Result<PolicyResponse, ProxyError> {
 		let mut res = PolicyResponse::default();
 		// if not OK, we directly respond
 		if cr.overall_code != (proto::rate_limit_response::Code::Ok as i32) {
@@ -126,6 +211,31 @@ impl RemoteRateLimit {
 			res.response_headers = Some(hm);
 		}
 		Ok(res)
+	}
+
+	fn eval_descriptor(exec: &Executor, entries: &Vec<Descriptor>) -> Option<Vec<Entry>> {
+		let mut rl_entries = Vec::with_capacity(entries.len());
+		for Descriptor(k, lookup) in entries {
+			// We drop the entire set if we cannot eval one
+			let value = exec.eval(lookup).ok()?;
+			let cel::Value::String(value) = value else {
+				return None;
+			};
+			let entry = Entry {
+				key: k.clone(),
+				value: value.to_string(),
+			};
+			rl_entries.push(entry);
+		}
+		Some(rl_entries)
+	}
+
+	pub fn expressions(&self) -> impl Iterator<Item = &Expression> {
+		self
+			.descriptors
+			.0
+			.iter()
+			.flat_map(|v| v.entries.iter().map(|v| &v.1))
 	}
 }
 

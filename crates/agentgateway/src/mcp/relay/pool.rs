@@ -1,14 +1,12 @@
 use agent_core::prelude::*;
 use anyhow::anyhow;
-use futures::future::BoxFuture;
+use futures::StreamExt;
 use futures::stream::BoxStream;
-use futures::{FutureExt, StreamExt};
 use http::Uri;
 use http::header::CONTENT_TYPE;
 use reqwest::header::ACCEPT;
-use reqwest::{Client as HttpClient, IntoUrl, Url};
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-use rmcp::service::{NotificationContext, Peer, serve_client_with_ct, serve_directly_with_ct};
+use rmcp::service::{NotificationContext, Peer, serve_client_with_ct};
 use rmcp::transport::common::client_side_sse::BoxedSseResponse;
 use rmcp::transport::common::http_header::{
 	EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -18,41 +16,60 @@ use rmcp::transport::streamable_http_client::{
 	StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
 	StreamableHttpPostResponse,
 };
-use rmcp::transport::{SseClientTransport, StreamableHttpClientTransport, Transport};
+use rmcp::transport::{SseClientTransport, StreamableHttpClientTransport};
 use rmcp::{ClientHandler, ServiceError};
 use sse_stream::{Error as SseError, Sse, SseStream};
 
 use super::*;
-use crate::client::Client;
-use crate::http::{Body, Error as HttpError, auth};
+use crate::http::{Body, Error as HttpError, Response};
 use crate::mcp::sse::McpTarget;
+use crate::proxy::ProxyError;
+use crate::proxy::httpproxy::PolicyClient;
 use crate::store::BackendPolicies;
-use crate::types::agent::{Backend, McpBackend, McpTargetSpec, Target};
-use crate::{client, json};
+use crate::types::agent::{McpTargetSpec, SimpleBackend};
+use crate::{ProxyInputs, json};
 
 type McpError = ErrorData;
 
 pub(crate) struct ConnectionPool {
+	pi: Arc<ProxyInputs>,
 	backend: McpBackendGroup,
-	client: client::Client,
+	client: PolicyClient,
 	by_name: HashMap<Strng, upstream::UpstreamTarget>,
+	stateful: bool,
 }
 
 impl ConnectionPool {
-	pub(crate) fn new(client: client::Client, backend: McpBackendGroup) -> Self {
+	pub(crate) fn new(
+		pi: Arc<ProxyInputs>,
+		client: PolicyClient,
+		backend: McpBackendGroup,
+		stateful: bool,
+	) -> Self {
 		Self {
 			backend,
 			client,
+			pi,
 			by_name: HashMap::new(),
+			stateful,
 		}
 	}
 
 	pub(crate) async fn get(
 		&mut self,
-		rq_ctx: &RqCtx,
-		peer: &Peer<RoleServer>,
+		_rq_ctx: &RqCtx,
+		_peer: &Peer<RoleServer>,
 		name: &str,
 	) -> anyhow::Result<&upstream::UpstreamTarget> {
+		if !self.stateful {
+			return Err(
+				McpError::invalid_request(
+					"stateful mode is disabled, cannot get connection by name",
+					None,
+				)
+				.into(),
+			);
+		}
 		// If it doesn't exist, they haven't initialized yet
 		if !self.by_name.contains_key(name) {
 			return Err(anyhow::anyhow!(
@@ -67,82 +84,120 @@ impl ConnectionPool {
 	}
 
 	pub(crate) async fn remove(&mut self, name: &str) -> Option<upstream::UpstreamTarget> {
+		if !self.stateful {
+			return None; // In stateless mode, we don't remove connections
+		}
 		self.by_name.remove(name)
 	}
 
 	pub(crate) async fn initialize(
 		&mut self,
-		rq_ctx: &RqCtx,
 		peer: &Peer<RoleServer>,
 		request: InitializeRequestParam,
 	) -> anyhow::Result<Vec<(Strng, &upstream::UpstreamTarget)>> {
 		for tgt in self.backend.targets.clone() {
-			if self.by_name.contains_key(&tgt.name) {
+			if self.stateful && self.by_name.contains_key(&tgt.name) {
 				anyhow::bail!("connection {} already initialized", tgt.name);
 			}
 			let ct = tokio_util::sync::CancellationToken::new(); //TODO
 			debug!("initializing target: {}", tgt.name);
 			self
-				.connect(rq_ctx, &ct, &tgt, peer, request.clone())
+				.connect(&ct, &tgt, peer, request.clone())
 				.await
 				.map_err(|e| {
 					error!("Failed to connect target {}: {}", tgt.name, e);
 					e // Propagate error
 				})?;
 		}
-		self.list().await
+		if self.stateful {
+			return self.list().await;
+		}
+
+		// Use list_from_by_name here because, in stateless mode, external calls to list()
+		// would re-run the initialize flow on each invocation. However, after running
+		// initialization, we want to return the results from this initialization without
+		// triggering it again. Therefore, we use list_from_by_name to return the current
+		// results from initialization.
+		self.list_from_by_name()
 	}
 
-	pub(crate) async fn list(&mut self) -> anyhow::Result<Vec<(Strng, &upstream::UpstreamTarget)>> {
+	// This function should only be called by the `initialize()` and `list()` methods.
+	// In stateless mode, `list_from_by_name` is called directly from `initialize()` to
+	// return the current targets, since external calls to `list()` will re-run the
+	// initialize flow each time. In stateful mode, it is called from `list()`.
+	fn list_from_by_name(&self) -> anyhow::Result<Vec<(Strng, &upstream::UpstreamTarget)>> {
+		// In stateless mode, we return all targets from the backend
 		let results = self
 			.backend
 			.targets
 			.iter()
-			.filter_map(|(tgt)| {
+			.filter_map(|tgt| {
 				self
 					.by_name
 					.get(&tgt.name)
 					.map(|target: &upstream::UpstreamTarget| (tgt.name.clone(), target))
 			})
 			.collect();
-
 		Ok(results)
 	}
 
+	pub(crate) async fn list(&mut self) -> anyhow::Result<Vec<(Strng, &upstream::UpstreamTarget)>> {
+		if !self.stateful {
+			return Err(
+				McpError::invalid_request("stateful mode is disabled, cannot list connections", None)
+					.into(),
+			);
+		}
+		self.list_from_by_name()
+	}
+
 	#[instrument(
-		level = "debug",
-		skip_all,
-		fields(
-        name=%target.name,
-		),
-	)]
-	pub(crate) async fn connect(
-		&mut self,
-		rq_ctx: &RqCtx,
+        level = "debug",
+        skip_all,
+        fields(
+        name=%service_name,
+        ),
+    )]
+	pub(crate) async fn stateless_connect(
+		&self,
+		ct: &tokio_util::sync::CancellationToken,
+		service_name: &str,
+		peer: &Peer<RoleServer>,
+		init_request: InitializeRequestParam,
+	) -> Result<upstream::UpstreamTarget, anyhow::Error> {
+		let target = self
+			.backend
+			.targets
+			.iter()
+			.find(|tgt| tgt.name == service_name)
+			.ok_or_else(|| McpError::invalid_request(format!("Target {service_name} not found"), None))?;
+
+		self.inner_connect(ct, target, peer, init_request).await
+	}
+
+	async fn inner_connect(
+		&self,
 		ct: &tokio_util::sync::CancellationToken,
 		target: &McpTarget,
 		peer: &Peer<RoleServer>,
 		init_request: InitializeRequestParam,
-	) -> Result<(), anyhow::Error> {
-		// Already connected
-		if let Some(_transport) = self.by_name.get(&target.name) {
-			return Ok(());
-		}
+	) -> Result<upstream::UpstreamTarget, anyhow::Error> {
 		trace!("connecting to target: {}", target.name);
-		let transport: upstream::UpstreamTarget = match &target.spec {
+		let target = match &target.spec {
 			McpTargetSpec::Sse(sse) => {
 				debug!("starting sse transport for target: {}", target.name);
 				let path = match sse.path.as_str() {
 					"" => "/sse",
 					_ => sse.path.as_str(),
 				};
-				let url = format!("http://{}:{}{}", sse.host, sse.port, path);
+				let be = crate::proxy::resolve_simple_backend(&sse.backend, &self.pi)?;
+				let hostport = be.hostport();
 				let client =
-					ClientWrapper::new_with_client(self.client.clone(), target.backend_policies.clone());
+					ClientWrapper::new_with_client(be, self.client.clone(), target.backend_policies.clone());
 				let transport = SseClientTransport::start_with_client(
 					client,
 					SseClientConfig {
-						sse_endpoint: url.into(),
+						sse_endpoint: format!("http://{hostport}{path}").into(),
 						..Default::default()
 					},
 				)
@@ -154,7 +209,6 @@ impl ConnectionPool {
 						serve_client_with_ct(
 							PeerClientHandler {
 								peer: peer.clone(),
-								peer_client: None,
 								init_request,
 							},
 							transport,
@@ -173,13 +227,13 @@ impl ConnectionPool {
 					"" => "/mcp",
 					_ => mcp.path.as_str(),
 				};
-				let url = format!("http://{}:{}{}", mcp.host, mcp.port, path);
+				let be = crate::proxy::resolve_simple_backend(&mcp.backend, &self.pi)?;
 				let client =
-					ClientWrapper::new_with_client(self.client.clone(), target.backend_policies.clone());
-				let mut transport = StreamableHttpClientTransport::with_client(
+					ClientWrapper::new_with_client(be, self.client.clone(), target.backend_policies.clone());
+				let transport = StreamableHttpClientTransport::with_client(
 					client,
 					StreamableHttpClientTransportConfig {
-						uri: url.into(),
+						uri: path.into(),
 						..Default::default()
 					},
 				);
@@ -189,7 +243,6 @@ impl ConnectionPool {
 						serve_client_with_ct(
 							PeerClientHandler {
 								peer: peer.clone(),
-								peer_client: None,
 								init_request,
 							},
 							transport,
@@ -211,7 +264,6 @@ impl ConnectionPool {
 						serve_client_with_ct(
 							PeerClientHandler {
 								peer: peer.clone(),
-								peer_client: None,
 								init_request,
 							},
 							TokioChildProcess::new(c).context(format!("failed to run command '{cmd}'"))?,
@@ -240,20 +292,41 @@ impl ConnectionPool {
 						e
 					)
 				})?;
-
+				let be = crate::proxy::resolve_simple_backend(&open.backend, &self.pi)?;
 				upstream::UpstreamTarget {
 					spec: upstream::UpstreamTargetSpec::OpenAPI(Box::new(crate::mcp::openapi::Handler {
-						host: open.host.clone(),
+						backend: be,
 						client: self.client.clone(),
-						policies: target.backend_policies.clone(),
+						default_policies: target.backend_policies.clone(),
 						tools,  // From parse_openapi_schema
 						prefix, // From get_server_prefix
-						port: open.port,
 					})),
 				}
 			},
 		};
+
+		Ok(target)
+	}
+
+	pub(crate) async fn connect(
+		&mut self,
+		ct: &tokio_util::sync::CancellationToken,
+		target: &McpTarget,
+		peer: &Peer<RoleServer>,
+		init_request: InitializeRequestParam,
+	) -> Result<(), anyhow::Error> {
+		// Already connected
+		if self.stateful
+			&& let Some(_transport) = self.by_name.get(&target.name)
+		{
+			return Ok(());
+		}
+
+		let transport = self.inner_connect(ct, target, peer, init_request).await?;
+
+		// In stateless mode, this just overwrites the existing entry
 		self.by_name.insert(target.name.clone(), transport);
+
 		Ok(())
 	}
 }
@@ -261,7 +334,6 @@ impl ConnectionPool {
 #[derive(Debug, Clone)]
 pub(crate) struct PeerClientHandler {
 	peer: Peer<RoleServer>,
-	peer_client: Option<Peer<RoleClient>>,
 	init_request: InitializeRequestParam,
 }
 
@@ -368,30 +440,35 @@ impl ClientHandler for PeerClientHandler {
 
 #[derive(Clone)]
 pub struct ClientWrapper {
-	client: Client,
+	backend: Arc<SimpleBackend>,
+	client: PolicyClient,
 	policies: BackendPolicies,
 }
 
 impl ClientWrapper {
-	pub fn new_with_client(client: Client, policies: BackendPolicies) -> Self {
-		Self { client, policies }
+	pub fn new_with_client(
+		backend: SimpleBackend,
+		client: PolicyClient,
+		policies: BackendPolicies,
+	) -> Self {
+		Self {
+			backend: Arc::new(backend),
+			client,
+			policies,
+		}
 	}
 
 	fn parse_uri(
 		uri: Arc<str>,
-	) -> Result<(Uri, Target), StreamableHttpError<<ClientWrapper as StreamableHttpClient>::Error>> {
-		let parsed_uri = uri
+	) -> Result<String, StreamableHttpError<<ClientWrapper as StreamableHttpClient>::Error>> {
+		uri
 			.parse::<Uri>()
-			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
-		let (host, port) = (
-			parsed_uri
-				.host()
-				.ok_or_else(|| StreamableHttpError::Client(HttpError::new(anyhow!("no host set"))))?,
-			parsed_uri.port_u16().unwrap_or(80),
-		);
-		let target = crate::types::agent::Target::try_from((host, port))
-			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
-		Ok((parsed_uri, target))
+			.map(|u| {
+				u.path_and_query()
+					.map(|p| p.as_str().to_string())
+					.unwrap_or_default()
+			})
+			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))
 	}
 }
 
@@ -403,18 +480,17 @@ impl StreamableHttpClient for ClientWrapper {
 		uri: Arc<str>,
 		message: ClientJsonRpcMessage,
 		session_id: Option<Arc<str>>,
-		auth_header: Option<String>,
+		_auth_header: Option<String>,
 	) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
 		let client = self.client.clone();
-		let policies = self.policies.clone();
 
-		let (parsed_uri, target) = Self::parse_uri(uri)?;
+		let uri = "http://".to_string() + &self.backend.hostport() + &Self::parse_uri(uri)?;
 
 		let body =
 			serde_json::to_vec(&message).map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
 		let mut req = http::Request::builder()
-			.uri(parsed_uri)
+			.uri(uri)
 			.method(http::Method::POST)
 			.header(CONTENT_TYPE, "application/json")
 			.header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
@@ -432,11 +508,7 @@ impl StreamableHttpClient for ClientWrapper {
 		}
 
 		let resp = client
-			.call(client::Call {
-				req,
-				target,
-				transport: policies.backend_tls.clone().into(),
-			})
+			.call_with_default_policies(req, &self.backend, self.policies.clone())
 			.await
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
@@ -482,31 +554,21 @@ impl StreamableHttpClient for ClientWrapper {
 		&self,
 		uri: Arc<str>,
 		session_id: Arc<str>,
-		auth_header: Option<String>,
+		_auth_header: Option<String>,
 	) -> Result<(), StreamableHttpError<Self::Error>> {
 		let client = self.client.clone();
-		let policies = self.policies.clone();
 
-		let (parsed_uri, target) = Self::parse_uri(uri)?;
+		let uri = "http://".to_string() + &self.backend.hostport() + &Self::parse_uri(uri)?;
 
-		let mut req = http::Request::builder()
-			.uri(parsed_uri)
+		let req = http::Request::builder()
+			.uri(uri)
 			.method(http::Method::DELETE)
 			.header(HEADER_SESSION_ID, session_id.as_ref())
 			.body(Body::empty())
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
-		// Apply backend auth
-		auth::apply_backend_auth(policies.backend_auth.as_ref(), &mut req)
-			.await
-			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
-
 		let resp = client
-			.call(client::Call {
-				req,
-				target,
-				transport: policies.backend_tls.clone().into(),
-			})
+			.call_with_default_policies(req, &self.backend, self.policies.clone())
 			.await
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
@@ -531,15 +593,14 @@ impl StreamableHttpClient for ClientWrapper {
 		uri: Arc<str>,
 		session_id: Arc<str>,
 		last_event_id: Option<String>,
-		auth_header: Option<String>,
+		_auth_header: Option<String>,
 	) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
 		let client = self.client.clone();
-		let policies = self.policies.clone();
 
-		let (parsed_uri, target) = Self::parse_uri(uri)?;
+		let uri = "http://".to_string() + &self.backend.hostport() + &Self::parse_uri(uri)?;
 
 		let mut reqb = http::Request::builder()
-			.uri(parsed_uri)
+			.uri(uri)
 			.method(http::Method::GET)
 			.header(ACCEPT, EVENT_STREAM_MIME_TYPE)
 			.header(HEADER_SESSION_ID, session_id.as_ref());
@@ -548,21 +609,12 @@ impl StreamableHttpClient for ClientWrapper {
 			reqb = reqb.header(HEADER_LAST_EVENT_ID, last_event_id);
 		}
 
-		let mut req = reqb
+		let req = reqb
 			.body(Body::empty())
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
-		// Apply backend auth
-		auth::apply_backend_auth(policies.backend_auth.as_ref(), &mut req)
-			.await
-			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
-
 		let resp = client
-			.call(client::Call {
-				req,
-				target,
-				transport: policies.backend_tls.clone().into(),
-			})
+			.call_with_default_policies(req, &self.backend, self.policies.clone())
 			.await
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
@@ -602,16 +654,11 @@ impl SseClient for ClientWrapper {
 		&self,
 		uri: Uri,
 		message: ClientJsonRpcMessage,
-		auth_token: Option<String>,
+		_auth_token: Option<String>,
 	) -> Result<(), SseTransportError<Self::Error>> {
-		let (host, port) = (
-			uri
-				.host()
-				.ok_or_else(|| SseTransportError::Client(HttpError::new(anyhow!("no host set"))))?,
-			uri.port_u16().unwrap_or(80),
-		);
-		let target = crate::types::agent::Target::try_from((host, port))
-			.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+		let uri = "http://".to_string()
+			+ &self.backend.hostport()
+			+ uri.path_and_query().map(|p| p.as_str()).unwrap_or_default();
 		let body =
 			serde_json::to_vec(&message).map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
 		let mut req = http::Request::builder()
@@ -636,16 +683,10 @@ impl SseClient for ClientWrapper {
 				},
 			}
 		}
-		auth::apply_backend_auth(self.policies.backend_auth.as_ref(), &mut req)
-			.await
-			.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+
 		self
 			.client
-			.call(client::Call {
-				req,
-				target,
-				transport: self.policies.backend_tls.clone().into(),
-			})
+			.call_with_default_policies(req, &self.backend, self.policies.clone())
 			.await
 			.map_err(|e| SseTransportError::Client(HttpError::new(e)))
 			.and_then(|resp| {
@@ -661,64 +702,59 @@ impl SseClient for ClientWrapper {
 			.map(drop)
 	}
 
-	async fn get_stream(
+	fn get_stream(
 		&self,
 		uri: Uri,
 		last_event_id: Option<String>,
-		auth_token: Option<String>,
-	) -> Result<BoxedSseResponse, SseTransportError<Self::Error>> {
-		let (host, port) = (
-			uri
-				.host()
-				.ok_or_else(|| SseTransportError::Client(HttpError::new(anyhow!("no host set"))))?,
-			uri.port_u16().unwrap_or(80),
-		);
-		let target = crate::types::agent::Target::try_from((host, port))
-			.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+		_auth_token: Option<String>,
+	) -> impl Future<Output = Result<BoxedSseResponse, SseTransportError<Self::Error>>> + Send + '_ {
+		Box::pin(async move {
+			let uri = "http://".to_string()
+				+ &self.backend.hostport()
+				+ uri.path_and_query().map(|p| p.as_str()).unwrap_or_default();
 
-		let mut reqb = http::Request::builder()
-			.uri(uri)
-			.method(http::Method::GET)
-			.header(ACCEPT, EVENT_STREAM_MIME_TYPE);
-		if let Some(last_event_id) = last_event_id {
-			reqb = reqb.header(HEADER_LAST_EVENT_ID, last_event_id);
-		}
-		let req = reqb
-			.body(Body::empty())
-			.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+			let mut reqb = http::Request::builder()
+				.uri(uri)
+				.method(http::Method::GET)
+				.header(ACCEPT, EVENT_STREAM_MIME_TYPE);
+			if let Some(last_event_id) = last_event_id {
+				reqb = reqb.header(HEADER_LAST_EVENT_ID, last_event_id);
+			}
+			let req = reqb
+				.body(Body::empty())
+				.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
 
-		let resp = self
-			.client
-			.call(client::Call {
-				req,
-				target,
-				transport: self.policies.backend_tls.clone().into(),
-			})
-			.await
-			.map_err(|e| SseTransportError::Client(HttpError::new(e)))
-			.and_then(|resp| {
-				if resp.status().is_client_error() || resp.status().is_server_error() {
-					Err(SseTransportError::Client(HttpError::new(anyhow!(
-						"received status code {}",
-						resp.status()
-					))))
-				} else {
-					Ok(resp)
-				}
-			})?;
-		match resp.headers().get(CONTENT_TYPE) {
-			Some(ct) => {
-				if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) {
-					return Err(SseTransportError::UnexpectedContentType(Some(ct.clone())));
-				}
-			},
-			None => {
-				return Err(SseTransportError::UnexpectedContentType(None));
-			},
-		}
+			let resp: Result<Response, ProxyError> = self
+				.client
+				.call_with_default_policies(req, &self.backend, self.policies.clone())
+				.await;
 
-		let event_stream =
-			sse_stream::SseStream::from_byte_stream(resp.into_body().into_data_stream()).boxed();
-		Ok(event_stream)
+			let resp = resp
+				.map_err(|e| SseTransportError::Client(HttpError::new(e)))
+				.and_then(|resp| {
+					if resp.status().is_client_error() || resp.status().is_server_error() {
+						Err(SseTransportError::Client(HttpError::new(anyhow!(
+							"received status code {}",
+							resp.status()
+						))))
+					} else {
+						Ok(resp)
+					}
+				})?;
+			match resp.headers().get(CONTENT_TYPE) {
+				Some(ct) => {
+					if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) {
+						return Err(SseTransportError::UnexpectedContentType(Some(ct.clone())));
+					}
+				},
+				None => {
+					return Err(SseTransportError::UnexpectedContentType(None));
+				},
+			}
+
+			let event_stream =
+				sse_stream::SseStream::from_byte_stream(resp.into_body().into_data_stream()).boxed();
+			Ok(event_stream)
+		})
 	}
 }

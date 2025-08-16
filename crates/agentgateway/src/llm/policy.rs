@@ -1,38 +1,125 @@
-use std::num::NonZeroU8;
 use std::ops::Deref;
 
 use ::http::HeaderMap;
+use async_openai::types::{ChatCompletionRequestMessage, CreateChatCompletionRequest};
 use bytes::Bytes;
 
-use crate::http::{PolicyResponse, Response, StatusCode};
-use crate::llm::policy::webhook::{MaskActionBody, RequestAction};
-use crate::llm::universal::{ChatCompletionMessage, ChatCompletionRequest, Content, MessageRole};
-use crate::llm::{anthropic, bedrock, gemini, openai, pii, vertex};
-use crate::proxy::ProxyError;
+use crate::http::auth::{BackendAuth, SimpleBackendAuth};
+use crate::http::jwt::Claims;
+use crate::http::{Response, StatusCode, auth};
+use crate::llm::policy::webhook::{MaskActionBody, Message, RequestAction};
+use crate::llm::{AIError, pii, universal};
 use crate::types::agent::Target;
-use crate::*;
+use crate::{client, *};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct Policy {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	prompt_guard: Option<PromptGuard>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	defaults: Option<HashMap<String, serde_json::Value>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	overrides: Option<HashMap<String, serde_json::Value>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	prompts: Option<PromptEnrichment>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
+pub struct PromptEnrichment {
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "crate::llm::SimpleChatCompletionMessage")
+	)]
+	append: Vec<ChatCompletionRequestMessage>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "crate::llm::SimpleChatCompletionMessage")
+	)]
+	prepend: Vec<ChatCompletionRequestMessage>,
+}
+
+#[apply(schema!)]
 pub struct PromptGuard {
 	request: Option<PromptGuardRequest>,
 }
 impl Policy {
-	pub async fn apply(
+	pub fn apply_prompt_enrichment(
+		&self,
+		chat: &mut CreateChatCompletionRequest,
+	) -> CreateChatCompletionRequest {
+		if let Some(prompts) = &self.prompts {
+			let old_messages = std::mem::take(&mut chat.messages);
+			chat.messages = prompts
+				.prepend
+				.clone()
+				.into_iter()
+				.chain(old_messages)
+				.chain(prompts.append.clone())
+				.collect();
+		}
+		chat.clone()
+	}
+	pub fn unmarshal_request(&self, bytes: &Bytes) -> Result<CreateChatCompletionRequest, AIError> {
+		if self.defaults.is_none() && self.overrides.is_none() && self.prompts.is_none() {
+			// Fast path: directly bytes to typed
+			return serde_json::from_slice(bytes.as_ref()).map_err(AIError::RequestParsing);
+		}
+		// Slow path: bytes --> json (transform) --> typed
+		let v: serde_json::Value =
+			serde_json::from_slice(bytes.as_ref()).map_err(AIError::RequestParsing)?;
+		let serde_json::Value::Object(mut map) = v else {
+			return Err(AIError::MissingField("request must be an object".into()));
+		};
+		for (k, v) in self.overrides.iter().flatten() {
+			map.insert(k.clone(), v.clone());
+		}
+		for (k, v) in self.defaults.iter().flatten() {
+			map.entry(k.clone()).or_insert_with(|| v.clone());
+		}
+		serde_json::from_value(serde_json::Value::Object(map)).map_err(AIError::RequestParsing)
+	}
+	pub async fn apply_prompt_guard(
 		&self,
 		client: client::Client,
-		req: &mut ChatCompletionRequest,
+		req: &mut universal::Request,
 		http_headers: &HeaderMap,
+		claims: Option<Claims>,
 	) -> anyhow::Result<Option<Response>> {
 		let Some(g) = self.prompt_guard.as_ref().and_then(|g| g.request.as_ref()) else {
 			return Ok(None);
 		};
+		if let Some(moderation) = &g.openai_moderation {
+			let model = moderation
+				.model
+				.clone()
+				.unwrap_or(strng::literal!("omni-moderation-latest"));
+			let auth = BackendAuth::from(moderation.auth.clone());
+			let content = req
+				.messages
+				.iter()
+				.filter_map(universal::message_text)
+				.collect::<Vec<_>>();
+			let mut rb = ::http::Request::builder()
+				.uri("https://api.openai.com/v1/moderations")
+				.method(::http::Method::POST)
+				.header(::http::header::CONTENT_TYPE, "application/json");
+			if let Some(claims) = claims {
+				rb = rb.extension(claims);
+			}
+			let mut req = rb.body(http::Body::from(serde_json::to_vec(&serde_json::json!({
+				"input": content,
+				"model": model,
+			}))?))?;
+			auth::apply_backend_auth(Some(&auth), &mut req).await?;
+			let resp = client.simple_call(req).await;
+			let resp: async_openai::types::CreateModerationResponse =
+				json::from_body(resp?.into_body()).await?;
+			if resp.results.iter().any(|r| r.flagged) {
+				return Ok(Some(g.response.as_response()));
+			}
+		}
 		if let Some(webhook) = &g.webhook {
 			let whr = webhook::send_request(client.clone(), &webhook.target, http_headers, req).await?;
 			match whr.action {
@@ -47,23 +134,7 @@ impl Policy {
 						anyhow::bail!("invalid webhook response");
 					};
 					let msgs = body.messages;
-					req.messages = msgs
-						.into_iter()
-						.map(|r| ChatCompletionMessage {
-							role: match r.role.as_str() {
-								"user" => MessageRole::user,
-								"system" => MessageRole::system,
-								"assistant" => MessageRole::assistant,
-								"function" => MessageRole::function,
-								"tool" => MessageRole::tool,
-								_ => MessageRole::user,
-							},
-							content: Content::Text(r.content),
-							name: None,
-							tool_calls: None,
-							tool_call_id: None,
-						})
-						.collect();
+					req.messages = msgs.into_iter().map(Self::convert_message).collect();
 				},
 				RequestAction::Reject(rej) => {
 					debug!(
@@ -90,7 +161,12 @@ impl Policy {
 			}
 		}
 		for msg in &mut req.messages {
-			let mut content = msg.content.must_as_text().to_string();
+			let content = {
+				let Some(content) = universal::message_text(msg) else {
+					continue;
+				};
+				content.to_string()
+			};
 			if let Some(rgx) = &g.regex {
 				for r in &rgx.rules {
 					match r {
@@ -105,9 +181,12 @@ impl Policy {
 								if let Action::Reject { response } = &rgx.action {
 									return Ok(Some(response.as_response()));
 								}
-								let mut new_content = content.clone();
+								let mut new_content = content.to_string();
 								new_content.replace_range(m.range(), &format!("<{name}>"));
-								msg.content = Content::Text(new_content);
+								*msg = Self::convert_message(Message {
+									role: universal::message_role(msg).to_string(),
+									content: new_content,
+								});
 							}
 						},
 					}
@@ -116,36 +195,55 @@ impl Policy {
 		}
 		Ok(None)
 	}
+
+	fn convert_message(r: Message) -> ChatCompletionRequestMessage {
+		match r.role.as_str() {
+			"system" => universal::RequestMessage::from(universal::RequestSystemMessage::from(r.content)),
+			"assistant" => {
+				universal::RequestMessage::from(universal::RequestAssistantMessage::from(r.content))
+			},
+			// TODO: the webhook API cannot express functions or tools...
+			"function" => universal::RequestMessage::from(universal::RequestFunctionMessage {
+				content: Some(r.content),
+				name: "".to_string(),
+			}),
+			"tool" => universal::RequestMessage::from(universal::RequestToolMessage {
+				content: universal::RequestToolMessageContent::from(r.content),
+				tool_call_id: "".to_string(),
+			}),
+			_ => universal::RequestMessage::from(universal::RequestUserMessage::from(r.content)),
+		}
+	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct PromptGuardRequest {
 	#[serde(default)]
 	response: PromptGuardResponse,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	regex: Option<RegexRules>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	webhook: Option<Webhook>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	openai_moderation: Option<Moderation>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct RegexRules {
 	#[serde(default)]
-	response: PromptGuardResponse,
-	#[serde(default, flatten)]
 	action: Action,
 	rules: Vec<RegexRule>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(untagged, rename_all = "camelCase")]
+#[apply(schema!)]
+#[serde(untagged)]
 pub enum RegexRule {
 	Builtin {
 		builtin: Builtin,
 	},
 	Regex {
 		#[serde(with = "serde_regex")]
+		#[cfg_attr(feature = "schema", schemars(with = "String"))]
 		pattern: regex::Regex,
 		name: String,
 	},
@@ -160,8 +258,7 @@ impl PromptGuardResponse {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub enum Builtin {
 	#[serde(rename = "ssn")]
 	Ssn,
@@ -170,29 +267,36 @@ pub enum Builtin {
 	Email,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct Rule<T> {
 	action: Action,
 	rule: T,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct NamedRegex {
 	#[serde(with = "serde_regex")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
 	pattern: regex::Regex,
 	name: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct Webhook {
 	target: Target,
 	// TODO: headers
 }
-#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "action", rename_all = "camelCase")]
+
+#[apply(schema!)]
+pub struct Moderation {
+	/// Model to use. Defaults to `omni-moderation-latest`
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	model: Option<Strng>,
+	auth: SimpleBackendAuth,
+}
+
+#[apply(schema!)]
+#[derive(Default)]
 pub enum Action {
 	#[default]
 	Mask,
@@ -202,16 +306,12 @@ pub enum Action {
 	},
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct PromptGuardResponse {
 	#[serde(default = "default_body", serialize_with = "ser_string_or_bytes")]
 	body: Bytes,
-	#[serde(
-		default = "default_code",
-		serialize_with = "ser_display",
-		deserialize_with = "de_parse"
-	)]
+	#[serde(default = "default_code", with = "http_serde::status_code")]
+	#[cfg_attr(feature = "schema", schemars(with = "std::num::NonZeroU16"))]
 	status: StatusCode,
 }
 
@@ -224,8 +324,7 @@ impl Default for PromptGuardResponse {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct PromptGuardRegex {}
 fn default_code() -> StatusCode {
 	StatusCode::FORBIDDEN
@@ -241,7 +340,7 @@ mod webhook {
 	use serde::{Deserialize, Serialize};
 
 	use crate::client::Client;
-	use crate::llm::universal::ChatCompletionRequest;
+	use crate::llm::universal::Request;
 	use crate::types::agent::Target;
 	use crate::*;
 
@@ -370,16 +469,17 @@ mod webhook {
 	fn build_request_for_request(
 		target: &Target,
 		http_headers: &HeaderMap,
-		i: &ChatCompletionRequest,
+		i: &Request,
 	) -> anyhow::Result<crate::http::Request> {
 		let body = GuardrailsPromptRequest {
 			body: PromptMessages {
 				messages: i
 					.messages
 					.iter()
-					.map(|m| Message {
-						role: format!("{:?}", m.role),
-						content: m.content.must_as_text().to_string(),
+					.filter_map(|m| {
+						let role = llm::universal::message_role(m).to_string();
+						let content = llm::universal::message_text(m).map(|s| s.to_string());
+						content.map(|content| Message { role, content })
 					})
 					.collect(),
 			},
@@ -396,7 +496,7 @@ mod webhook {
 			}
 			rb = rb.header(k.clone(), v.clone());
 		}
-		let mut req = rb
+		let req = rb
 			.header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
 			.body(crate::http::Body::from(body_bytes))?;
 		Ok(req)
@@ -406,7 +506,7 @@ mod webhook {
 		client: Client,
 		target: &Target,
 		http_headers: &HeaderMap,
-		req: &ChatCompletionRequest,
+		req: &Request,
 	) -> anyhow::Result<GuardrailsPromptResponse> {
 		let whr = build_request_for_request(target, http_headers, req)?;
 		let res = client

@@ -1,12 +1,11 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use http::{HeaderName, HeaderValue, Request};
+use http::{HeaderName, HeaderValue};
 use minijinja::value::Object;
 use minijinja::{Environment, Value, context};
 
 use crate::cel;
-use crate::cel::{Attribute, ContextBuilder, ExpressionContext};
+use crate::cel::{ContextBuilder, ExpressionContext};
 
 const REQUEST_HEADER_ATTRIBUTE: &str = "request_header";
 const RESPONSE_HEADER_ATTRIBUTE: &str = "header";
@@ -70,7 +69,6 @@ impl Transformation {
 		let v = to_value(ctx);
 		for t in self.templates.iter() {
 			let tmpl = self.env.get_template(&t.name).expect("template must exist");
-			let headers = req.headers();
 			let res = tmpl.render(context! {
 					STATE => v,
 			});
@@ -91,7 +89,7 @@ fn to_value(ctx: ContextBuilder) -> Value {
 }
 
 mod functions {
-	use minijinja::{State, Value};
+	use minijinja::State;
 
 	use crate::cel::ExpressionContext;
 

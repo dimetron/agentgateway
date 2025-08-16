@@ -1,19 +1,19 @@
+use std::collections::HashMap;
 use std::ops::Sub;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
-use agent_core::telemetry::{OptionExt, ValueBag};
+use agent_core::telemetry::ValueBag;
 use http::Version;
 use itertools::Itertools;
 use opentelemetry::trace::{Span, SpanContext, SpanKind, TraceState, Tracer as _, TracerProvider};
 use opentelemetry::{Key, KeyValue, TraceFlags};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use tokio::io::AsyncWriteExt;
 pub use traceparent::TraceParent;
 
-use crate::http::Request;
+use crate::cel;
 use crate::telemetry::log::{CelLoggingExecutor, LoggingFields, RequestLog};
 
 #[derive(Clone, Debug)]
@@ -23,37 +23,30 @@ pub struct Tracer {
 	pub fields: Arc<LoggingFields>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Default, Copy, Eq, PartialEq, Clone, Debug)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(crate::JsonSchema))]
+pub enum Protocol {
+	#[default]
+	Grpc,
+	Http,
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct Config {
 	pub endpoint: Option<String>,
+	pub headers: HashMap<String, String>,
+	pub protocol: Protocol,
 	pub fields: Arc<LoggingFields>,
+	pub random_sampling: Option<Arc<cel::Expression>>,
+	pub client_sampling: Option<Arc<cel::Expression>>,
 }
 
 mod semconv {
 	use opentelemetry::Key;
 
 	pub static PROTOCOL_VERSION: Key = Key::from_static_str("network.protocol.version");
-	pub static HTTP_ROUTE: Key = Key::from_static_str("http.route");
-	pub static REQUEST_METHOD: Key = Key::from_static_str("http.request.method");
-	pub static STATUS_CODE: Key = Key::from_static_str("http.response.status_code");
-	pub static SERVER_PORT: Key = Key::from_static_str("server.port");
-	pub static URL_PATH: Key = Key::from_static_str("url.path");
 	pub static URL_SCHEME: Key = Key::from_static_str("url.scheme");
-	pub static URL_QUERY: Key = Key::from_static_str("url.query");
-	pub static USER_AGENT: Key = Key::from_static_str("user_agent.original");
-	pub static PEER_ADDRESS: Key = Key::from_static_str("network.peer.address");
-}
-
-// Convert log keys to semconv
-fn to_key(k: &str) -> Key {
-	match k {
-		"http.path" => semconv::URL_PATH.clone(),
-		"http.status" => semconv::STATUS_CODE.clone(),
-		"http.method" => semconv::REQUEST_METHOD.clone(),
-		"src.addr" => semconv::PEER_ADDRESS.clone(),
-		// TODO: should we do http.version as well?
-		_ => Key::new(k.to_string()),
-	}
 }
 
 impl Tracer {
@@ -71,12 +64,31 @@ impl Tracer {
 					))
 					.build(),
 			)
-			.with_batch_exporter(
+			// TODO: this should be integrated with PolicyClient
+			.with_batch_exporter(if cfg.protocol == Protocol::Grpc {
+				// TODO: otel is using an old tonic version that mismatches with the one we have
+				// let metadata = MetadataMap::from_headers(HeaderMap::from_iter(
+				// 	cfg
+				// 		.headers
+				// 		.clone()
+				// 		.into_iter()
+				// 		.map(|(k, v)| Ok((HeaderName::try_from(k)?, HeaderValue::try_from(v)?)))
+				// 		.collect::<Result<_, _>>()?
+				// 		.iter(),
+				// ));
 				opentelemetry_otlp::SpanExporter::builder()
 					.with_tonic()
 					.with_endpoint(ep)
-					.build()?, //
-			)
+					// .with_metadata(metadata)
+					.build()?
+			} else {
+				opentelemetry_otlp::SpanExporter::builder()
+					.with_http()
+					// For HTTP, we add the suffix ourselves
+					.with_endpoint(format!("{}/v1/traces", ep.strip_suffix("/").unwrap_or(ep)))
+					.with_headers(cfg.headers.clone())
+					.build()?
+			})
 			.build();
 		let tracer = result.tracer("agentgateway");
 		Ok(Some(Tracer {
@@ -87,7 +99,7 @@ impl Tracer {
 	}
 
 	pub fn shutdown(&self) {
-		self.provider.shutdown();
+		let _ = self.provider.shutdown();
 	}
 
 	pub fn send<'v>(
@@ -125,21 +137,26 @@ impl Tracer {
 
 		// To avoid lifetime issues need to store the expression before we give it to ValueBag reference.
 		// TODO: we could allow log() to take a list of borrows and then a list of OwnedValueBag
-		let raws = cel_exec.eval(&self.fields);
+		let raws = cel_exec.eval(&self.fields.add);
+		let mut span_name = None;
 		for (k, v) in &raws {
 			// TODO: convert directly instead of via json()
-			if let Some(eval) = v.as_ref().map(ValueBag::capture_serde1) {
+			if k == "span.name"
+				&& let Some(serde_json::Value::String(s)) = v
+			{
+				span_name = Some(s.clone());
+			} else if let Some(eval) = v.as_ref().map(ValueBag::capture_serde1) {
 				attributes.push(KeyValue::new(Key::new(k.to_string()), to_otel(&eval)));
 			}
 		}
 
-		let span_name = match (&request.method, &request.path) {
+		let span_name = span_name.unwrap_or_else(|| match (&request.method, &request.path) {
 			(Some(method), Some(path)) => {
 				// TODO: should be path match, not the path!
 				format!("{method} {path}")
 			},
 			_ => "unknown".to_string(),
-		};
+		});
 
 		let out_span = request.outgoing_span.as_ref().unwrap();
 		let mut sb = self
@@ -160,14 +177,17 @@ impl Tracer {
 				true,
 				TraceState::default(),
 			);
+			sb = sb.with_links(vec![opentelemetry::trace::Link::new(
+				parent.clone(),
+				vec![],
+				0,
+			)]);
 		}
 		sb.start(self.tracer.as_ref()).end()
 	}
 }
 
 fn to_otel(v: &ValueBag) -> opentelemetry::Value {
-	use value_bag::visit::Visit;
-	use value_bag::{Error, ValueBag};
 	if let Some(b) = v.to_str() {
 		opentelemetry::Value::String(b.to_string().into())
 	} else if let Some(b) = v.to_i64() {
@@ -182,7 +202,6 @@ fn to_otel(v: &ValueBag) -> opentelemetry::Value {
 mod traceparent {
 	use std::fmt;
 
-	use opentelemetry::TraceFlags;
 	use rand::Rng;
 
 	use crate::http::Request;

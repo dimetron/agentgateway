@@ -17,11 +17,12 @@ lazy_static::lazy_static! {
 	// for the version string. This is necessary because the version string is used in a
 	// context that requires a 'static lifetime.
 	static ref LONG_VERSION: &'static str = Box::leak(version::BuildInfo::new().to_string().into_boxed_str());
+	static ref SHORT_VERSION: &'static str = version::BuildInfo::new().version;
 }
 
 #[derive(Parser, Debug)]
 #[command(about, long_about = None)]
-#[command(version = *LONG_VERSION, long_version = *LONG_VERSION)]
+#[command(disable_version_flag = true)]
 struct Args {
 	/// Use config from bytes
 	#[arg(short, long, value_name = "config")]
@@ -33,24 +34,49 @@ struct Args {
 
 	#[arg(long, value_name = "validate-only")]
 	validate_only: bool,
+
+	/// Print version (as a simple version string)
+	#[arg(short = 'V', value_name = "version")]
+	version_short: bool,
+
+	/// Print version (as JSON)
+	#[arg(long = "version")]
+	version_long: bool,
+
+	/// Copy our own binary to a destination.
+	#[arg(long = "copy-self", hide = true)]
+	copy_self: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
 	let _log_flush = telemetry::setup_logging();
 
 	let args = Args::parse();
+	let Args {
+		config,
+		file,
+		validate_only,
+		version_short,
+		version_long,
+		copy_self,
+	} = args;
 
+	if version_short {
+		println!("{}", version::BuildInfo::new().version);
+		return Ok(());
+	}
+	if version_long {
+		println!("{}", version::BuildInfo::new());
+		return Ok(());
+	}
+	if let Some(copy_self) = copy_self {
+		return copy_binary(copy_self);
+	}
 	tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
 		.unwrap()
 		.block_on(async move {
-			let Args {
-				config,
-				file,
-				validate_only,
-			} = args;
-
 			let (contents, filename) = match (config, file) {
 				(Some(_), Some(_)) => {
 					anyhow::bail!("only one of --config or --file")
@@ -68,6 +94,25 @@ fn main() -> anyhow::Result<()> {
 			let config = agentgateway::config::parse_config(contents, filename)?;
 			proxy(Arc::new(config)).await
 		})
+}
+#[cfg(not(target_env = "musl"))]
+fn copy_binary(_copy_self: PathBuf) -> anyhow::Result<()> {
+	// This is a pretty sketchy command, only allow it in environments will use it
+	anyhow::bail!("--copy-self is not supported in this build");
+}
+
+#[cfg(target_env = "musl")]
+fn copy_binary(copy_self: PathBuf) -> anyhow::Result<()> {
+	let Some(our_binary) = std::env::args().next() else {
+		anyhow::bail!("no argv[0] set")
+	};
+
+	info!("copying our binary ({our_binary}) to {copy_self:?}");
+	if let Some(parent) = copy_self.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+	std::fs::copy(&our_binary, &copy_self)?;
+	return Ok(());
 }
 
 async fn validate(contents: String, filename: Option<PathBuf>) -> anyhow::Result<()> {

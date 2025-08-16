@@ -14,7 +14,9 @@ mod tests_common;
 #[allow(dead_code)]
 mod transformation;
 // Do not warn is it is WIP
+pub mod authorization;
 pub mod backendtls;
+pub mod compression;
 pub mod ext_authz;
 pub mod ext_proc;
 pub mod remoteratelimit;
@@ -30,10 +32,18 @@ pub use ::http::{
 };
 use axum::body::to_bytes;
 use bytes::Bytes;
-use serde::de::DeserializeOwned;
 use tower_serve_static::private::mime;
 
-use crate::proxy::ProxyError;
+use crate::proxy::{ProxyError, ProxyResponse};
+
+pub mod x_headers {
+	use http::HeaderName;
+
+	pub const X_RATELIMIT_LIMIT: HeaderName = HeaderName::from_static("x-ratelimit-limit");
+	pub const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
+	pub const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
+	pub const X_AMZN_REQUESTID: HeaderName = HeaderName::from_static("x-amzn-requestid");
+}
 
 pub fn modify_req(
 	req: &mut Request,
@@ -79,17 +89,16 @@ pub enum WellKnownContentTypes {
 }
 
 pub fn classify_content_type(h: &HeaderMap) -> WellKnownContentTypes {
-	if let Some(content_type) = h.get(header::CONTENT_TYPE) {
-		if let Ok(content_type_str) = content_type.to_str() {
-			if let Ok(mime) = content_type_str.parse::<mime::Mime>() {
-				match (mime.type_(), mime.subtype()) {
-					(mime::APPLICATION, mime::JSON) => return WellKnownContentTypes::Json,
-					(mime::TEXT, mime::EVENT_STREAM) => {
-						return WellKnownContentTypes::Sse;
-					},
-					_ => {},
-				}
-			}
+	if let Some(content_type) = h.get(header::CONTENT_TYPE)
+		&& let Ok(content_type_str) = content_type.to_str()
+		&& let Ok(mime) = content_type_str.parse::<mime::Mime>()
+	{
+		match (mime.type_(), mime.subtype()) {
+			(mime::APPLICATION, mime::JSON) => return WellKnownContentTypes::Json,
+			(mime::TEXT, mime::EVENT_STREAM) => {
+				return WellKnownContentTypes::Sse;
+			},
+			_ => {},
 		}
 	}
 	WellKnownContentTypes::Unknown
@@ -132,14 +141,30 @@ fn strip_port(auth: &str) -> &str {
 }
 
 #[derive(Debug, Default)]
+#[must_use]
 pub struct PolicyResponse {
 	pub direct_response: Option<Response>,
 	pub response_headers: Option<crate::http::HeaderMap>,
 }
 
 impl PolicyResponse {
+	pub fn apply(self, hm: &mut HeaderMap) -> Result<(), ProxyResponse> {
+		if let Some(mut dr) = self.direct_response {
+			merge_in_headers(self.response_headers, dr.headers_mut());
+			Err(ProxyResponse::DirectResponse(Box::new(dr)))
+		} else {
+			merge_in_headers(self.response_headers, hm);
+			Ok(())
+		}
+	}
 	pub fn should_short_circuit(&self) -> bool {
 		self.direct_response.is_some()
+	}
+	pub fn with_response(self, other: Response) -> Self {
+		PolicyResponse {
+			direct_response: Some(other),
+			response_headers: self.response_headers,
+		}
 	}
 	pub fn merge(self, other: Self) -> Self {
 		if other.direct_response.is_some() {

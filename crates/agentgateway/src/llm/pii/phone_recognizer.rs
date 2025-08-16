@@ -1,6 +1,4 @@
-use std::path::Iter;
-
-use phonenumber::{Metadata, Mode, PhoneNumber, country, parse};
+use phonenumber::{country, parse};
 use regex::Regex;
 
 use super::recognizer::Recognizer;
@@ -13,7 +11,7 @@ pub struct PhoneRecognizer {
 impl PhoneRecognizer {
 	pub fn new() -> Self {
 		// this is _PATTERN from libphonenumbers
-		let r: Regex = Regex::new(r#"(?:[(\[（［+＋][-x‐-―−ー－-／  \u{AD}\u{200B}\u{2060}　()（）［］.\[\]/~⁓∼～]{0,4}){0,2}\d{1,20}(?:[-x‐-―−ー－-／  \u{AD}\u{200B}\u{2060}　()（）［］.\[\]/~⁓∼～]{0,4}\d{1,20}){0,20}(?:;ext=(\d{1,20})|[  \t,]*(?:e?xt(?:ensi(?:ó?|ó))?n?|ｅ?ｘｔｎ?|доб|anexo)[:\.．]?[  \t,-]*(\d{1,20})#?|[  \t,]*(?:[xｘ#＃~～]|int|ｉｎｔ)[:\.．]?[  \t,-]*(\d{1,9})#?|[- ]+(\d{1,6})#)?"#).unwrap();
+		let _r: Regex = Regex::new(r#"(?:[(\[（［+＋][-x‐-―−ー－-／  \u{AD}\u{200B}\u{2060}　()（）［］.\[\]/~⁓∼～]{0,4}){0,2}\d{1,20}(?:[-x‐-―−ー－-／  \u{AD}\u{200B}\u{2060}　()（）［］.\[\]/~⁓∼～]{0,4}\d{1,20}){0,20}(?:;ext=(\d{1,20})|[  \t,]*(?:e?xt(?:ensi(?:ó?|ó))?n?|ｅ?ｘｔｎ?|доб|anexo)[:\.．]?[  \t,-]*(\d{1,20})#?|[  \t,]*(?:[xｘ#＃~～]|int|ｉｎｔ)[:\.．]?[  \t,-]*(\d{1,9})#?|[- ]+(\d{1,6})#)?"#).unwrap();
 
 		// Default regions to check, can be extended
 		let regions = vec!["US", "GB", "DE", "IL", "IN", "CA", "BR"];
@@ -44,16 +42,16 @@ impl Recognizer for PhoneRecognizer {
 					// phone numbers are usually 7-20 chars
 					// TODO: we currently match this for every substring basically
 					let candidate = &text[start..end];
-					if let Ok(number) = parse(Some(country), candidate) {
-						if number.is_valid() {
-							results.push(RecognizerResult {
-								entity_type: "PHONE_NUMBER".to_string(),
-								matched: candidate.to_string(),
-								start,
-								end,
-								score: 0.7, // Higher score for library-validated
-							});
-						}
+					if let Ok(number) = parse(Some(country), candidate)
+						&& number.is_valid()
+					{
+						results.push(RecognizerResult {
+							entity_type: "PHONE_NUMBER".to_string(),
+							matched: candidate.to_string(),
+							start,
+							end,
+							score: 0.7, // Higher score for library-validated
+						});
 					}
 				}
 			}

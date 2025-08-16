@@ -1,31 +1,58 @@
-import { Target, Listener, LocalConfig, Bind, Backend, Route } from "./types";
+import { Target, Listener, LocalConfig, Bind, Backend, Route, McpStatefulMode } from "./types";
+
+// Mapping utilities are centralized in configMapper
+import { configDumpToLocalConfig } from "./configMapper";
+import {
+  isXdsMode,
+  ensureXdsModeLoaded,
+  fetchConfigDump,
+  subscribeXdsMode,
+} from "@/hooks/use-xds-mode";
 
 const API_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:15000";
+
+let currentXdsMode = isXdsMode();
+subscribeXdsMode((xdsMode) => {
+  currentXdsMode = xdsMode;
+});
 
 /**
  * Fetches the full configuration from the agentgateway server
  */
 export async function fetchConfig(): Promise<LocalConfig> {
   try {
-    const response = await fetch(`${API_URL}/config`);
+    // Ensure XDS mode is determined first
+    await ensureXdsModeLoaded();
 
-    if (!response.ok) {
-      if (response.status === 500) {
-        const errorText = await response.text();
-        const error = new Error(`Server configuration error: ${errorText}`);
-        (error as any).isConfigurationError = true;
-        (error as any).status = 500;
-        throw error;
-      }
-
-      throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}`);
+    if (currentXdsMode) {
+      // if xds mode is enabled, fetch the config from the configdump endpoint, since nothing is stored in the config file
+      return fetchViaDump();
+    } else {
+      return fetchViaConfig();
     }
-
-    const data: LocalConfig = await response.json();
-    return data;
   } catch (error) {
     console.error("Error fetching config:", error);
     throw error;
+  }
+
+  async function fetchViaDump(): Promise<LocalConfig> {
+    const dumpJson = await fetchConfigDump(API_URL);
+    return configDumpToLocalConfig(dumpJson);
+  }
+
+  async function fetchViaConfig(): Promise<LocalConfig> {
+    const r = await fetch(`${API_URL}/config`);
+    if (!r.ok) {
+      if (r.status === 500) {
+        const txt = await r.text();
+        const err: any = new Error(`Server configuration error: ${txt}`);
+        err.isConfigurationError = true;
+        err.status = 500;
+        throw err;
+      }
+      throw new Error(`Failed to fetch config: ${r.status}`);
+    }
+    return (await r.json()) as LocalConfig;
   }
 }
 
@@ -99,6 +126,9 @@ function cleanupConfig(config: LocalConfig): LocalConfig {
  * Updates the configuration
  */
 export async function updateConfig(config: LocalConfig): Promise<void> {
+  if (currentXdsMode) {
+    throw new Error("Configuration is managed by XDS and cannot be updated via the UI.");
+  }
   try {
     // Clean up the config before sending
     const cleanedConfig = cleanupConfig(config);
@@ -151,8 +181,8 @@ export async function fetchMcpTargets(): Promise<any[]> {
     config.binds.forEach((bind: Bind) => {
       bind.listeners.forEach((listener: Listener) => {
         listener.routes?.forEach((route: Route) => {
-          route.backends.forEach((backend: Backend) => {
-            if (backend.mcp) {
+          route.backends?.forEach((backend: Backend) => {
+            if (backend?.mcp) {
               mcpTargets.push(...backend.mcp.targets);
             }
           });
@@ -179,8 +209,8 @@ export async function fetchA2aTargets(): Promise<any[]> {
     config.binds.forEach((bind: Bind) => {
       bind.listeners.forEach((listener: Listener) => {
         listener.routes?.forEach((route: Route) => {
-          route.backends.forEach((backend: Backend) => {
-            if (backend.ai) {
+          route.backends?.forEach((backend: Backend) => {
+            if (backend?.ai) {
               a2aTargets.push(backend.ai);
             }
           });
@@ -267,6 +297,7 @@ export async function createMcpTarget(
         mcp: {
           name: "mcp-backend",
           targets: [],
+          statefulMode: McpStatefulMode.STATEFUL, // Default to stateful
         },
       };
       route.backends.push(newMcpBackend);
@@ -281,11 +312,6 @@ export async function createMcpTarget(
       const targetData: any = {
         name: target.name,
       };
-
-      // Only add filters if they exist and have content
-      if (target.filters && target.filters.length > 0) {
-        targetData.filters = target.filters;
-      }
 
       // Add the appropriate target type based on what's provided
       if (target.sse) {

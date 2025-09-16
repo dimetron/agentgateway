@@ -74,7 +74,7 @@ Recordings of the community meetings will be published on our [google drive](htt
 
 ## Roadmap
 
-`agentgateway` is currently in active development. If you want a feature missing, open an issue in our [Github repo])(https://github.com/agentgateway/agentgateway/issues).
+`agentgateway` is currently in active development. If you want a feature missing, open an issue in our [Github repo](https://github.com/agentgateway/agentgateway/issues).
 
 ## Contributors
 
@@ -83,7 +83,6 @@ Thanks to all contributors who are helping to make agentgateway better.
 <a href="https://github.com/agentgateway/agentgateway/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=agentgateway/agentgateway" />
 </a>
-
 
 ### Star History
 
@@ -94,3 +93,10 @@ Thanks to all contributors who are helping to make agentgateway better.
    <img alt="Star history of agentgateway/agentgateway over time" src="https://api.star-history.com/svg?repos=agentgateway/agentgateway&type=Date" />
  </picture>
 </a>
+
+---
+
+<div align="center">
+    <img src="img/lf-stacked-color.png" width="300" alt="Linux Foundation logo"/>
+    <p>Agentgateway is a <a href="https://www.linuxfoundation.org/">Linux Foundation</a> project.</p>
+</div>

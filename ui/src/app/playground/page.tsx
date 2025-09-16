@@ -12,7 +12,11 @@ import {
   Tool as McpTool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { A2AClient } from "@a2a-js/sdk/client";
+import {
+  A2AClient,
+  createAuthenticatingFetchWithRetry,
+  type AuthenticationHandler,
+} from "@a2a-js/sdk/client";
 import type { AgentSkill, Task, Message, MessageSendParams, AgentCard } from "@a2a-js/sdk";
 import { useServer } from "@/lib/server-context";
 import { Bind, Listener, Route, Backend, ListenerProtocol } from "@/lib/types";
@@ -108,6 +112,7 @@ interface A2aState {
   client: A2AClient | null;
   targets: string[];
   selectedTarget: string | null;
+  agentCard: AgentCard | null;
   skills: AgentSkill[];
   selectedSkill: AgentSkill | null;
   message: string;
@@ -165,6 +170,7 @@ export default function PlaygroundPage() {
     client: null,
     targets: [],
     selectedTarget: null,
+    agentCard: null,
     skills: [],
     selectedSkill: null,
     message: "",
@@ -492,7 +498,32 @@ export default function PlaygroundPage() {
         setConnectionState((prev) => ({ ...prev, connectionType: "a2a" }));
         const connectUrl = selectedRoute.endpoint;
 
-        const client = new A2AClient(connectUrl);
+        let client: A2AClient;
+
+        if (connectionState.authToken && connectionState.authToken.trim()) {
+          // Create authentication handler for bearer token
+          const authHandler: AuthenticationHandler = {
+            headers: async () => ({
+              Authorization: `Bearer ${connectionState.authToken}`,
+            }),
+            shouldRetryWithHeaders: async (req: RequestInit, res: Response) => {
+              // Retry with auth headers on 401 or 403 responses
+              if (res.status === 401 || res.status === 403) {
+                return {
+                  Authorization: `Bearer ${connectionState.authToken}`,
+                };
+              }
+              return undefined;
+            },
+          };
+
+          const authenticatedFetch = createAuthenticatingFetchWithRetry(fetch, authHandler);
+          client = new A2AClient(connectUrl, {
+            fetchImpl: authenticatedFetch,
+          });
+        } else {
+          client = new A2AClient(connectUrl);
+        }
 
         setA2aState((prev) => ({ ...prev, client }));
         setConnectionState((prev) => ({ ...prev, isConnected: true }));
@@ -501,21 +532,14 @@ export default function PlaygroundPage() {
         // Load A2A capabilities
         setUiState((prev) => ({ ...prev, isLoadingCapabilities: true }));
         try {
-          // Fetch the agent card to get available skills and capabilities
-          const baseUrl = connectUrl.endsWith("/") ? connectUrl.slice(0, -1) : connectUrl;
-          const agentCardUrl = `${baseUrl}/.well-known/agent.json`;
-          const response = await fetch(agentCardUrl);
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-
-          const agentCard: AgentCard = await response.json();
+          // Fetch the agent card using the client's built-in method
+          // The client already handles authentication via the fetchImpl we provided
+          const agentCard: AgentCard = await client.getAgentCard();
 
           // Extract skills from the agent card
           const skills = agentCard.skills || [];
 
-          setA2aState((prev) => ({ ...prev, skills }));
+          setA2aState((prev) => ({ ...prev, agentCard, skills }));
           toast.success(
             `Loaded A2A agent: ${agentCard.name} with ${skills.length} skill${skills.length !== 1 ? "s" : ""}`
           );
@@ -620,6 +644,22 @@ export default function PlaygroundPage() {
         console.error("Error closing MCP client:", e);
       }
     }
+
+    if (connectionState.connectionType === "a2a" && a2aState.client) {
+      try {
+        if ("close" in a2aState.client && typeof (a2aState.client as any).close === "function") {
+          await (a2aState.client as any).close();
+        } else if (
+          "disconnect" in a2aState.client &&
+          typeof (a2aState.client as any).disconnect === "function"
+        ) {
+          await (a2aState.client as any).disconnect();
+        }
+      } catch (e) {
+        console.error("Error closing A2A client:", e);
+      }
+    }
+
     resetFullStateAfterDisconnect();
     toast.info("Disconnected");
   };
@@ -637,6 +677,7 @@ export default function PlaygroundPage() {
     setA2aState((prev) => ({
       ...prev,
       client: null,
+      agentCard: null,
       skills: [],
       selectedSkill: null,
       message: "",
@@ -790,7 +831,7 @@ export default function PlaygroundPage() {
 
   const getStatusColor = (status: number) => {
     if (status >= 200 && status < 300) return "text-green-600";
-    if (status >= 300 && status < 400) return "text-blue-600";
+    if (status >= 300 && status < 400) return "text-primary";
     if (status >= 400 && status < 500) return "text-orange-600";
     if (status >= 500) return "text-red-600";
     return "text-gray-600";
@@ -857,9 +898,7 @@ export default function PlaygroundPage() {
                             <div className="flex items-center gap-2">
                               <Server className="h-4 w-4 text-muted-foreground" />
                               <span className="font-medium text-sm">{listenerName}</span>
-                              <Badge variant="secondary" className="text-xs">
-                                Port {port}
-                              </Badge>
+                              <Badge className="text-xs">Port {port}</Badge>
                             </div>
                             <div className="text-xs text-muted-foreground font-mono">
                               {endpoint}
@@ -911,19 +950,13 @@ export default function PlaygroundPage() {
                                         {routeInfo.routePath}
                                       </Badge>
                                       {routeInfo.route.matches?.[0]?.path?.regex && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          regex
-                                        </Badge>
+                                        <Badge className="text-xs">regex</Badge>
                                       )}
                                       {routeInfo.route.matches?.[0]?.path?.pathPrefix && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          prefix
-                                        </Badge>
+                                        <Badge className="text-xs">prefix</Badge>
                                       )}
                                       {routeInfo.route.matches?.[0]?.path?.exact && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          exact
-                                        </Badge>
+                                        <Badge className="text-xs">exact</Badge>
                                       )}
                                     </div>
 
@@ -966,18 +999,14 @@ export default function PlaygroundPage() {
                                             {hasA2aPolicy && (
                                               <Badge
                                                 variant="default"
-                                                className="text-xs py-0 px-1 bg-blue-600 hover:bg-blue-700"
+                                                className="text-xs py-0 px-1 bg-primary hover:bg-primary/90"
                                               >
                                                 A2A
                                               </Badge>
                                             )}
                                             {hasBackends &&
                                               backendTypes.map((type, idx) => (
-                                                <Badge
-                                                  key={idx}
-                                                  variant="secondary"
-                                                  className="text-xs py-0 px-1"
-                                                >
+                                                <Badge key={idx} className="text-xs py-0 px-1">
                                                   {type}
                                                 </Badge>
                                               ))}
@@ -1143,19 +1172,13 @@ export default function PlaygroundPage() {
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs">{selectedRoute.routePath}</span>
                         {selectedRoute.route.matches?.[0]?.path?.regex && (
-                          <Badge variant="secondary" className="text-xs">
-                            regex
-                          </Badge>
+                          <Badge className="text-xs">regex</Badge>
                         )}
                         {selectedRoute.route.matches?.[0]?.path?.pathPrefix && (
-                          <Badge variant="secondary" className="text-xs">
-                            prefix
-                          </Badge>
+                          <Badge className="text-xs">prefix</Badge>
                         )}
                         {selectedRoute.route.matches?.[0]?.path?.exact && (
-                          <Badge variant="secondary" className="text-xs">
-                            exact
-                          </Badge>
+                          <Badge className="text-xs">exact</Badge>
                         )}
                       </div>
                     </div>
@@ -1174,9 +1197,7 @@ export default function PlaygroundPage() {
                           return (
                             <div key={idx} className="flex items-center gap-2">
                               <Icon className="h-3 w-3" />
-                              <Badge variant="secondary" className="text-xs">
-                                {info.type}
-                              </Badge>
+                              <Badge className="text-xs">{info.type}</Badge>
                               <span className="text-xs">{info.name}</span>
                               {backend.weight && backend.weight !== 1 && (
                                 <span className="text-xs text-muted-foreground">
@@ -1366,7 +1387,7 @@ export default function PlaygroundPage() {
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-muted-foreground">Type:</span>
-                      <Badge variant="secondary" className="text-xs">
+                      <Badge className="text-xs">
                         {connectionState.connectionType?.toUpperCase()}
                       </Badge>
                     </div>
@@ -1402,39 +1423,40 @@ export default function PlaygroundPage() {
                     </div>
                   </div>
                 </div>
-
-                {connectionState.isConnected && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <CapabilitiesList
-                      mcpTools={mcpState.tools}
-                      a2aSkills={a2aState.skills}
-                      connectionType={connectionState.connectionType}
-                      isLoading={uiState.isLoadingCapabilities}
-                      selectedMcpToolName={mcpState.selectedTool?.name ?? null}
-                      selectedA2aSkillId={a2aState.selectedSkill?.id ?? null}
-                      onMcpToolSelect={handleMcpToolSelect}
-                      onA2aSkillSelect={handleA2aSkillSelect}
-                    />
-
-                    <ActionPanel
-                      connectionType={connectionState.connectionType}
-                      mcpSelectedTool={mcpState.selectedTool}
-                      a2aSelectedSkill={a2aState.selectedSkill}
-                      mcpParamValues={mcpState.paramValues}
-                      a2aMessage={a2aState.message}
-                      isRequestRunning={uiState.isRequestRunning}
-                      onMcpParamChange={handleMcpParamChange}
-                      onA2aMessageChange={handleA2aMessageChange}
-                      onRunMcpTool={runMcpTool}
-                      onRunA2aSkill={runA2aSkill}
-                    />
-                  </div>
-                )}
               </div>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {connectionState.connectionType !== "http" && connectionState.isConnected && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CapabilitiesList
+            mcpTools={mcpState.tools}
+            a2aSkills={a2aState.skills}
+            a2aAgentCard={a2aState.agentCard}
+            connectionType={connectionState.connectionType}
+            isLoading={uiState.isLoadingCapabilities}
+            selectedMcpToolName={mcpState.selectedTool?.name ?? null}
+            selectedA2aSkillId={a2aState.selectedSkill?.id ?? null}
+            onMcpToolSelect={handleMcpToolSelect}
+            onA2aSkillSelect={handleA2aSkillSelect}
+          />
+
+          <ActionPanel
+            connectionType={connectionState.connectionType}
+            mcpSelectedTool={mcpState.selectedTool}
+            a2aSelectedSkill={a2aState.selectedSkill}
+            mcpParamValues={mcpState.paramValues}
+            a2aMessage={a2aState.message}
+            isRequestRunning={uiState.isRequestRunning}
+            onMcpParamChange={handleMcpParamChange}
+            onA2aMessageChange={handleA2aMessageChange}
+            onRunMcpTool={runMcpTool}
+            onRunA2aSkill={runA2aSkill}
+          />
+        </div>
+      )}
 
       {/* Response Panel */}
       {(response || mcpState.response || a2aState.response) && (

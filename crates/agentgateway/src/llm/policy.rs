@@ -1,7 +1,5 @@
-use std::ops::Deref;
-
 use ::http::HeaderMap;
-use async_openai::types::{ChatCompletionRequestMessage, CreateChatCompletionRequest};
+use async_openai::types::{ChatCompletionRequestMessage, CreateChatCompletionResponse};
 use bytes::Bytes;
 
 use crate::http::auth::{BackendAuth, SimpleBackendAuth};
@@ -9,19 +7,19 @@ use crate::http::jwt::Claims;
 use crate::http::{Response, StatusCode, auth};
 use crate::llm::policy::webhook::{MaskActionBody, Message, RequestAction};
 use crate::llm::{AIError, pii, universal};
-use crate::types::agent::Target;
+use crate::types::agent::{HeaderMatch, HeaderValueMatch, Target};
 use crate::{client, *};
 
 #[apply(schema!)]
 pub struct Policy {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	prompt_guard: Option<PromptGuard>,
+	pub prompt_guard: Option<PromptGuard>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	defaults: Option<HashMap<String, serde_json::Value>>,
+	pub defaults: Option<HashMap<String, serde_json::Value>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	overrides: Option<HashMap<String, serde_json::Value>>,
+	pub overrides: Option<HashMap<String, serde_json::Value>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	prompts: Option<PromptEnrichment>,
+	pub prompts: Option<PromptEnrichment>,
 }
 
 #[apply(schema!)]
@@ -31,24 +29,24 @@ pub struct PromptEnrichment {
 		feature = "schema",
 		schemars(with = "crate::llm::SimpleChatCompletionMessage")
 	)]
-	append: Vec<ChatCompletionRequestMessage>,
+	pub append: Vec<ChatCompletionRequestMessage>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	#[cfg_attr(
 		feature = "schema",
 		schemars(with = "crate::llm::SimpleChatCompletionMessage")
 	)]
-	prepend: Vec<ChatCompletionRequestMessage>,
+	pub prepend: Vec<ChatCompletionRequestMessage>,
 }
 
 #[apply(schema!)]
 pub struct PromptGuard {
-	request: Option<PromptGuardRequest>,
+	// Guards applied to client requests before they reach the LLM
+	pub request: Option<RequestGuard>,
+	// Guards applied to LLM responses before they reach the client
+	pub response: Option<ResponseGuard>,
 }
 impl Policy {
-	pub fn apply_prompt_enrichment(
-		&self,
-		chat: &mut CreateChatCompletionRequest,
-	) -> CreateChatCompletionRequest {
+	pub fn apply_prompt_enrichment(&self, chat: &mut universal::Request) -> universal::Request {
 		if let Some(prompts) = &self.prompts {
 			let old_messages = std::mem::take(&mut chat.messages);
 			chat.messages = prompts
@@ -61,7 +59,7 @@ impl Policy {
 		}
 		chat.clone()
 	}
-	pub fn unmarshal_request(&self, bytes: &Bytes) -> Result<CreateChatCompletionRequest, AIError> {
+	pub fn unmarshal_request(&self, bytes: &Bytes) -> Result<universal::Request, AIError> {
 		if self.defaults.is_none() && self.overrides.is_none() && self.prompts.is_none() {
 			// Fast path: directly bytes to typed
 			return serde_json::from_slice(bytes.as_ref()).map_err(AIError::RequestParsing);
@@ -82,7 +80,7 @@ impl Policy {
 	}
 	pub async fn apply_prompt_guard(
 		&self,
-		client: client::Client,
+		client: &client::Client,
 		req: &mut universal::Request,
 		http_headers: &HeaderMap,
 		claims: Option<Claims>,
@@ -117,15 +115,17 @@ impl Policy {
 			let resp: async_openai::types::CreateModerationResponse =
 				json::from_body(resp?.into_body()).await?;
 			if resp.results.iter().any(|r| r.flagged) {
-				return Ok(Some(g.response.as_response()));
+				return Ok(Some(g.rejection.as_response()));
 			}
 		}
 		if let Some(webhook) = &g.webhook {
-			let whr = webhook::send_request(client.clone(), &webhook.target, http_headers, req).await?;
+			let headers =
+				Self::get_webhook_forward_headers(http_headers, &webhook.forward_header_matches);
+			let whr = webhook::send_request(client, &webhook.target, &headers, req).await?;
 			match whr.action {
 				RequestAction::Mask(mask) => {
 					debug!(
-						"webhook masked: {}",
+						"webhook masked request: {}",
 						mask
 							.reason
 							.unwrap_or_else(|| "no reason specified".to_string())
@@ -138,7 +138,7 @@ impl Policy {
 				},
 				RequestAction::Reject(rej) => {
 					debug!(
-						"webhook rejected: {}",
+						"webhook rejected request: {}",
 						rej
 							.reason
 							.unwrap_or_else(|| "no reason specified".to_string())
@@ -151,7 +151,7 @@ impl Policy {
 				},
 				RequestAction::Pass(pass) => {
 					debug!(
-						"webhook passed: {}",
+						"webhook passed request: {}",
 						pass
 							.reason
 							.unwrap_or_else(|| "no reason specified".to_string())
@@ -161,39 +161,56 @@ impl Policy {
 			}
 		}
 		for msg in &mut req.messages {
-			let content = {
-				let Some(content) = universal::message_text(msg) else {
-					continue;
-				};
-				content.to_string()
+			let Some(original_content) = universal::message_text(msg) else {
+				continue;
 			};
-			if let Some(rgx) = &g.regex {
-				for r in &rgx.rules {
-					match r {
-						RegexRule::Builtin { builtin } => match builtin {
-							Builtin::Ssn => pii::recognizer(pii::SSN.deref(), &content),
-							Builtin::CreditCard => pii::recognizer(pii::CC.deref(), &content),
-							Builtin::PhoneNumber => pii::recognizer(pii::PHONE.deref(), &content),
-							Builtin::Email => pii::recognizer(pii::EMAIL.deref(), &content),
-						},
-						RegexRule::Regex { pattern, name } => {
-							if let Some(m) = pattern.find(&content) {
-								if let Action::Reject { response } = &rgx.action {
-									return Ok(Some(response.as_response()));
-								}
-								let mut new_content = content.to_string();
-								new_content.replace_range(m.range(), &format!("<{name}>"));
-								*msg = Self::convert_message(Message {
-									role: universal::message_role(msg).to_string(),
-									content: new_content,
-								});
-							}
-						},
-					}
-				}
+
+			let (res, modified_content) = Self::apply_prompt_guard_regex(original_content, &g.regex);
+			if let Some(content) = modified_content {
+				*msg = Self::convert_message(Message {
+					role: universal::message_role(msg).to_string(),
+					content,
+				});
+			}
+			if res.is_some() {
+				return Ok(res);
 			}
 		}
 		Ok(None)
+	}
+
+	fn get_webhook_forward_headers(
+		http_headers: &HeaderMap,
+		header_matches: &[HeaderMatch],
+	) -> HeaderMap {
+		let mut headers = HeaderMap::new();
+		for HeaderMatch { name, value } in header_matches {
+			let Some(have) = http_headers.get(name.as_str()) else {
+				continue;
+			};
+			match value {
+				HeaderValueMatch::Exact(want) => {
+					if have != want {
+						continue;
+					}
+				},
+				HeaderValueMatch::Regex(want) => {
+					// Must be a valid string to do regex match
+					let Some(have) = have.to_str().ok() else {
+						continue;
+					};
+					let Some(m) = want.find(have) else {
+						continue;
+					};
+					// Make sure we matched the entire thing
+					if !(m.start() == 0 && m.end() == have.len()) {
+						continue;
+					}
+				},
+			}
+			headers.insert(name, have.clone());
+		}
+		headers
 	}
 
 	fn convert_message(r: Message) -> ChatCompletionRequestMessage {
@@ -214,25 +231,179 @@ impl Policy {
 			_ => universal::RequestMessage::from(universal::RequestUserMessage::from(r.content)),
 		}
 	}
+
+	fn apply_prompt_guard_regex(
+		original_content: &str,
+		regex: &Option<RegexRules>,
+	) -> (Option<Response>, Option<String>) {
+		if let Some(rgx) = regex {
+			let mut current_content = original_content.to_string();
+			let mut content_modified = false;
+
+			// Process each rule sequentially, updating the content as we go
+			for r in &rgx.rules {
+				match r {
+					RegexRule::Builtin { builtin } => {
+						let rec = match builtin {
+							Builtin::Ssn => &*pii::SSN,
+							Builtin::CreditCard => &*pii::CC,
+							Builtin::PhoneNumber => &*pii::PHONE,
+							Builtin::Email => &*pii::EMAIL,
+						};
+						let results = pii::recognizer(rec, &current_content);
+
+						if !results.is_empty() {
+							match &rgx.action {
+								Action::Reject { response } => {
+									return (Some(response.as_response()), None);
+								},
+								Action::Mask => {
+									// Sort in reverse to avoid index shifting during replacement
+									let mut sorted_results = results;
+									sorted_results.sort_by(|a, b| b.start.cmp(&a.start));
+
+									for result in sorted_results {
+										current_content.replace_range(
+											result.start..result.end,
+											&format!("<{}>", result.entity_type.to_uppercase()),
+										);
+									}
+									content_modified = true;
+								},
+							}
+						}
+					},
+					RegexRule::Regex { pattern, name } => {
+						let ranges: Vec<std::ops::Range<usize>> = pattern
+							.find_iter(&current_content)
+							.map(|m| m.range())
+							.collect();
+
+						if !ranges.is_empty() {
+							match &rgx.action {
+								Action::Reject { response } => {
+									return (Some(response.as_response()), None);
+								},
+								Action::Mask => {
+									// Process matches in reverse order to avoid index shifting
+									for range in ranges.into_iter().rev() {
+										current_content.replace_range(range, &format!("<{name}>"));
+									}
+									content_modified = true;
+								},
+							}
+						}
+					},
+				}
+			}
+			// Only update the message if content was actually modified
+			if content_modified {
+				return (None, Some(current_content));
+			}
+		}
+		(None, None)
+	}
+
+	pub async fn apply_response_prompt_guard(
+		client: &client::Client,
+		resp: &mut CreateChatCompletionResponse,
+		http_headers: &HeaderMap,
+		g: &Option<ResponseGuard>,
+	) -> anyhow::Result<Option<Response>> {
+		let Some(guard) = g else {
+			return Ok(None);
+		};
+
+		if let Some(webhook) = &guard.webhook {
+			let headers =
+				Self::get_webhook_forward_headers(http_headers, &webhook.forward_header_matches);
+			let whr = webhook::send_response(client, &webhook.target, &headers, resp).await?;
+			match whr.action {
+				RequestAction::Mask(mask) => {
+					debug!(
+						"webhook masked response: {}",
+						mask
+							.reason
+							.unwrap_or_else(|| "no reason specified".to_string())
+					);
+					let MaskActionBody::PromptMessages(body) = mask.body else {
+						anyhow::bail!("invalid webhook response");
+					};
+					let msgs = body.messages;
+					if resp.choices.len() != msgs.len() {
+						anyhow::bail!("webhook response message count mismatch");
+					}
+					for (i, (resp_msg, wh_msg)) in resp.choices.iter_mut().zip(msgs).enumerate() {
+						if resp_msg.message.role.to_string() != wh_msg.role {
+							anyhow::bail!(
+								"webhook response message {} role mismatch; expected {}, got {}",
+								i,
+								resp_msg.message.role,
+								wh_msg.role
+							);
+						}
+						resp_msg.message.content = Some(wh_msg.content);
+					}
+				},
+				RequestAction::Reject(rej) => {
+					debug!(
+						"webhook rejected response: {}",
+						rej
+							.reason
+							.unwrap_or_else(|| "no reason specified".to_string())
+					);
+					return Ok(Some(
+						::http::response::Builder::new()
+							.status(rej.status_code)
+							.body(http::Body::from(rej.body))?,
+					));
+				},
+				RequestAction::Pass(pass) => {
+					debug!(
+						"webhook passed response: {}",
+						pass
+							.reason
+							.unwrap_or_else(|| "no reason specified".to_string())
+					);
+					// No action needed
+				},
+			}
+		}
+
+		for msg in resp.choices.iter_mut() {
+			let Some(original_content) = msg.message.content.as_deref() else {
+				continue;
+			};
+
+			let (res, modified_content) = Self::apply_prompt_guard_regex(original_content, &guard.regex);
+			if let Some(content) = modified_content {
+				msg.message.content = Some(content);
+			}
+			if res.is_some() {
+				return Ok(res);
+			}
+		}
+		Ok(None)
+	}
 }
 
 #[apply(schema!)]
-pub struct PromptGuardRequest {
+pub struct RequestGuard {
 	#[serde(default)]
-	response: PromptGuardResponse,
+	pub rejection: RequestRejection,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	regex: Option<RegexRules>,
+	pub regex: Option<RegexRules>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	webhook: Option<Webhook>,
+	pub webhook: Option<Webhook>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	openai_moderation: Option<Moderation>,
+	pub openai_moderation: Option<Moderation>,
 }
 
 #[apply(schema!)]
 pub struct RegexRules {
 	#[serde(default)]
-	action: Action,
-	rules: Vec<RegexRule>,
+	pub action: Action,
+	pub rules: Vec<RegexRule>,
 }
 
 #[apply(schema!)]
@@ -249,7 +420,7 @@ pub enum RegexRule {
 	},
 }
 
-impl PromptGuardResponse {
+impl RequestRejection {
 	pub fn as_response(&self) -> Response {
 		::http::response::Builder::new()
 			.status(self.status)
@@ -283,16 +454,18 @@ pub struct NamedRegex {
 
 #[apply(schema!)]
 pub struct Webhook {
-	target: Target,
-	// TODO: headers
+	pub target: Target,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub forward_header_matches: Vec<HeaderMatch>,
 }
 
 #[apply(schema!)]
 pub struct Moderation {
 	/// Model to use. Defaults to `omni-moderation-latest`
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	model: Option<Strng>,
-	auth: SimpleBackendAuth,
+	pub model: Option<Strng>,
+	#[serde(serialize_with = "ser_redact")]
+	pub auth: SimpleBackendAuth,
 }
 
 #[apply(schema!)]
@@ -302,26 +475,34 @@ pub enum Action {
 	Mask,
 	Reject {
 		#[serde(default)]
-		response: PromptGuardResponse,
+		response: RequestRejection,
 	},
 }
 
 #[apply(schema!)]
-pub struct PromptGuardResponse {
+pub struct RequestRejection {
 	#[serde(default = "default_body", serialize_with = "ser_string_or_bytes")]
-	body: Bytes,
+	pub body: Bytes,
 	#[serde(default = "default_code", with = "http_serde::status_code")]
 	#[cfg_attr(feature = "schema", schemars(with = "std::num::NonZeroU16"))]
-	status: StatusCode,
+	pub status: StatusCode,
 }
 
-impl Default for PromptGuardResponse {
+impl Default for RequestRejection {
 	fn default() -> Self {
 		Self {
 			body: default_body(),
 			status: default_code(),
 		}
 	}
+}
+
+#[apply(schema!)]
+pub struct ResponseGuard {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub regex: Option<RegexRules>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub webhook: Option<Webhook>,
 }
 
 #[apply(schema!)]
@@ -343,6 +524,7 @@ mod webhook {
 	use crate::llm::universal::Request;
 	use crate::types::agent::Target;
 	use crate::*;
+	use async_openai::types::CreateChatCompletionResponse;
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	#[serde(rename_all = "snake_case")]
@@ -484,6 +666,35 @@ mod webhook {
 					.collect(),
 			},
 		};
+		build_request(&body, target, http_headers)
+	}
+
+	fn build_request_for_response(
+		target: &Target,
+		http_headers: &HeaderMap,
+		resp: &CreateChatCompletionResponse,
+	) -> anyhow::Result<crate::http::Request> {
+		let body = GuardrailsPromptRequest {
+			body: PromptMessages {
+				messages: resp
+					.choices
+					.iter()
+					.filter_map(|m| {
+						let role = m.message.role.to_string();
+						let content = m.message.content.clone();
+						content.map(|content| Message { role, content })
+					})
+					.collect(),
+			},
+		};
+		build_request(&body, target, http_headers)
+	}
+
+	fn build_request(
+		body: &GuardrailsPromptRequest,
+		target: &Target,
+		http_headers: &HeaderMap,
+	) -> anyhow::Result<crate::http::Request> {
 		let body_bytes = serde_json::to_vec(&body)?;
 		let mut rb = ::http::Request::builder()
 			.uri(format!("http://{target}/request"))
@@ -503,7 +714,7 @@ mod webhook {
 	}
 
 	pub async fn send_request(
-		client: Client,
+		client: &Client,
 		target: &Target,
 		http_headers: &HeaderMap,
 		req: &Request,
@@ -516,8 +727,77 @@ mod webhook {
 				transport: Default::default(), // TODO: use policies
 			})
 			.await?;
-		let bb = axum::body::to_bytes(res.into_body(), 2_097_152).await?;
-		let parsed = serde_json::from_slice::<GuardrailsPromptResponse>(&bb)?;
+		let parsed = json::from_body(res.into_body()).await?;
 		Ok(parsed)
+	}
+
+	pub async fn send_response(
+		client: &Client,
+		target: &Target,
+		http_headers: &HeaderMap,
+		resp: &CreateChatCompletionResponse,
+	) -> anyhow::Result<GuardrailsPromptResponse> {
+		let whr = build_request_for_response(target, http_headers, resp)?;
+		let res = client
+			.call(client::Call {
+				req: whr,
+				target: target.clone(),
+				transport: Default::default(), // TODO: use policies
+			})
+			.await?;
+		let parsed = json::from_body(res.into_body()).await?;
+		Ok(parsed)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use ::http::{HeaderName, HeaderValue};
+
+	use super::*;
+
+	#[test]
+	fn test_get_webhook_forward_headers() {
+		let mut headers = HeaderMap::new();
+		headers.insert("x-test-header", HeaderValue::from_static("test-value"));
+		headers.insert(
+			"x-another-header",
+			HeaderValue::from_static("another-value"),
+		);
+		headers.insert(
+			"x-regex-header",
+			HeaderValue::from_static("regex-match-123"),
+		);
+
+		let header_matches = vec![
+			HeaderMatch {
+				name: HeaderName::from_static("x-test-header"),
+				value: HeaderValueMatch::Exact(HeaderValue::from_static("test-value")),
+			},
+			HeaderMatch {
+				name: HeaderName::from_static("x-another-header"),
+				value: HeaderValueMatch::Exact(HeaderValue::from_static("wrong-value")),
+			},
+			HeaderMatch {
+				name: HeaderName::from_static("x-regex-header"),
+				value: HeaderValueMatch::Regex(regex::Regex::new(r"regex-match-\d+").unwrap()),
+			},
+			HeaderMatch {
+				name: HeaderName::from_static("x-missing-header"),
+				value: HeaderValueMatch::Exact(HeaderValue::from_static("some-value")),
+			},
+		];
+
+		let result = Policy::get_webhook_forward_headers(&headers, &header_matches);
+
+		assert_eq!(result.len(), 2);
+		assert_eq!(
+			result.get("x-test-header").unwrap(),
+			&HeaderValue::from_static("test-value")
+		);
+		assert_eq!(
+			result.get("x-regex-header").unwrap(),
+			&HeaderValue::from_static("regex-match-123")
+		);
 	}
 }

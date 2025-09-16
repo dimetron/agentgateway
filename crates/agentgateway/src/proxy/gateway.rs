@@ -12,7 +12,6 @@ use futures_util::FutureExt;
 use http::StatusCode;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto;
-use net2::unix::UnixTcpBuilderExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
@@ -139,11 +138,15 @@ impl Gateway {
 			pi.upstream = client;
 			let pi = Arc::new(pi);
 			let builder = if b.address.is_ipv4() {
-				net2::TcpBuilder::new_v4()
+				socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?
 			} else {
-				net2::TcpBuilder::new_v6()
+				socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?
 			};
-			let listener = builder?.reuse_port(true)?.bind(b.address)?.listen(1024)?;
+			#[cfg(target_family = "unix")]
+			builder.set_reuse_port(true)?;
+			builder.bind(&b.address.into())?;
+			builder.listen(1024)?;
+			let listener: std::net::TcpListener = builder.into();
 			listener.set_nonblocking(true)?;
 			let listener = tokio::net::TcpListener::from_std(listener)?;
 			(pi, listener)

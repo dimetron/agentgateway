@@ -55,8 +55,7 @@ pub struct RequestRedirect {
 	#[serde(
 		default,
 		skip_serializing_if = "is_default",
-		serialize_with = "ser_display_option",
-		deserialize_with = "de_parse_option"
+		with = "http_serde::option::status_code"
 	)]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<std::num::NonZeroU16>"))]
 	pub status: Option<http::StatusCode>,
@@ -101,6 +100,8 @@ pub struct UrlRewrite {
 
 #[derive(Debug, Clone)]
 pub struct OriginalUrl(pub Uri);
+#[derive(Debug, Clone)]
+pub struct AutoHostname();
 
 impl UrlRewrite {
 	pub fn apply(&self, req: &mut Request, path_match: &PathMatch) -> Result<(), Error> {
@@ -110,6 +111,9 @@ impl UrlRewrite {
 		let scheme = req.uri().scheme().cloned().unwrap_or(Scheme::HTTP);
 
 		let new_authority = rewrite_host(authority, req.uri(), Some(&scheme), &scheme)?;
+		if matches!(authority, Some(HostRedirect::Auto)) {
+			req.extensions_mut().insert(AutoHostname());
+		}
 		let path_and_query = rewrite_path(path, path_match, req.uri())?;
 		let new = Uri::builder()
 			.scheme(scheme)
@@ -154,7 +158,8 @@ fn rewrite_host(
 	new_scheme: &Scheme,
 ) -> Result<http::uri::Authority, Error> {
 	match &rewrite {
-		None => orig.authority().cloned().ok_or(Error::InvalidURI),
+		// For Auto, we need to handle it later after we pick the backend!
+		None | Some(HostRedirect::Auto) => orig.authority().cloned().ok_or(Error::InvalidURI),
 		Some(HostRedirect::Full(hp)) => Ok(hp.as_str().try_into()?),
 		Some(HostRedirect::Host(h)) => {
 			if original_scheme == Some(&Scheme::HTTP) || original_scheme == Some(&Scheme::HTTPS) {
@@ -220,8 +225,11 @@ fn rewrite_path(
 			};
 			let mut new_path = r.to_string();
 			let (_, rest) = orig.path().split_at(match_pfx.len());
-			if !rest.is_empty() && !rest.starts_with('/') {
+			if !new_path.ends_with('/') && !rest.is_empty() && !rest.starts_with('/') {
 				new_path.push('/');
+			}
+			if new_path.ends_with('/') && rest.starts_with('/') {
+				new_path.pop();
 			}
 			new_path.push_str(rest);
 			if let Some(q) = orig.query() {

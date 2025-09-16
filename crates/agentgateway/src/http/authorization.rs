@@ -75,6 +75,10 @@ enum RuleTypeSerde {
 }
 
 impl PolicySet {
+	pub fn new(allow: Vec<Arc<cel::Expression>>, deny: Vec<Arc<cel::Expression>>) -> Self {
+		Self { allow, deny }
+	}
+
 	pub fn add(&mut self, p: impl Into<String>) -> Result<(), cel::Error> {
 		self.allow.push(Arc::new(cel::Expression::new(p)?));
 		Ok(())

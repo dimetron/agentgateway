@@ -149,15 +149,15 @@ pub struct Route {
 	pub backends: Vec<RouteBackendReference>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub policies: Option<TrafficPolicy>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub inline_policies: Vec<Policy>,
 }
 
 pub type RouteKey = Strng;
 pub type RouteName = Strng;
 pub type RouteRuleName = Strng;
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_ser!)]
 pub struct TCPRoute {
 	// Internal name
 	pub key: RouteKey,
@@ -190,9 +190,7 @@ pub struct TCPRouteBackend {
 	pub backend: SimpleBackend,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct RouteMatch {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub headers: Vec<HeaderMatch>,
@@ -203,16 +201,12 @@ pub struct RouteMatch {
 	pub query: Vec<QueryMatch>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct MethodMatch {
 	pub method: Strng,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct HeaderMatch {
 	#[serde(serialize_with = "ser_display", deserialize_with = "de_parse")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
@@ -220,18 +214,14 @@ pub struct HeaderMatch {
 	pub value: HeaderValueMatch,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub struct QueryMatch {
 	#[serde(serialize_with = "ser_display")]
 	pub name: Strng,
 	pub value: QueryValueMatch,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub enum QueryValueMatch {
 	Exact(Strng),
 	Regex(
@@ -241,9 +231,7 @@ pub enum QueryValueMatch {
 	),
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub enum HeaderValueMatch {
 	Exact(
 		#[serde(serialize_with = "ser_bytes", deserialize_with = "de_parse")]
@@ -257,9 +245,7 @@ pub enum HeaderValueMatch {
 	),
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
 pub enum PathMatch {
 	Exact(Strng),
 	PathPrefix(Strng),
@@ -285,26 +271,24 @@ pub enum RouteFilter {
 	CORS(http::cors::Cors),
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Default, Eq, PartialEq)]
+#[apply(schema!)]
 pub struct TrafficPolicy {
 	pub timeout: timeout::Policy,
 	pub retry: Option<retry::Policy>,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
+#[derive(Eq, PartialEq)]
 pub enum HostRedirect {
 	Full(Strng),
 	Host(Strng),
 	Port(NonZeroU16),
+	Auto,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema!)]
+#[derive(Eq, PartialEq)]
 pub enum PathRedirect {
 	Full(Strng),
 	Prefix(Strng),
@@ -473,6 +457,8 @@ impl Backend {
 }
 
 pub type BackendName = Strng;
+pub type SubBackendName = Strng;
+pub type ServiceName = Strng;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -970,15 +956,19 @@ pub struct TargetedPolicy {
 	pub policy: Policy,
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Hash, Eq, PartialEq)]
+#[apply(schema!)]
 pub enum PolicyTarget {
 	Gateway(GatewayName),
 	Listener(ListenerKey),
 	Route(RouteName),
 	RouteRule(RouteRuleName),
+	// Note: Backend includes Service:port, this is used when we are *only* attaching to service
+	Service(ServiceName),
 	Backend(BackendName),
+	// Some Backend types group multiple backends.
+	// Format: <backend>/<sub-backend>
+	SubBackend(SubBackendName),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -996,27 +986,22 @@ pub enum Policy {
 	// Supported targets: Backend; single policy allowed
 	BackendAuth(BackendAuth),
 	// Supported targets: Backend; single policy allowed
-	#[serde(rename = "ai")]
-	AI(llm::Policy),
-	// Supported targets: Backend; single policy allowed
 	InferenceRouting(ext_proc::InferenceRouting),
 
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	Authorization(Authorization),
+	#[serde(rename = "ai")]
+	AI(Arc<llm::Policy>),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	// Transformation(),
+	Authorization(Authorization),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	LocalRateLimit(Vec<crate::http::localratelimit::RateLimit>),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	ExtAuthz(ext_authz::ExtAuthz),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	RemoteRateLimit(remoteratelimit::RemoteRateLimit),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	// ExtProc(),
+	ExtAuthz(ext_authz::ExtAuthz),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	JwtAuth(crate::http::jwt::Jwt),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	// ExtProc(),
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	Transformation(crate::http::transformation_cel::Transformation),
 }
@@ -1027,6 +1012,7 @@ pub struct A2aPolicy {}
 #[apply(schema!)]
 pub struct Authorization(pub RuleSet);
 
+// Do not use schema! as it will reject the `extra` field
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
@@ -1084,7 +1070,7 @@ pub struct McpAuthentication {
 
 impl McpAuthentication {
 	pub fn as_jwt(&self) -> anyhow::Result<http::jwt::LocalJwtConfig> {
-		Ok(http::jwt::LocalJwtConfig {
+		Ok(http::jwt::LocalJwtConfig::Single {
 			mode: http::jwt::Mode::Optional,
 			issuer: self.issuer.clone(),
 			audiences: vec![self.audience.clone()],

@@ -1,5 +1,4 @@
 use serde::de::Error;
-use serde::ser::SerializeMap;
 
 use crate::llm::LLMRequest;
 use crate::proxy::ProxyError;
@@ -7,19 +6,13 @@ use crate::*;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(with = "RateLimitSerde"))]
+#[cfg_attr(feature = "schema", schemars(with = "RateLimitSpec"))]
+#[derive(serde::Serialize)]
 pub struct RateLimit {
+	#[serde(skip_serializing)]
 	ratelimit: Arc<ratelimit::Ratelimiter>,
-	pub limit_type: RateLimitType,
-}
-
-impl serde::Serialize for RateLimit {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-	where
-		S: serde::Serializer,
-	{
-		serializer.serialize_map(None)?.end()
-	}
+	#[serde(flatten)]
+	pub spec: RateLimitSpec,
 }
 
 impl<'de> serde::Deserialize<'de> for RateLimit {
@@ -27,13 +20,13 @@ impl<'de> serde::Deserialize<'de> for RateLimit {
 	where
 		D: serde::Deserializer<'de>,
 	{
-		let ratelimit = RateLimitSerde::deserialize(deserializer)?;
+		let ratelimit = RateLimitSpec::deserialize(deserializer)?;
 		RateLimit::try_from(ratelimit).map_err(D::Error::custom)
 	}
 }
 
 #[apply(schema!)]
-pub struct RateLimitSerde {
+pub struct RateLimitSpec {
 	#[serde(default)]
 	pub max_tokens: u64,
 	#[serde(default)]
@@ -56,23 +49,23 @@ pub enum RateLimitType {
 	Tokens,
 }
 
-impl TryFrom<RateLimitSerde> for RateLimit {
+impl TryFrom<RateLimitSpec> for RateLimit {
 	type Error = ratelimit::Error;
-	fn try_from(value: RateLimitSerde) -> Result<Self, Self::Error> {
+	fn try_from(value: RateLimitSpec) -> Result<Self, Self::Error> {
 		let rl = ratelimit::Ratelimiter::builder(value.tokens_per_fill, value.fill_interval)
 			.initial_available(value.max_tokens)
 			.max_tokens(value.max_tokens)
 			.build()?;
 		Ok(RateLimit {
 			ratelimit: Arc::new(rl),
-			limit_type: value.limit_type,
+			spec: value,
 		})
 	}
 }
 
 impl RateLimit {
 	pub fn check_request(&self) -> Result<(), ProxyError> {
-		if self.limit_type != RateLimitType::Requests {
+		if self.spec.limit_type != RateLimitType::Requests {
 			return Ok(());
 		}
 		// TODO: return headers on success, not just failure
@@ -87,7 +80,7 @@ impl RateLimit {
 	}
 
 	pub fn check_llm_request(&self, req: &LLMRequest) -> Result<(), ProxyError> {
-		if self.limit_type != RateLimitType::Tokens {
+		if self.spec.limit_type != RateLimitType::Tokens {
 			return Ok(());
 		}
 		if let Some(it) = req.input_tokens {

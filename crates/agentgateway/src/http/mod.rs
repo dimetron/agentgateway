@@ -19,6 +19,8 @@ pub mod backendtls;
 pub mod compression;
 pub mod ext_authz;
 pub mod ext_proc;
+pub mod outlierdetection;
+mod peekbody;
 pub mod remoteratelimit;
 pub mod transformation_cel;
 
@@ -43,6 +45,17 @@ pub mod x_headers {
 	pub const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
 	pub const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 	pub const X_AMZN_REQUESTID: HeaderName = HeaderName::from_static("x-amzn-requestid");
+
+	pub const RETRY_AFTER_MS: HeaderName = HeaderName::from_static("retry-after-ms");
+
+	pub const X_RATELIMIT_RESET_REQUESTS: HeaderName =
+		HeaderName::from_static("x-ratelimit-reset-requests");
+	pub const X_RATELIMIT_RESET_TOKENS: HeaderName =
+		HeaderName::from_static("x-ratelimit-reset-tokens");
+	pub const X_RATELIMIT_RESET_REQUESTS_DAY: HeaderName =
+		HeaderName::from_static("x-ratelimit-reset-requests-day");
+	pub const X_RATELIMIT_RESET_TOKENS_MINUTE: HeaderName =
+		HeaderName::from_static("x-ratelimit-reset-tokens-minute");
 }
 
 pub fn modify_req(
@@ -113,10 +126,11 @@ pub fn get_host(req: &Request) -> Result<&str, ProxyError> {
 }
 
 pub async fn inspect_body(body: &mut Body) -> anyhow::Result<Bytes> {
-	let orig = std::mem::replace(body, Body::empty());
-	let bytes = to_bytes(orig, 2_097_152).await?;
-	*body = Body::from(bytes.clone());
-	Ok(bytes)
+	inspect_body_with_limit(body, 2_097_152).await
+}
+
+pub async fn inspect_body_with_limit(body: &mut Body, limit: usize) -> anyhow::Result<Bytes> {
+	peekbody::inspect_body(body, limit).await
 }
 
 // copied from private `http` method

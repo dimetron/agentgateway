@@ -18,7 +18,7 @@ use tokio::io::DuplexStream;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::http::{Body, Response};
-use crate::llm::{AIBackend, AIProvider, openai};
+use crate::llm::{AIProvider, openai};
 use crate::proxy::Gateway;
 use crate::proxy::request_builder::RequestBuilder;
 use crate::store::Stores;
@@ -27,6 +27,7 @@ use crate::types::agent::{
 	Backend, BackendReference, Bind, BindName, Listener, ListenerProtocol, ListenerSet, PathMatch,
 	Policy, PolicyTarget, Route, RouteBackendReference, RouteMatch, RouteSet, Target, TargetedPolicy,
 };
+use crate::types::local::LocalNamedAIProvider;
 use crate::{ProxyInputs, client, mcp, *};
 
 #[tokio::test]
@@ -70,7 +71,7 @@ async fn local_ratelimit() {
 		name: strng::new("rl"),
 		target: PolicyTarget::Route("route".into()),
 		policy: Policy::LocalRateLimit(vec![
-			http::localratelimit::RateLimitSerde {
+			http::localratelimit::RateLimitSpec {
 				max_tokens: 1,
 				tokens_per_fill: 1,
 				fill_interval: Duration::from_secs(1),
@@ -238,14 +239,18 @@ fn setup_llm_mock(
 	config: &str,
 ) -> (MockServer, TestBind, Client<MemoryConnector, Body>) {
 	let t = setup(config).unwrap();
-	let b = Backend::AI(
-		strng::format!("{}", mock.address()),
-		AIBackend {
-			provider,
-			host_override: Some(Target::Address(*mock.address())),
-			tokenize,
-		},
-	);
+	let (be, _) = crate::types::local::LocalAIBackend::Provider(LocalNamedAIProvider {
+		name: "default".into(),
+		provider,
+		host_override: Some(Target::Address(*mock.address())),
+		path_override: None,
+		tokenize,
+		backend_tls: None,
+		backend_auth: None,
+	})
+	.translate(strng::format!("{}", mock.address()))
+	.unwrap();
+	let b = Backend::AI(strng::format!("{}", mock.address()), be);
 	t.pi.stores.binds.write().insert_backend(b);
 	let t = t.with_bind(simple_bind(basic_route(*mock.address())));
 	let io = t.serve_http(strng::new("bind"));
@@ -264,6 +269,7 @@ fn basic_route(target: SocketAddr) -> Route {
 			query: vec![],
 		}],
 		filters: Default::default(),
+		inline_policies: Default::default(),
 		rule_name: None,
 		backends: vec![RouteBackendReference {
 			weight: 1,

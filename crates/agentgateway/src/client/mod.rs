@@ -11,6 +11,7 @@ use rustls_pki_types::{DnsName, ServerName};
 use tracing::event;
 
 use crate::http::backendtls::BackendTLS;
+use crate::http::filters;
 use crate::proxy::ProxyError;
 use crate::transport::hbone::WorkloadKey;
 use crate::transport::stream::{LoggingMode, Socket};
@@ -115,11 +116,15 @@ impl tower::Service<::http::Extensions> for Connector {
 					Ok(TokioIo::new(res))
 				},
 				Transport::Tls(tls) => {
-					let server_name = match target {
-						Target::Address(_) => ServerName::IpAddress(ep.ip().into()),
-						Target::Hostname(host, _) => ServerName::DnsName(
-							DnsName::try_from(host.to_string()).expect("TODO: hostname conversion failed"),
-						),
+					let server_name = if let Some(h) = tls.hostname_override {
+						h
+					} else {
+						match target {
+							Target::Address(_) => ServerName::IpAddress(ep.ip().into()),
+							Target::Hostname(host, _) => ServerName::DnsName(
+								DnsName::try_from(host.to_string()).expect("TODO: hostname conversion failed"),
+							),
+						}
 					};
 
 					let mut https = self::hyperrustls::HttpsConnector {
@@ -247,6 +252,7 @@ impl Client {
 				SocketAddr::from((ip, *port))
 			},
 		};
+		let auto_host = req.extensions().get::<filters::AutoHostname>().is_some();
 		http::modify_req_uri(&mut req, |uri| {
 			let scheme = transport.scheme();
 			// Strip the port from the hostname if its the default already
@@ -258,6 +264,13 @@ impl Client {
 				*a = Authority::from_str(a.host()).expect("host must be valid since it was already a host");
 			}
 			uri.scheme = Some(scheme);
+
+			if let Target::Hostname(h, _) = &target
+				&& auto_host
+				&& let Some(a) = uri.authority.as_mut()
+			{
+				*a = Authority::from_str(h)?
+			}
 			Ok(())
 		})
 		.map_err(ProxyError::Processing)?;

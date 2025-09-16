@@ -13,13 +13,14 @@ use crate::http::authorization::{HTTPAuthorizationSet, RuleSets};
 use crate::http::backendtls::BackendTLS;
 use crate::http::ext_proc::InferenceRouting;
 use crate::http::{ext_authz, ext_proc, remoteratelimit};
+use crate::llm::policy::ResponseGuard;
 use crate::mcp::rbac::McpAuthorizationSet;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::Event;
 use crate::types::agent::{
 	A2aPolicy, Backend, BackendName, Bind, BindName, GatewayName, Listener, ListenerKey, ListenerSet,
 	McpAuthentication, Policy, PolicyName, PolicyTarget, Route, RouteKey, RouteName, RouteRuleName,
-	TCPRoute, TargetedPolicy,
+	ServiceName, SubBackendName, TCPRoute, TargetedPolicy,
 };
 use crate::types::proto::agent::resource::Kind as XdsKind;
 use crate::types::proto::agent::{
@@ -54,7 +55,6 @@ pub struct BackendPolicies {
 	// bool represents "should use default settings for provider"
 	// second bool represents "tokenize"
 	pub llm_provider: Option<(llm::AIProvider, bool, bool)>,
-	pub llm: Option<llm::Policy>,
 	pub inference_routing: Option<InferenceRouting>,
 }
 
@@ -65,7 +65,6 @@ impl BackendPolicies {
 			backend_tls: other.backend_tls.or(self.backend_tls),
 			backend_auth: other.backend_auth.or(self.backend_auth),
 			a2a: other.a2a.or(self.a2a),
-			llm: other.llm.or(self.llm),
 			llm_provider: other.llm_provider.or(self.llm_provider),
 			inference_routing: other.inference_routing.or(self.inference_routing),
 		}
@@ -88,6 +87,7 @@ pub struct RoutePolicies {
 	pub jwt: Option<http::jwt::Jwt>,
 	pub ext_authz: Option<ext_authz::ExtAuthz>,
 	pub transformation: Option<http::transformation_cel::Transformation>,
+	pub llm: Option<Arc<llm::Policy>>,
 }
 
 impl RoutePolicies {
@@ -115,9 +115,10 @@ impl From<RoutePolicies> for LLMRequestPolicies {
 			local_rate_limit: value
 				.local_rate_limit
 				.iter()
-				.filter(|r| r.limit_type == http::localratelimit::RateLimitType::Tokens)
+				.filter(|r| r.spec.limit_type == http::localratelimit::RateLimitType::Tokens)
 				.cloned()
 				.collect(),
+			llm: value.llm.clone(),
 		}
 	}
 }
@@ -126,12 +127,14 @@ impl From<RoutePolicies> for LLMRequestPolicies {
 pub struct LLMRequestPolicies {
 	pub local_rate_limit: Vec<http::localratelimit::RateLimit>,
 	pub remote_rate_limit: Option<http::remoteratelimit::RemoteRateLimit>,
+	pub llm: Option<Arc<llm::Policy>>,
 }
 
 #[derive(Debug, Default)]
 pub struct LLMResponsePolicies {
 	pub local_rate_limit: Vec<http::localratelimit::RateLimit>,
 	pub remote_rate_limit: Option<http::remoteratelimit::LLMResponseAmend>,
+	pub prompt_guard: Option<ResponseGuard>,
 }
 
 impl Default for Store {
@@ -166,6 +169,7 @@ impl Store {
 		route: RouteName,
 		listener: ListenerKey,
 		gateway: GatewayName,
+		inline: &[Policy],
 	) -> RoutePolicies {
 		// Changes we must do:
 		// * Index the store by the target
@@ -187,7 +191,9 @@ impl Store {
 			.chain(route.iter().copied().flatten())
 			.chain(listener.iter().copied().flatten())
 			.chain(gateway.iter().copied().flatten())
-			.filter_map(|n| self.policies_by_name.get(n));
+			.filter_map(|n| self.policies_by_name.get(n))
+			.map(|p| &p.policy);
+		let rules = inline.iter().chain(rules);
 
 		let mut authz = Vec::new();
 		let mut pol = RoutePolicies {
@@ -197,9 +203,10 @@ impl Store {
 			ext_authz: None,
 			transformation: None,
 			authorization: None,
+			llm: None,
 		};
 		for rule in rules {
-			match &rule.policy {
+			match &rule {
 				Policy::LocalRateLimit(p) => {
 					if pol.local_rate_limit.is_empty() {
 						pol.local_rate_limit = p.clone();
@@ -221,6 +228,9 @@ impl Store {
 					// Authorization policies merge, unlike others
 					authz.push(p.clone().0);
 				},
+				Policy::AI(p) => {
+					pol.llm.get_or_insert_with(|| p.clone());
+				},
 				_ => {}, // others are not route policies
 			}
 		}
@@ -231,19 +241,31 @@ impl Store {
 		pol
 	}
 
-	pub fn backend_policies(&self, tgt: PolicyTarget) -> BackendPolicies {
-		let rules = self.policies_by_target.get(&tgt);
-		let rules = rules
+	pub fn backend_policies(
+		&self,
+		backend: BackendName,
+		service: Option<ServiceName>,
+		sub_backend: Option<SubBackendName>,
+	) -> BackendPolicies {
+		let backend_rules = self.policies_by_target.get(&PolicyTarget::Backend(backend));
+		let service_rules =
+			service.and_then(|t| self.policies_by_target.get(&PolicyTarget::Service(t)));
+		let sub_backend_rules =
+			sub_backend.and_then(|t| self.policies_by_target.get(&PolicyTarget::SubBackend(t)));
+
+		// Subbackend > Backend > Service
+		let rules = sub_backend_rules
 			.iter()
 			.copied()
 			.flatten()
+			.chain(backend_rules.iter().copied().flatten())
+			.chain(service_rules.iter().copied().flatten())
 			.filter_map(|n| self.policies_by_name.get(n));
 
 		let mut pol = BackendPolicies {
 			backend_tls: None,
 			backend_auth: None,
 			a2a: None,
-			llm: None,
 			inference_routing: None,
 			// These are not attached policies but are represented in this struct for code organization
 			llm_provider: None,
@@ -258,9 +280,6 @@ impl Store {
 				},
 				Policy::BackendAuth(p) => {
 					pol.backend_auth.get_or_insert_with(|| p.clone());
-				},
-				Policy::AI(p) => {
-					pol.llm.get_or_insert_with(|| p.clone());
 				},
 				Policy::InferenceRouting(p) => {
 					pol.inference_routing.get_or_insert_with(|| p.clone());
@@ -452,6 +471,11 @@ impl Store {
 
 	pub fn insert_backend(&mut self, b: Backend) {
 		let name = b.name();
+		if let Backend::AI(_, t) = &b
+			&& t.providers.any(|p| p.tokenize)
+		{
+			preload_tokenizers()
+		}
 		let arc = Arc::new(b);
 		self.backends_by_name.insert(name, arc);
 	}
@@ -770,4 +794,16 @@ impl agent_xds::Handler<ADPResource> for StoreUpdater {
 		};
 		agent_xds::handle_single_resource(updates, handle)
 	}
+}
+
+fn preload_tokenizers() {
+	static INIT_TOKENIZERS: std::sync::Once = std::sync::Once::new();
+
+	tokio::task::spawn_blocking(|| {
+		INIT_TOKENIZERS.call_once(|| {
+			let t0 = std::time::Instant::now();
+			crate::llm::preload_tokenizers();
+			info!("tokenizers loaded in {}ms", t0.elapsed().as_millis());
+		});
+	});
 }

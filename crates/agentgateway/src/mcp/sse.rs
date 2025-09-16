@@ -35,7 +35,8 @@ use crate::mcp::relay::Relay;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::{BackendPolicies, Stores};
 use crate::telemetry::log::AsyncLog;
-use crate::types::agent::{BackendName, McpAuthentication, McpBackend, McpIDP, PolicyTarget};
+use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
+use crate::types::agent::{BackendName, McpAuthentication, McpBackend, McpIDP};
 use crate::{ProxyInputs, json};
 
 type SseTxs =
@@ -84,7 +85,7 @@ impl App {
 				.targets
 				.iter()
 				.map(|t| {
-					let backend_policies = binds.backend_policies(PolicyTarget::Backend(name.clone()));
+					let backend_policies = binds.backend_policies(name.clone(), None, Some(t.name.clone()));
 					Arc::new(McpTarget {
 						name: t.name.clone(),
 						spec: t.spec.clone(),
@@ -109,6 +110,9 @@ impl App {
 		log.store(Some(MCPInfo::default()));
 		req.extensions_mut().insert(log);
 
+		// TODO: today we duplicate everything which is error prone. It would be ideal to re-use the parent one
+		// The problem is that we decide whether to include various attributes before we pick the backend,
+		// so we don't know to register the MCP policies
 		let mut ctx = ContextBuilder::new();
 		authorization_policies.register(&mut ctx);
 		let needs_body = ctx.with_request(&req);
@@ -118,6 +122,11 @@ impl App {
 		if let Some(jwt) = req.extensions().get::<Claims>() {
 			ctx.with_jwt(jwt);
 		}
+		ctx.with_source(
+			req.extensions().get::<TCPConnectionInfo>().unwrap(),
+			req.extensions().get::<TLSConnectionInfo>(),
+		);
+
 		// `response` is not valid here, since we run authz first
 		// MCP context is added later
 		req.extensions_mut().insert(Arc::new(ctx));

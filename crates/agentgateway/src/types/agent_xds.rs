@@ -2,12 +2,15 @@ use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
+use proto::agent::policy_spec::remote_rate_limit::Type as RlType;
 use rustls::ServerConfig;
 
 use super::agent::*;
-use crate::http::auth::{AwsAuth, BackendAuth};
-use crate::http::{StatusCode, backendtls, ext_proc, filters, localratelimit, uri};
-use crate::llm::{AIBackend, AIProvider};
+use crate::http::auth::{AwsAuth, BackendAuth, SimpleBackendAuth};
+use crate::http::transformation_cel::{LocalTransform, LocalTransformationConfig, Transformation};
+use crate::http::{StatusCode, authorization, backendtls, ext_proc, filters, localratelimit, uri};
+use crate::llm::{AIBackend, AIProvider, NamedAIProvider};
+use crate::mcp::rbac::McpAuthorization;
 use crate::types::discovery::NamespacedHostname;
 use crate::types::proto;
 use crate::types::proto::ProtoError;
@@ -241,6 +244,11 @@ impl TryFrom<&proto::agent::Route> for (Route, ListenerKey) {
 				.clone()
 				.map(TrafficPolicy::try_from)
 				.transpose()?,
+			inline_policies: s
+				.inline_policies
+				.iter()
+				.map(Policy::try_from)
+				.collect::<Result<Vec<_>, _>>()?,
 		};
 		Ok((r, strng::new(&s.listener_key)))
 	}
@@ -257,57 +265,93 @@ impl TryFrom<&proto::agent::Backend> for Backend {
 				Target::try_from((s.host.as_str(), s.port as u16))
 					.map_err(|e| ProtoError::Generic(e.to_string()))?,
 			),
-			Some(proto::agent::backend::Kind::Ai(a)) => Backend::AI(
-				name.clone(),
-				AIBackend {
-					tokenize: false,
-					host_override: a
-						.r#override
-						.as_ref()
-						.map(|o| {
-							Target::try_from((o.host.as_str(), o.port as u16))
-								.map_err(|e| ProtoError::Generic(e.to_string()))
-						})
-						.transpose()?,
-					provider: match &a.provider {
-						Some(proto::agent::ai_backend::Provider::Openai(openai)) => {
-							AIProvider::OpenAI(llm::openai::Provider {
-								model: openai.model.as_deref().map(strng::new),
-							})
-						},
-						Some(proto::agent::ai_backend::Provider::Gemini(gemini)) => {
-							AIProvider::Gemini(llm::gemini::Provider {
-								model: gemini.model.as_deref().map(strng::new),
-							})
-						},
-						Some(proto::agent::ai_backend::Provider::Vertex(vertex)) => {
-							AIProvider::Vertex(llm::vertex::Provider {
-								model: vertex.model.as_deref().map(strng::new),
-								region: Some(strng::new(&vertex.region)),
-								project_id: strng::new(&vertex.project_id),
-							})
-						},
-						Some(proto::agent::ai_backend::Provider::Anthropic(anthropic)) => {
-							AIProvider::Anthropic(llm::anthropic::Provider {
-								model: anthropic.model.as_deref().map(strng::new),
-							})
-						},
-						Some(proto::agent::ai_backend::Provider::Bedrock(bedrock)) => {
-							AIProvider::Bedrock(llm::bedrock::Provider {
-								model: bedrock.model.as_deref().map(strng::new),
-								region: strng::new(&bedrock.region),
-								guardrail_identifier: bedrock.guardrail_identifier.as_deref().map(strng::new),
-								guardrail_version: bedrock.guardrail_version.as_deref().map(strng::new),
-							})
-						},
-						None => {
-							return Err(ProtoError::Generic(
-								"AI backend provider is required".to_string(),
-							));
-						},
-					},
-				},
-			),
+			Some(proto::agent::backend::Kind::Ai(a)) => {
+				if a.provider_groups.is_empty() {
+					return Err(ProtoError::Generic(
+						"AI backend must have at least one provider group".to_string(),
+					));
+				}
+
+				let mut provider_groups = Vec::new();
+
+				for group in &a.provider_groups {
+					let mut local_provider_group = Vec::new();
+					for (provider_idx, provider_config) in group.providers.iter().enumerate() {
+						let provider = match &provider_config.provider {
+							Some(proto::agent::ai_backend::provider::Provider::Openai(openai)) => {
+								AIProvider::OpenAI(llm::openai::Provider {
+									model: openai.model.as_deref().map(strng::new),
+								})
+							},
+							Some(proto::agent::ai_backend::provider::Provider::Gemini(gemini)) => {
+								AIProvider::Gemini(llm::gemini::Provider {
+									model: gemini.model.as_deref().map(strng::new),
+								})
+							},
+							Some(proto::agent::ai_backend::provider::Provider::Vertex(vertex)) => {
+								AIProvider::Vertex(llm::vertex::Provider {
+									model: vertex.model.as_deref().map(strng::new),
+									region: Some(strng::new(&vertex.region)),
+									project_id: strng::new(&vertex.project_id),
+								})
+							},
+							Some(proto::agent::ai_backend::provider::Provider::Anthropic(anthropic)) => {
+								AIProvider::Anthropic(llm::anthropic::Provider {
+									model: anthropic.model.as_deref().map(strng::new),
+								})
+							},
+							Some(proto::agent::ai_backend::provider::Provider::Bedrock(bedrock)) => {
+								AIProvider::Bedrock(llm::bedrock::Provider {
+									model: bedrock.model.as_deref().map(strng::new),
+									region: strng::new(&bedrock.region),
+									guardrail_identifier: bedrock.guardrail_identifier.as_deref().map(strng::new),
+									guardrail_version: bedrock.guardrail_version.as_deref().map(strng::new),
+								})
+							},
+							None => {
+								return Err(ProtoError::Generic(format!(
+									"AI backend provider at index {provider_idx} is required"
+								)));
+							},
+						};
+
+						let provider_name = if provider_config.name.is_empty() {
+							strng::new(format!("{name}_{provider_idx}"))
+						} else {
+							strng::new(&provider_config.name)
+						};
+
+						let np = NamedAIProvider {
+							name: provider_name.clone(),
+							provider,
+							tokenize: false,
+							path_override: provider_config.path_override.as_ref().map(strng::new),
+							host_override: provider_config
+								.r#host_override
+								.as_ref()
+								.map(|o| {
+									Target::try_from((o.host.as_str(), o.port as u16))
+										.map_err(|e| ProtoError::Generic(e.to_string()))
+								})
+								.transpose()?,
+						};
+						local_provider_group.push((provider_name, np));
+					}
+
+					if !local_provider_group.is_empty() {
+						provider_groups.push(local_provider_group);
+					}
+				}
+
+				if provider_groups.is_empty() {
+					return Err(ProtoError::Generic(
+						"AI backend must have at least one non-empty provider group".to_string(),
+					));
+				}
+
+				let es = crate::types::loadbalancer::EndpointSet::new(provider_groups);
+				Backend::AI(name.clone(), AIBackend { providers: es })
+			},
 			Some(proto::agent::backend::Kind::Mcp(m)) => Backend::MCP(
 				name.clone(),
 				McpBackend {
@@ -386,23 +430,11 @@ impl TryFrom<&proto::agent::RouteMatch> for RouteMatch {
 		let method = s.method.as_ref().map(|m| MethodMatch {
 			method: strng::new(&m.exact),
 		});
-		let headers = s
-			.headers
-			.iter()
-			.map(|h| match &h.value {
-				None => Err(ProtoError::Generic(
-					"invalid header match value".to_string(),
-				)),
-				Some(proto::agent::header_match::Value::Exact(e)) => Ok(HeaderMatch {
-					name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
-					value: HeaderValueMatch::Exact(crate::http::HeaderValue::from_bytes(e.as_bytes())?),
-				}),
-				Some(proto::agent::header_match::Value::Regex(e)) => Ok(HeaderMatch {
-					name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
-					value: HeaderValueMatch::Regex(regex::Regex::new(e)?),
-				}),
-			})
-			.collect::<Result<Vec<_>, _>>()?;
+		let headers = match convert_header_match(&s.headers) {
+			Ok(h) => h,
+			Err(e) => return Err(ProtoError::Generic(format!("invalid header match: {e}"))),
+		};
+
 		let query = s
 			.query_params
 			.iter()
@@ -538,26 +570,109 @@ fn default_as_none<T: Default + PartialEq>(i: T) -> Option<T> {
 	}
 }
 
-impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
+impl TryFrom<&proto::agent::policy_spec::Rbac> for Authorization {
 	type Error = ProtoError;
 
-	fn try_from(s: &proto::agent::Policy) -> Result<Self, Self::Error> {
-		let name = PolicyName::from(&s.name);
-		let target = s.target.as_ref().ok_or(ProtoError::MissingRequiredField)?;
-		let spec = s.spec.as_ref().ok_or(ProtoError::MissingRequiredField)?;
-		let target = match &target.kind {
-			Some(proto::agent::policy_target::Kind::Gateway(v)) => PolicyTarget::Gateway(v.into()),
-			Some(proto::agent::policy_target::Kind::Listener(v)) => PolicyTarget::Listener(v.into()),
-			Some(proto::agent::policy_target::Kind::Route(v)) => PolicyTarget::Route(v.into()),
-			Some(proto::agent::policy_target::Kind::RouteRule(v)) => PolicyTarget::RouteRule(v.into()),
-			Some(proto::agent::policy_target::Kind::Backend(v)) => PolicyTarget::Backend(v.into()),
-			_ => return Err(ProtoError::EnumParse("unknown target kind".to_string())),
-		};
-		let policy = match &spec.kind {
+	fn try_from(rbac: &proto::agent::policy_spec::Rbac) -> Result<Self, Self::Error> {
+		// Convert allow rules
+		let mut allow_exprs = Vec::new();
+		for allow_rule in &rbac.allow {
+			let expr = cel::Expression::new(allow_rule)
+				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in allow rule: {e}")))?;
+			allow_exprs.push(Arc::new(expr));
+		}
+		// Convert deny rules
+		let mut deny_exprs = Vec::new();
+		for deny_rule in &rbac.deny {
+			let expr = cel::Expression::new(deny_rule)
+				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in deny rule: {e}")))?;
+			deny_exprs.push(Arc::new(expr));
+		}
+
+		// Create PolicySet using the same pattern as in de_policies function
+		let policy_set = authorization::PolicySet::new(allow_exprs, deny_exprs);
+		Ok(Authorization(authorization::RuleSet::new(policy_set)))
+	}
+}
+
+impl TryFrom<&proto::agent::policy_spec::Rbac> for McpAuthorization {
+	type Error = ProtoError;
+
+	fn try_from(rbac: &proto::agent::policy_spec::Rbac) -> Result<Self, Self::Error> {
+		// Convert allow rules
+		let mut allow_exprs = Vec::new();
+		for allow_rule in &rbac.allow {
+			let expr = cel::Expression::new(allow_rule)
+				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in allow rule: {e}")))?;
+			allow_exprs.push(Arc::new(expr));
+		}
+
+		// Convert deny rules
+		let mut deny_exprs = Vec::new();
+		for deny_rule in &rbac.deny {
+			let expr = cel::Expression::new(deny_rule)
+				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in deny rule: {e}")))?;
+			deny_exprs.push(Arc::new(expr));
+		}
+
+		// Create PolicySet using the same pattern as in de_policies function
+		let policy_set = authorization::PolicySet::new(allow_exprs, deny_exprs);
+		Ok(McpAuthorization::new(authorization::RuleSet::new(
+			policy_set,
+		)))
+	}
+}
+
+impl TryFrom<&proto::agent::policy_spec::TransformationPolicy> for Transformation {
+	type Error = ProtoError;
+
+	fn try_from(spec: &proto::agent::policy_spec::TransformationPolicy) -> Result<Self, Self::Error> {
+		fn convert_transform(
+			t: &Option<proto::agent::policy_spec::transformation_policy::Transform>,
+		) -> Result<LocalTransform, ProtoError> {
+			let mut add = Vec::new();
+			let mut set = Vec::new();
+			let mut remove = Vec::new();
+			let mut body = None;
+
+			if let Some(t) = t {
+				for h in &t.add {
+					add.push((h.name.clone().into(), h.expression.clone().into()));
+				}
+				for h in &t.set {
+					set.push((h.name.clone().into(), h.expression.clone().into()));
+				}
+				for r in &t.remove {
+					remove.push(r.clone().into());
+				}
+				if let Some(b) = &t.body {
+					body = Some(b.expression.clone().into());
+				}
+			}
+
+			Ok(LocalTransform {
+				add,
+				set,
+				remove,
+				body,
+			})
+		}
+
+		let request = Some(convert_transform(&spec.request)?);
+		let response = Some(convert_transform(&spec.response)?);
+		let config = LocalTransformationConfig { request, response };
+		Transformation::try_from(config).map_err(|e| ProtoError::Generic(e.to_string()))
+	}
+}
+
+impl TryFrom<&proto::agent::PolicySpec> for Policy {
+	type Error = ProtoError;
+	fn try_from(spec: &proto::agent::PolicySpec) -> Result<Self, Self::Error> {
+		Ok(match &spec.kind {
 			Some(proto::agent::policy_spec::Kind::LocalRateLimit(lrl)) => {
 				let t = proto::agent::policy_spec::local_rate_limit::Type::try_from(lrl.r#type)?;
 				Policy::LocalRateLimit(vec![
-					localratelimit::RateLimitSerde {
+					localratelimit::RateLimitSpec {
 						max_tokens: lrl.max_tokens,
 						tokens_per_fill: lrl.tokens_per_fill,
 						fill_interval: lrl
@@ -573,11 +688,86 @@ impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
 					.map_err(|e| ProtoError::Generic(format!("invalid rate limit: {e}")))?,
 				])
 			},
+			Some(proto::agent::policy_spec::Kind::RemoteRateLimit(rrl)) => {
+				// Build descriptors
+				let descriptors = rrl
+					.descriptors
+					.iter()
+					.map(
+						|d| -> Result<http::remoteratelimit::DescriptorEntry, ProtoError> {
+							let entries: Result<Vec<_>, ProtoError> = d
+								.entries
+								.iter()
+								.map(|e| {
+									cel::Expression::new(e.value.clone())
+										.map_err(|e| ProtoError::Generic(format!("invalid descriptor value: {e}")))
+										.map(|expr| http::remoteratelimit::Descriptor(e.key.clone(), expr))
+								})
+								.collect();
+
+							Ok(http::remoteratelimit::DescriptorEntry {
+								entries: Arc::new(entries?),
+								limit_type: match RlType::try_from(d.r#type).unwrap_or(RlType::Requests) {
+									RlType::Requests => localratelimit::RateLimitType::Requests,
+									RlType::Tokens => localratelimit::RateLimitType::Tokens,
+								},
+							})
+						},
+					)
+					.collect::<Result<Vec<_>, _>>()?;
+
+				// Require target (no legacy host)
+				let target = resolve_simple_reference(rrl.target.as_ref())?;
+				if matches!(target, SimpleBackendReference::Invalid) {
+					return Err(ProtoError::Generic(
+						"remote_rate_limit: target must be set".into(),
+					));
+				}
+
+				Policy::RemoteRateLimit(http::remoteratelimit::RemoteRateLimit {
+					domain: rrl.domain.clone(),
+					target: Arc::new(target),
+					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
+				})
+			},
 			Some(proto::agent::policy_spec::Kind::ExtAuthz(ea)) => {
 				let target = resolve_simple_reference(ea.target.as_ref())?;
+				let failure_mode =
+					match proto::agent::policy_spec::external_auth::FailureMode::try_from(ea.failure_mode) {
+						Ok(proto::agent::policy_spec::external_auth::FailureMode::Allow) => {
+							http::ext_authz::FailureMode::Allow
+						},
+						Ok(proto::agent::policy_spec::external_auth::FailureMode::Deny) => {
+							http::ext_authz::FailureMode::Deny
+						},
+						Ok(proto::agent::policy_spec::external_auth::FailureMode::DenyWithStatus) => {
+							let status = ea.status_on_error.unwrap_or(403) as u16;
+							http::ext_authz::FailureMode::DenyWithStatus(status)
+						},
+						_ => http::ext_authz::FailureMode::Deny, // Default fallback
+					};
+
+				let include_request_body =
+					ea.include_request_body
+						.as_ref()
+						.map(|body_opts| http::ext_authz::BodyOptions {
+							max_request_bytes: body_opts.max_request_bytes,
+							allow_partial_message: body_opts.allow_partial_message,
+							pack_as_bytes: body_opts.pack_as_bytes,
+						});
+
+				let timeout = ea.timeout.as_ref().map(|d| {
+					std::time::Duration::from_secs(d.seconds as u64)
+						+ std::time::Duration::from_nanos(d.nanos as u64)
+				});
+
 				Policy::ExtAuthz(http::ext_authz::ExtAuthz {
 					target: Arc::new(target),
 					context: Some(ea.context.clone()),
+					failure_mode,
+					include_request_headers: ea.include_request_headers.clone(),
+					include_request_body,
+					timeout,
 				})
 			},
 			Some(proto::agent::policy_spec::Kind::A2a(_)) => Policy::A2a(A2aPolicy {}),
@@ -588,6 +778,7 @@ impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
 					root: btls.root.clone(),
 					insecure: btls.insecure.unwrap_or_default(),
 					insecure_host: false,
+					hostname: btls.hostname.clone(),
 				}
 				.try_into()
 				.map_err(|e| ProtoError::Generic(e.to_string()))?;
@@ -607,8 +798,141 @@ impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
 			Some(proto::agent::policy_spec::Kind::Auth(auth)) => {
 				Policy::BackendAuth(BackendAuth::try_from(auth.clone())?)
 			},
+			Some(proto::agent::policy_spec::Kind::Authorization(rbac)) => {
+				Policy::Authorization(Authorization::try_from(rbac)?)
+			},
+			Some(proto::agent::policy_spec::Kind::McpAuthorization(rbac)) => {
+				Policy::McpAuthorization(McpAuthorization::try_from(rbac)?)
+			},
+			Some(proto::agent::policy_spec::Kind::Jwt(jwt)) => {
+				let mode = match proto::agent::policy_spec::jwt::Mode::try_from(jwt.mode)
+					.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
+				{
+					proto::agent::policy_spec::jwt::Mode::Optional => http::jwt::Mode::Optional,
+					proto::agent::policy_spec::jwt::Mode::Strict => http::jwt::Mode::Strict,
+					proto::agent::policy_spec::jwt::Mode::Permissive => http::jwt::Mode::Permissive,
+				};
+
+				// Parse JWKS based on source
+				let jwks_json = match &jwt.jwks_source {
+					Some(proto::agent::policy_spec::jwt::JwksSource::Inline(inline)) => inline.clone(),
+					None => {
+						return Err(ProtoError::Generic(
+							"JWT policy missing JWKS source".to_string(),
+						));
+					},
+				};
+
+				let jwk_set: jsonwebtoken::jwk::JwkSet = serde_json::from_str(&jwks_json)
+					.map_err(|e| ProtoError::Generic(format!("failed to parse JWKS: {e}")))?;
+
+				let jwt_auth =
+					http::jwt::Jwt::from_jwks(jwk_set, mode, jwt.issuer.clone(), jwt.audiences.clone())
+						.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))?;
+
+				Policy::JwtAuth(jwt_auth)
+			},
+			Some(proto::agent::policy_spec::Kind::Transformation(transformation)) => {
+				Policy::Transformation(Transformation::try_from(transformation)?)
+			},
+			Some(proto::agent::policy_spec::Kind::Ai(ai)) => {
+				let prompt_guard = ai.prompt_guard.as_ref().and_then(|pg| {
+					let reqp = pg.request.as_ref()?;
+
+					let rejection = if let Some(resp) = &reqp.rejection {
+						let status = u16::try_from(resp.status)
+							.ok()
+							.and_then(|c| StatusCode::from_u16(c).ok())
+							.unwrap_or(StatusCode::FORBIDDEN);
+						crate::llm::policy::RequestRejection {
+							body: Bytes::from(resp.body.clone()),
+							status,
+						}
+					} else {
+						//  use default response, since the response field is not optional on RequestGuard
+						crate::llm::policy::RequestRejection::default()
+					};
+
+					let regex = reqp
+						.regex
+						.as_ref()
+						.map(|rr| convert_regex_rules(rr, Some(rejection.clone())));
+
+					let webhook = reqp.webhook.as_ref().and_then(convert_webhook);
+
+					let openai_moderation =
+						reqp
+							.openai_moderation
+							.as_ref()
+							.map(|m| crate::llm::policy::Moderation {
+								model: m.model.as_deref().map(strng::new),
+								auth: match m.auth.as_ref().and_then(|a| a.kind.clone()) {
+									Some(crate::types::proto::agent::backend_auth_policy::Kind::Passthrough(_)) => {
+										SimpleBackendAuth::Passthrough {}
+									},
+									Some(crate::types::proto::agent::backend_auth_policy::Kind::Key(k)) => {
+										SimpleBackendAuth::Key(k.secret.into())
+									},
+									_ => SimpleBackendAuth::Passthrough {},
+								},
+							});
+
+					Some(crate::llm::policy::PromptGuard {
+						request: Some(crate::llm::policy::RequestGuard {
+							rejection,
+							regex,
+							webhook,
+							openai_moderation,
+						}),
+						response: pg
+							.response
+							.as_ref()
+							.map(|resp| crate::llm::policy::ResponseGuard {
+								regex: resp.regex.as_ref().map(|rr| convert_regex_rules(rr, None)),
+								webhook: resp.webhook.as_ref().and_then(convert_webhook),
+							}),
+					})
+				});
+
+				Policy::AI(Arc::new(llm::Policy {
+					prompt_guard,
+					defaults: Some(
+						ai.defaults
+							.iter()
+							.map(|(k, v)| serde_json::from_str(v).map(|v| (k.clone(), v)))
+							.collect::<Result<_, _>>()?,
+					),
+					overrides: Some(
+						ai.overrides
+							.iter()
+							.map(|(k, v)| serde_json::from_str(v).map(|v| (k.clone(), v)))
+							.collect::<Result<_, _>>()?,
+					),
+					prompts: ai.prompts.as_ref().map(convert_prompt_enrichment),
+				}))
+			},
 			_ => return Err(ProtoError::EnumParse("unknown spec kind".to_string())),
+		})
+	}
+}
+impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
+	type Error = ProtoError;
+
+	fn try_from(s: &proto::agent::Policy) -> Result<Self, Self::Error> {
+		let name = PolicyName::from(&s.name);
+		let target = s.target.as_ref().ok_or(ProtoError::MissingRequiredField)?;
+		let spec = s.spec.as_ref().ok_or(ProtoError::MissingRequiredField)?;
+		let target = match &target.kind {
+			Some(proto::agent::policy_target::Kind::Gateway(v)) => PolicyTarget::Gateway(v.into()),
+			Some(proto::agent::policy_target::Kind::Listener(v)) => PolicyTarget::Listener(v.into()),
+			Some(proto::agent::policy_target::Kind::Route(v)) => PolicyTarget::Route(v.into()),
+			Some(proto::agent::policy_target::Kind::RouteRule(v)) => PolicyTarget::RouteRule(v.into()),
+			Some(proto::agent::policy_target::Kind::Service(v)) => PolicyTarget::Service(v.into()),
+			Some(proto::agent::policy_target::Kind::Backend(v)) => PolicyTarget::Backend(v.into()),
+			Some(proto::agent::policy_target::Kind::SubBackend(v)) => PolicyTarget::SubBackend(v.into()),
+			_ => return Err(ProtoError::EnumParse("unknown target kind".to_string())),
 		};
+		let policy = spec.try_into()?;
 		Ok(TargetedPolicy {
 			name,
 			target,
@@ -644,6 +968,125 @@ fn resolve_simple_reference(
 	})
 }
 
+fn convert_message(
+	m: &proto::agent::policy_spec::ai::Message,
+) -> crate::llm::universal::RequestMessage {
+	match m.role.as_str() {
+		"system" => crate::llm::universal::RequestSystemMessage::from(m.content.clone()).into(),
+		"assistant" => crate::llm::universal::RequestAssistantMessage::from(m.content.clone()).into(),
+		"function" => crate::llm::universal::RequestFunctionMessage {
+			content: Some(m.content.clone()),
+			name: "".to_string(),
+		}
+		.into(),
+		"tool" => crate::llm::universal::RequestToolMessage {
+			content: crate::llm::universal::RequestToolMessageContent::from(m.content.clone()),
+			tool_call_id: "".to_string(),
+		}
+		.into(),
+		_ => crate::llm::universal::RequestUserMessage::from(m.content.clone()).into(),
+	}
+}
+
+fn convert_prompt_enrichment(
+	prompts: &proto::agent::policy_spec::ai::PromptEnrichment,
+) -> crate::llm::policy::PromptEnrichment {
+	crate::llm::policy::PromptEnrichment {
+		append: prompts.append.iter().map(convert_message).collect(),
+		prepend: prompts.prepend.iter().map(convert_message).collect(),
+	}
+}
+
+fn convert_webhook(
+	w: &proto::agent::policy_spec::ai::Webhook,
+) -> Option<crate::llm::policy::Webhook> {
+	let port = match u16::try_from(w.port) {
+		Ok(port) => port,
+		Err(_) => {
+			warn!(port = w.port, host = %w.host, "Webhook port out of range, ignoring webhook");
+			return None;
+		},
+	};
+
+	let forward_header_matches = match convert_header_match(&w.forward_header_matches) {
+		Ok(h) => h,
+		Err(e) => {
+			warn!(error = %e, "Invalid webhook header matchers, ignoring webhook");
+			return None;
+		},
+	};
+
+	Some(crate::llm::policy::Webhook {
+		target: Target::Hostname(w.host.clone().into(), port),
+		forward_header_matches,
+	})
+}
+
+fn convert_regex_rules(
+	rr: &proto::agent::policy_spec::ai::RegexRules,
+	rejection: Option<crate::llm::policy::RequestRejection>,
+) -> crate::llm::policy::RegexRules {
+	let action = match rr
+		.action
+		.as_ref()
+		.and_then(|a| proto::agent::policy_spec::ai::ActionKind::try_from(a.kind).ok())
+	{
+		Some(proto::agent::policy_spec::ai::ActionKind::Reject) => crate::llm::policy::Action::Reject {
+			response: rejection.unwrap_or_default(),
+		},
+		_ => crate::llm::policy::Action::Mask,
+	};
+	let rules = rr
+		.rules
+		.iter()
+		.filter_map(|r| match &r.kind {
+			Some(proto::agent::policy_spec::ai::regex_rule::Kind::Builtin(b)) => {
+				match proto::agent::policy_spec::ai::BuiltinRegexRule::try_from(*b) {
+					Ok(builtin) => {
+						let builtin = match builtin {
+							proto::agent::policy_spec::ai::BuiltinRegexRule::Ssn => {
+								crate::llm::policy::Builtin::Ssn
+							},
+							proto::agent::policy_spec::ai::BuiltinRegexRule::CreditCard => {
+								crate::llm::policy::Builtin::CreditCard
+							},
+							proto::agent::policy_spec::ai::BuiltinRegexRule::PhoneNumber => {
+								crate::llm::policy::Builtin::PhoneNumber
+							},
+							proto::agent::policy_spec::ai::BuiltinRegexRule::Email => {
+								crate::llm::policy::Builtin::Email
+							},
+							_ => {
+								warn!(value = *b, "Unknown builtin regex rule, skipping");
+								return None;
+							},
+						};
+						Some(crate::llm::policy::RegexRule::Builtin { builtin })
+					},
+					Err(_) => {
+						warn!(value = *b, "Invalid builtin regex rule value, skipping");
+						None
+					},
+				}
+			},
+			Some(proto::agent::policy_spec::ai::regex_rule::Kind::Regex(n)) => {
+				match regex::Regex::new(&n.pattern) {
+					Ok(pattern) => Some(crate::llm::policy::RegexRule::Regex {
+						pattern,
+						name: n.name.clone(),
+					}),
+					Err(err) => {
+						warn!(error = %err, name = %n.name, pattern = %n.pattern, "Invalid regex pattern");
+						None
+					},
+				}
+			},
+			None => None,
+		})
+		.collect();
+	crate::llm::policy::RegexRules { action, rules }
+}
+
 fn resolve_reference(
 	target: Option<&proto::agent::BackendReference>,
 ) -> Result<BackendReference, ProtoError> {
@@ -669,4 +1112,24 @@ fn resolve_reference(
 			BackendReference::Backend(name.into())
 		},
 	})
+}
+
+fn convert_header_match(h: &[proto::agent::HeaderMatch]) -> Result<Vec<HeaderMatch>, ProtoError> {
+	let headers = h
+		.iter()
+		.map(|h| match &h.value {
+			None => Err(ProtoError::Generic(
+				"invalid header match value".to_string(),
+			)),
+			Some(proto::agent::header_match::Value::Exact(e)) => Ok(HeaderMatch {
+				name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
+				value: HeaderValueMatch::Exact(crate::http::HeaderValue::from_bytes(e.as_bytes())?),
+			}),
+			Some(proto::agent::header_match::Value::Regex(e)) => Ok(HeaderMatch {
+				name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
+				value: HeaderValueMatch::Regex(regex::Regex::new(e)?),
+			}),
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+	Ok(headers)
 }

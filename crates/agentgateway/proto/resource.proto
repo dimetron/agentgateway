@@ -62,6 +62,7 @@ message Route {
   repeated RouteFilter filters = 7;
   repeated RouteBackend backends = 8;
   TrafficPolicy traffic_policy = 9;
+  repeated PolicySpec inline_policies = 10;
 }
 
 message TCPRoute {
@@ -120,7 +121,7 @@ message Aws {
 message AwsExplicitConfig {
   // AWS Access Key ID for authentication
   string access_key_id = 1;
-  // AWS Secret Access Key for authentication  
+  // AWS Secret Access Key for authentication
   string secret_access_key = 2;
   // AWS Region (e.g., "us-west-2", "us-east-1")
   string region = 3;
@@ -247,12 +248,31 @@ message PolicyTarget {
     string route = 3;
     // Matches Route.rule_name
     string route_rule = 4;
-    // For Service: `service/{namespace}/{hostname}:{port}`
+    // For ServicePort: `service/{namespace}/{hostname}:{port}`
     // For Backend: `{ns}/{name}`
     string backend = 5;
+    // namespace}/{hostname}
+    string service = 6;
+    // For Backend: `{ns}/{name}/{sub-backend}`
+    string sub_backend = 7;
   }
 }
 message PolicySpec {
+  message RemoteRateLimit {
+    string domain = 1;
+    repeated Descriptor descriptors = 2;
+    BackendReference target = 3;
+
+    enum Type { REQUESTS = 0; TOKENS = 1; }
+    message Descriptor {
+      repeated Entry entries = 1;
+      Type type = 2;
+    }
+    message Entry {
+      string key = 1;
+      string value = 2; // CEL expr
+    }
+  }
   message LocalRateLimit {
     enum Type {
       REQUEST = 0;
@@ -263,9 +283,119 @@ message PolicySpec {
     google.protobuf.Duration fill_interval = 3;
     Type type = 4;
   }
+  message Ai {
+    message Message {
+      string role = 1;
+      string content = 2;
+    }
+
+    message PromptEnrichment {
+      repeated Message append = 1;
+      repeated Message prepend = 2;
+    }
+
+    enum BuiltinRegexRule {
+      BUILTIN_UNSPECIFIED = 0;
+      SSN = 1;
+      CREDIT_CARD = 2;
+      PHONE_NUMBER = 3;
+      EMAIL = 4;
+    }
+
+    message NamedRegex {
+      string pattern = 1;
+      string name = 2;
+    }
+
+    message RegexRule {
+      oneof kind {
+        BuiltinRegexRule builtin = 1;
+        NamedRegex regex = 2;
+      }
+    }
+
+    enum ActionKind {
+      ACTION_UNSPECIFIED = 0;
+      MASK = 1;
+      REJECT = 2;
+    }
+
+    message Action {
+      ActionKind kind = 1;
+      // Only used when kind == REJECT
+      RequestRejection reject_response = 2;
+    }
+
+    message RegexRules {
+      Action action = 1;
+      repeated RegexRule rules = 2;
+    }
+
+    message Webhook {
+      string host = 1;
+      uint32 port = 2;
+      repeated HeaderMatch forward_header_matches = 3;
+    }
+
+    message Moderation {
+      // Model to use. Defaults to `omni-moderation-latest`
+      google.protobuf.StringValue model = 1;
+      BackendAuthPolicy auth = 2;
+    }
+
+    // Response sent when rejecting a request
+    message RequestRejection {
+      bytes body = 1;
+      uint32 status = 2;
+    }
+
+    // Configuration for guarding/processing LLM responses
+    message ResponseGuard {
+      RegexRules regex = 1;
+      Webhook webhook = 2;
+    }
+
+    // Configuration for guarding/processing prompts
+    message RequestGuard {
+      // Response to send when request is rejected
+      RequestRejection rejection = 1;
+      RegexRules regex = 2;
+      Webhook webhook = 3;
+      Moderation openai_moderation = 4;
+    }
+
+    message PromptGuard {
+      // Guards applied to client requests before they reach the LLM
+      RequestGuard request = 1;
+      // Guards applied to LLM responses before they reach the client
+      ResponseGuard response = 2;
+    }
+
+    PromptGuard prompt_guard = 1;
+    // Default JSON key-value pairs to add to the LLM request if the key is not set in the request.
+    map<string, string> defaults = 2;
+    // Override JSON key-value pairs to set in the LLM request regardless of whether they are set in the request.
+    map<string, string> overrides = 3;
+    PromptEnrichment prompts = 4;
+  }
   message ExternalAuth {
+    enum FailureMode {
+      DENY = 0;
+      ALLOW = 1;
+      DENY_WITH_STATUS = 2;
+    }
+    message BodyOptions {
+      uint32 max_request_bytes = 1;
+      bool allow_partial_message = 2;
+      bool pack_as_bytes = 3;
+    }
     BackendReference target = 1;
     map<string, string> context = 2;
+    FailureMode failure_mode = 3;
+    repeated string include_request_headers = 4;
+    BodyOptions include_request_body = 5;
+    google.protobuf.Duration timeout = 6;
+    google.protobuf.UInt32Value status_on_error = 7;
   }
   message A2a {
   }
@@ -286,7 +416,62 @@ message PolicySpec {
     google.protobuf.BytesValue root = 3;
     // Disable all verification
     google.protobuf.BoolValue insecure = 4;
+    // If set, override the SNI explicitly. Otherwise, it is auto-derived.
+    google.protobuf.StringValue hostname = 5;
   }
+  message RBAC {
+    repeated string allow = 1;
+    repeated string deny = 2;
+  }
+
+  // JWT authentication configuration
+  message JWT {
+    // Validation mode for JWT authentication
+    enum Mode {
+      // Default mode - if a token exists, validate it
+      OPTIONAL = 0;
+      // A valid token must be present
+      STRICT = 1;
+      // Requests are never rejected (useful for claims in later steps)
+      PERMISSIVE = 2;
+    }
+
+    // How the JWT validation should behave
+    Mode mode = 1;
+
+    // JWT issuer that must match the 'iss' claim
+    string issuer = 2;
+
+    // List of audiences - the 'aud' claim must be in this list
+    repeated string audiences = 3;
+
+    // JWKS configuration - where to get the keys for validation
+    oneof jwks_source {
+      // Inline JWKS as a JSON string
+      string inline = 4;
+    }
+  }
+
+  message TransformationPolicy {
+    message Transform {
+      repeated HeaderTransformation set = 1;
+      repeated HeaderTransformation add = 2;
+      repeated string remove = 3;
+      BodyTransformation body = 4;
+    }
+    Transform request = 1;
+    Transform response = 2;
+  }
+
+  message HeaderTransformation {
+    string name = 1;
+    string expression = 2;
+  }
+
+  message BodyTransformation {
+    string expression = 1;
+  }
+
   oneof kind {
     LocalRateLimit local_rate_limit = 1;
     ExternalAuth ext_authz = 2;
@@ -294,6 +479,12 @@ message PolicySpec {
     InferenceRouting inference_routing = 4;
     BackendTLS backend_tls = 5;
     BackendAuthPolicy auth = 6;
+    RBAC authorization = 7;
+    RBAC mcp_authorization = 8;
+    Ai ai = 9;
+    JWT jwt = 10;
+    TransformationPolicy transformation = 11;
+    RemoteRateLimit remote_rate_limit = 12;
   }
 }
 
@@ -319,11 +510,10 @@ message StaticBackend {
 }
 
 message AIBackend {
-  message Override {
+  message HostOverride {
     string host = 1;
     int32 port = 2;
   }
-  Override override = 1;
   message OpenAI {
     google.protobuf.StringValue model = 1;
   }
@@ -344,13 +534,22 @@ message AIBackend {
     google.protobuf.StringValue guardrail_identifier = 3;
     google.protobuf.StringValue guardrail_version = 4;
   }
-  oneof provider {
-    OpenAI openai = 2;
-    Gemini gemini = 3;
-    Vertex vertex = 4;
-    Anthropic anthropic = 5;
-    Bedrock bedrock = 6;
+  message Provider {
+    string name = 1;
+    HostOverride host_override = 2;
+    google.protobuf.StringValue path_override = 3;
+    oneof provider {
+      OpenAI openai = 4;
+      Gemini gemini = 5;
+      Vertex vertex = 6;
+      Anthropic anthropic = 7;
+      Bedrock bedrock = 8;
+    }
   }
+  message ProviderGroup {
+    repeated Provider providers = 1;
+  }
+  repeated ProviderGroup provider_groups = 1;
 }
 
 message MCPBackend {

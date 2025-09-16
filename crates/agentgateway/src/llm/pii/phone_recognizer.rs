@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use phonenumber::{country, parse};
 use regex::Regex;
 
@@ -21,47 +22,76 @@ impl PhoneRecognizer {
 
 impl Recognizer for PhoneRecognizer {
 	fn recognize(&self, text: &str) -> Vec<RecognizerResult> {
-		let mut results = Vec::new();
-		// For each region, try to find phone numbers
-		for &region in &self.regions {
-			// phonenumber::parse requires a country code, so we use the region
-			let country = match region {
-				"US" => country::US,
-				"GB" => country::GB,
-				"DE" => country::DE,
-				"IL" => country::IL,
-				"IN" => country::IN,
-				"CA" => country::CA,
-				"BR" => country::BR,
-				_ => continue,
-			};
-			// Use a sliding window to try to parse phone numbers from all substrings
-			// (phonenumber crate does not provide a matcher, so we use a heuristic)
-			for start in 0..text.len() {
-				for end in (start + 7)..=std::cmp::min(text.len(), start + 20) {
-					// phone numbers are usually 7-20 chars
-					// TODO: we currently match this for every substring basically
-					let candidate = &text[start..end];
-					if let Ok(number) = parse(Some(country), candidate)
-						&& number.is_valid()
-					{
-						results.push(RecognizerResult {
-							entity_type: "PHONE_NUMBER".to_string(),
-							matched: candidate.to_string(),
-							start,
-							end,
-							score: 0.7, // Higher score for library-validated
-						});
-					}
-				}
+		static CANDIDATE_RE: Lazy<Regex> =
+			Lazy::new(|| Regex::new(r"(?i)(^|[^0-9])([+()]?[0-9][0-9\s().\-]{6,30})").unwrap());
+
+		// Map region strings once.
+		fn to_country(code: &str) -> Option<country::Id> {
+			match code {
+				"US" => Some(country::US),
+				"CA" => Some(country::CA),
+				"GB" => Some(country::GB),
+				"DE" => Some(country::DE),
+				"IL" => Some(country::IL),
+				"IN" => Some(country::IN),
+				"BR" => Some(country::BR),
+				_ => None,
 			}
 		}
-		// Remove duplicates (same span)
-		results.sort_by_key(|r| (r.start, r.end));
-		results.dedup_by_key(|r| (r.start, r.end));
-		results.dedup_by_key(|r| (r.start, r.end));
+
+		let mut results = Vec::new();
+
+		for caps in CANDIDATE_RE.captures_iter(text) {
+			let m = caps.get(2).unwrap();
+			let mut best: Option<RecognizerResult> = None;
+
+			for &region in &self.regions {
+				let Some(country) = to_country(region) else {
+					continue;
+				};
+				let candidate = m.as_str();
+
+				if let Ok(num) = parse(Some(country), candidate) {
+					if !num.is_valid() {
+						continue;
+					}
+
+					// prefer longer matches
+					let digit_count = candidate.chars().filter(|c| c.is_ascii_digit()).count();
+					let score = 0.6_f32 + (digit_count.min(15) as f32) / 100.0;
+
+					let res = RecognizerResult {
+						entity_type: "PHONE_NUMBER".to_string(),
+						matched: candidate.to_string(),
+						start: m.start(),
+						end: m.end(),
+						score,
+					};
+
+					best = match best {
+						Some(prev) => {
+							let prev_digits = prev.matched.chars().filter(|c| c.is_ascii_digit()).count();
+							if digit_count > prev_digits || (digit_count == prev_digits && score > prev.score) {
+								Some(res)
+							} else {
+								Some(prev)
+							}
+						},
+						None => Some(res),
+					};
+				}
+			}
+
+			if let Some(r) = best {
+				results.push(r);
+			}
+		}
+
+		results.sort_by_key(|r| (r.start, r.end, r.matched.clone()));
+		results.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.matched == b.matched);
 		results
 	}
+
 	fn name(&self) -> &str {
 		"PHONE_NUMBER"
 	}

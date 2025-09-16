@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use ::http::uri::PathAndQuery;
 use ::http::{HeaderMap, header};
 use anyhow::anyhow;
 use futures_util::FutureExt;
@@ -8,7 +10,6 @@ use headers::HeaderMapExt;
 use hyper::body::Incoming;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
-use itertools::Itertools;
 use rand::Rng;
 use rand::seq::IndexedRandom;
 use tracing::{debug, trace};
@@ -59,6 +60,9 @@ async fn apply_request_policies(
 	}
 	.apply(response_policies.headers())?;
 
+	// Extract dynamic metadata for CEL context
+	log.cel.ctx().with_extauthz(req);
+
 	let exec = log
 		.cel
 		.ctx()
@@ -67,7 +71,7 @@ async fn apply_request_policies(
 
 	if let Some(j) = &policies.authorization {
 		j.apply(&exec)
-			.map_err(|_| ProxyResponse::from(ProxyError::AuthorizationFailed))?;
+			.map_err(|_| ProxyResponse::from(ProxyError::AuthorizationFailed(None)))?;
 	}
 
 	for lrl in &policies.local_rate_limit {
@@ -121,6 +125,11 @@ async fn apply_llm_request_policies(
 	Ok(store::LLMResponsePolicies {
 		local_rate_limit: policies.local_rate_limit.clone(),
 		remote_rate_limit: response,
+		prompt_guard: policies
+			.llm
+			.as_deref()
+			.and_then(|llm| llm.prompt_guard.as_ref())
+			.and_then(|g| g.response.clone()),
 	})
 }
 
@@ -183,57 +192,6 @@ fn apply_response_filters(
 	Ok(())
 }
 
-fn load_balance(
-	pi: Arc<ProxyInputs>,
-	svc: &Service,
-	svc_port: u16,
-	override_dest: Option<SocketAddr>,
-) -> Option<(&Endpoint, Arc<Workload>)> {
-	let state = &pi.stores;
-	let workloads = &state.read_discovery().workloads;
-	let target_port = svc.ports.get(&svc_port).copied();
-
-	if target_port.is_none() {
-		// Port doesn't exist on the service at all, this is invalid
-		debug!("service {} does not have port {}", svc.hostname, svc_port);
-		return None;
-	};
-
-	let endpoints = svc.endpoints.iter().filter_map(|ep| {
-		let Some(wl) = workloads.find_uid(&ep.workload_uid) else {
-			debug!("failed to fetch workload for {}", ep.workload_uid);
-			return None;
-		};
-		if target_port.unwrap_or_default() == 0 && !ep.port.contains_key(&svc_port) {
-			// Filter workload out, it doesn't have a matching port
-			trace!(
-				"filter endpoint {}, it does not have service port {}",
-				ep.workload_uid, svc_port
-			);
-			return None;
-		}
-		if let Some(o) = override_dest
-			&& !wl.workload_ips.contains(&o.ip())
-		{
-			// We ignore port, assume its a bug to have a mismatch
-			trace!(
-				"filter endpoint {}, it was not the selected endpoint {}",
-				ep.workload_uid, o
-			);
-			return None;
-		}
-		Some((ep, wl))
-	});
-
-	let options = endpoints.collect_vec();
-	options
-		.choose_weighted(&mut rand::rng(), |(_, wl)| wl.capacity as u64)
-		// This can fail if there are no weights, the sum is zero (not possible in our API), or if it overflows
-		// The API has u32 but we sum into an u64, so it would take ~4 billion entries of max weight to overflow
-		.ok()
-		.cloned()
-}
-
 #[derive(Clone)]
 pub struct HTTPProxy {
 	pub(super) bind_name: BindName,
@@ -289,6 +247,7 @@ impl HTTPProxy {
 		// We will also record trailer info there.
 		log.with(|l| {
 			l.status = Some(resp.status());
+			l.retry_after = http::outlierdetection::retry_after(resp.status(), resp.headers());
 			l.cel.ctx().with_response(&resp)
 		});
 
@@ -301,10 +260,6 @@ impl HTTPProxy {
 		log: &mut RequestLog,
 	) -> Result<Response, ProxyResponse> {
 		log.tls_info = connection.get::<TLSConnectionInfo>().cloned();
-		log
-			.cel
-			.ctx()
-			.with_source(&log.tcp_info, log.tls_info.as_ref());
 		let selected_listener = self.selected_listener.clone();
 		let inputs = self.inputs.clone();
 		let bind_name = self.bind_name.clone();
@@ -334,8 +289,8 @@ impl HTTPProxy {
 
 		let mut req = req.map(http::Body::new);
 
-		normalize_uri(&connection, &mut req).map_err(ProxyError::Processing)?;
 		sensitive_headers(&mut req);
+		normalize_uri(&connection, &mut req).map_err(ProxyError::Processing)?;
 		let mut req_upgrade = hop_by_hop_headers(&mut req);
 
 		let host = http::get_host(&req)?.to_string();
@@ -402,9 +357,14 @@ impl HTTPProxy {
 			selected_route.route_name.clone(),
 			selected_listener.key.clone(),
 			selected_listener.gateway_name.clone(),
+			&selected_route.inline_policies,
 		);
 		// Register all expressions
 		route_policies.register_cel_expressions(log.cel.ctx());
+		log
+			.cel
+			.ctx()
+			.with_source(&log.tcp_info, log.tls_info.as_ref());
 		// This is unfortunate but we record the request twice possibly; we want to record it as early as possible
 		// so we can do logging, etc when we find no routes.
 		// But we may find new expressions that now need the request.
@@ -723,33 +683,59 @@ async fn make_backend_call(
 		inputs: inputs.clone(),
 	};
 
-	let policy_target = PolicyTarget::Backend(backend.name());
-	let policies = inputs.stores.read_binds().backend_policies(policy_target);
+	let mut ai_provider = None;
+	let (service, sub_backend) = match backend {
+		Backend::Service(svc, _) => (
+			Some(strng::format!("{}/{}", svc.namespace, svc.hostname)),
+			None,
+		),
+		Backend::AI(n, ai) => {
+			let (provider, handle) = ai.select_provider().ok_or(ProxyError::NoHealthyEndpoints)?;
+			log.add(move |l| l.request_handle = Some(handle));
+			let k = strng::format!("{}/{}", n, provider.name);
+			ai_provider = Some(provider);
+			(None, Some(k))
+		},
+		_ => (None, None),
+	};
+
+	let policies = inputs
+		.stores
+		.read_binds()
+		.backend_policies(backend.name(), service, sub_backend);
+
 	let mut maybe_inference = policies.build_inference(policy_client.clone());
 	let override_dest = maybe_inference.mutate_request(&mut req).await?;
 	log.add(|l| l.inference_pool = override_dest);
 
 	let backend_call = match backend {
-		Backend::AI(_, ai) => {
-			let (target, default_policies) = match &ai.host_override {
+		Backend::AI(_, _ai) => {
+			let provider = ai_provider.expect("must be set above");
+			let (target, default_policies) = match &provider.host_override {
 				Some(target) => (
 					target.clone(),
 					Some(BackendPolicies {
 						backend_tls: None,
 						backend_auth: None,
 						a2a: None,
-						llm: None,
 						inference_routing: None,
 						// Attach LLM provider, but don't use default setup
-						llm_provider: Some((ai.provider.clone(), false, ai.tokenize)),
+						llm_provider: Some((provider.provider.clone(), false, provider.tokenize)),
 					}),
 				),
 				None => {
-					let (tgt, mut pol) = ai.provider.default_connector();
-					pol.llm_provider = Some((ai.provider.clone(), true, ai.tokenize));
+					let (tgt, mut pol) = provider.provider.default_connector();
+					pol.llm_provider = Some((provider.provider.clone(), true, provider.tokenize));
 					(tgt, Some(pol))
 				},
 			};
+			if let Some(po) = &provider.path_override {
+				http::modify_req_uri(&mut req, |p| {
+					p.path_and_query = Some(PathAndQuery::from_str(po)?);
+					Ok(())
+				})
+				.map_err(ProxyError::Processing)?;
+			}
 			BackendCall {
 				target,
 				default_policies,
@@ -759,8 +745,12 @@ async fn make_backend_call(
 		},
 		Backend::Service(svc, port) => {
 			let port = *port;
-			let (ep, wl) = load_balance(inputs.clone(), svc.as_ref(), port, override_dest)
+			let workloads = &inputs.stores.read_discovery().workloads;
+			let (ep, handle, wl) = svc
+				.endpoints
+				.select_endpoint(workloads, svc.as_ref(), port, override_dest)
 				.ok_or(ProxyError::NoHealthyEndpoints)?;
+
 			let svc_target_port = svc.ports.get(&port).copied().unwrap_or_default();
 			let target_port = if let Some(&ep_target_port) = ep.port.get(&port) {
 				// prefer endpoint port mapping
@@ -782,6 +772,7 @@ async fn make_backend_call(
 				return Err(ProxyResponse::from(ProxyError::NoHealthyEndpoints));
 			};
 			let dest = SocketAddr::from((*ip, target_port));
+			log.add(move |l| l.request_handle = Some(handle));
 			BackendCall {
 				target: Target::Address(dest),
 				http_version_override,
@@ -854,7 +845,13 @@ async fn make_backend_call(
 	let (mut req, response_policies, llm_request) =
 		if let Some((llm, use_default_policies, tokenize)) = &policies.llm_provider {
 			let r = llm
-				.process_request(client, policies.llm.as_ref(), req, *tokenize, &mut log)
+				.process_request(
+					&client,
+					route_policies.llm.as_deref(),
+					req,
+					*tokenize,
+					&mut log,
+				)
 				.await
 				.map_err(|e| ProxyError::Processing(e.into()))?;
 			let (mut req, llm_request) = match r {
@@ -903,6 +900,7 @@ async fn make_backend_call(
 			if let (Some((llm, _, _)), Some(llm_request)) = (policies.llm_provider, llm_request) {
 				llm
 					.process_response(
+						&client,
 						llm_request,
 						response_policies,
 						llm_response_log.expect("must be set"),
@@ -1163,13 +1161,13 @@ impl PolicyClient {
 trait OptLogger {
 	fn add<F>(&mut self, f: F)
 	where
-		F: Fn(&mut RequestLog);
+		F: FnOnce(&mut RequestLog);
 }
 
 impl OptLogger for Option<&mut RequestLog> {
 	fn add<F>(&mut self, f: F)
 	where
-		F: Fn(&mut RequestLog),
+		F: FnOnce(&mut RequestLog),
 	{
 		if let Some(log) = self.as_mut() {
 			f(log)

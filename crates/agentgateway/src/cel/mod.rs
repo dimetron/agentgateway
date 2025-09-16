@@ -52,6 +52,7 @@ pub const LLM_COMPLETION_ATTRIBUTE: &str = "llm.completion";
 pub const RESPONSE_ATTRIBUTE: &str = "response";
 pub const JWT_ATTRIBUTE: &str = "jwt";
 pub const MCP_ATTRIBUTE: &str = "mcp";
+pub const EXTAUTHZ_ATTRIBUTE: &str = "extauthz";
 pub const ALL_ATTRIBUTES: &[&str] = &[
 	SOURCE_ATTRIBUTE,
 	REQUEST_ATTRIBUTE,
@@ -62,6 +63,7 @@ pub const ALL_ATTRIBUTES: &[&str] = &[
 	RESPONSE_ATTRIBUTE,
 	JWT_ATTRIBUTE,
 	MCP_ATTRIBUTE,
+	EXTAUTHZ_ATTRIBUTE,
 ];
 
 pub struct Expression {
@@ -157,6 +159,23 @@ impl ContextBuilder {
 		self.context.jwt = Some(info.clone())
 	}
 
+	pub fn with_extauthz(&mut self, req: &crate::http::Request) {
+		if !self.attributes.contains(EXTAUTHZ_ATTRIBUTE) {
+			return;
+		}
+
+		// Extract dynamic metadata from ext_authz if present
+		if let Some(ext_authz_metadata) = req
+			.extensions()
+			.get::<Arc<crate::http::ext_authz::ExtAuthzDynamicMetadata>>()
+		{
+			// Direct access to extauthz.field - metadata is already stored flat
+			if !ext_authz_metadata.metadata.is_empty() {
+				self.context.extauthz = Some(ext_authz_metadata.metadata.clone());
+			}
+		}
+	}
+
 	pub fn with_source(&mut self, tcp: &TCPConnectionInfo, tls: Option<&TLSConnectionInfo>) {
 		if !self.attributes.contains(SOURCE_ATTRIBUTE) {
 			return;
@@ -239,6 +258,8 @@ impl ContextBuilder {
 			jwt,
 			llm,
 			source,
+			mcp: _,
+			extauthz,
 		} = &self.context;
 
 		ctx.add_variable_from_value(REQUEST_ATTRIBUTE, opt_to_value(request)?);
@@ -247,6 +268,7 @@ impl ContextBuilder {
 		ctx.add_variable_from_value(MCP_ATTRIBUTE, opt_to_value(&mcp)?);
 		ctx.add_variable_from_value(LLM_ATTRIBUTE, opt_to_value(llm)?);
 		ctx.add_variable_from_value(SOURCE_ATTRIBUTE, opt_to_value(source)?);
+		ctx.add_variable_from_value(EXTAUTHZ_ATTRIBUTE, opt_to_value(extauthz)?);
 
 		Ok(Executor { ctx })
 	}
@@ -297,6 +319,7 @@ impl Expression {
 					LLM_ATTRIBUTE.to_string(),
 					LLM_COMPLETION_ATTRIBUTE.to_string(),
 				],
+				["extauthz", ..] => vec![EXTAUTHZ_ATTRIBUTE.to_string()],
 				[first, ..] => vec![first.to_string()],
 				_ => Vec::default(),
 			})
@@ -318,23 +341,36 @@ impl Expression {
 #[derive(Default)]
 #[apply(schema_ser!)]
 pub struct ExpressionContext {
+	/// `request` contains attributes about the incoming HTTP request
 	pub request: Option<RequestContext>,
+	/// `response` contains attributes about the HTTP response
 	pub response: Option<ResponseContext>,
+	/// `jwt` contains the claims from a verified JWT token. This is only present if the JWT policy is enabled.
 	pub jwt: Option<Claims>,
+	/// `llm` contains attributes about an LLM request or response. This is only present when using an `ai` backend.
 	pub llm: Option<LLMContext>,
+	/// `source` contains attributes about the source of the request.
 	pub source: Option<SourceContext>,
+	/// `mcp` contains attributes about the MCP request.
+	// This is only included for schema generation; see build_with_mcp.
+	pub mcp: Option<crate::mcp::rbac::ResourceType>,
+	/// `extauthz` contains dynamic metadata from ext_authz filters
+	pub extauthz: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 #[apply(schema_ser!)]
 pub struct RequestContext {
 	#[serde(with = "http_serde::method")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	/// The HTTP method of the request.
 	pub method: ::http::Method,
 
 	#[serde(with = "http_serde::uri")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	/// The URI of the request.
 	pub uri: ::http::Uri,
 
+	/// The path of the request URI.
 	pub path: String,
 
 	#[serde(with = "http_serde::header_map")]
@@ -342,8 +378,10 @@ pub struct RequestContext {
 		feature = "schema",
 		schemars(with = "std::collections::HashMap<String, String>")
 	)]
+	/// The headers of the request.
 	pub headers: ::http::HeaderMap,
 
+	/// The body of the request. Warning: accessing the body will cause the body to be buffered.
 	pub body: Option<Bytes>,
 }
 
@@ -351,40 +389,57 @@ pub struct RequestContext {
 pub struct ResponseContext {
 	#[serde(with = "http_serde::status_code")]
 	#[cfg_attr(feature = "schema", schemars(with = "u16"))]
+	/// The HTTP status code of the response.
 	pub code: ::http::StatusCode,
 }
 
 #[apply(schema_ser!)]
 pub struct SourceContext {
+	/// The IP address of the downstream connection.
 	address: IpAddr,
+	/// The port of the downstream connection.
 	port: u16,
+	/// The (Istio SPIFFE) identity of the downstream connection, if available.
 	identity: Option<IdentityContext>,
 }
 
 #[apply(schema_ser!)]
 pub struct IdentityContext {
+	/// The trust domain of the identity.
 	trust_domain: Strng,
+	/// The namespace of the identity.
 	namespace: Strng,
+	/// The service account of the identity.
 	service_account: Strng,
 }
 
 #[apply(schema_ser!)]
 pub struct LLMContext {
+	/// Whether the LLM response is streamed.
 	streaming: bool,
+	/// The model requested for the LLM request. This may differ from the actual model used.
 	request_model: Strng,
+	/// The model that actually served the LLM response.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	response_model: Option<Strng>,
+	/// The provider of the LLM.
 	provider: Strng,
+	/// The number of tokens in the input/prompt.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	input_tokens: Option<u64>,
+	/// The number of tokens in the output/completion.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	output_tokens: Option<u64>,
+	/// The total number of tokens for the request.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	total_tokens: Option<u64>,
+	/// The prompt sent to the LLM. Warning: accessing this has some performance impacts for large prompts.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	prompt: Option<Vec<llm::SimpleChatCompletionMessage>>,
+	/// The completion from the LLM. Warning: accessing this has some performance impacts for large responses.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	completion: Option<Vec<String>>,
+	/// The parameters for the LLM request.
 	params: llm::LLMRequestParams,
 }
 

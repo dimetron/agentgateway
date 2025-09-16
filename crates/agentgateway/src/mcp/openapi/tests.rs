@@ -86,6 +86,7 @@ async fn setup() -> (MockServer, Handler) {
 			.clone(),
 		),
 		annotations: None,
+		output_schema: None,
 	};
 	let upstream_call_get = UpstreamOpenAPICall {
 		method: "GET".to_string(),
@@ -126,6 +127,7 @@ async fn setup() -> (MockServer, Handler) {
 			.unwrap()
 			.clone(),
 		),
+		output_schema: None,
 		annotations: None,
 	};
 	let upstream_call_post = UpstreamOpenAPICall {
@@ -168,11 +170,16 @@ async fn test_call_tool_get_simple_success() {
 
 	let args = json!({ "path": { "user_id": user_id } });
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), expected_response.to_string());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -193,11 +200,16 @@ async fn test_call_tool_get_with_query() {
 
 	let args = json!({ "path": { "user_id": user_id }, "query": { "verbose": verbose_flag } });
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), expected_response.to_string());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -217,11 +229,16 @@ async fn test_call_tool_get_with_header() {
 
 	let args = json!({ "path": { "user_id": user_id }, "header": { "X-Request-ID": request_id } });
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), expected_response.to_string());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -240,11 +257,16 @@ async fn test_call_tool_post_with_body() {
 
 	let args = json!({ "body": request_body });
 	let result = handler
-		.call_tool("create_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"create_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), expected_response.to_string());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -271,11 +293,16 @@ async fn test_call_tool_post_all_params() {
 			"header": { "X-API-Key": api_key }
 	});
 	let result = handler
-		.call_tool("create_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"create_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), expected_response.to_string());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -284,7 +311,12 @@ async fn test_call_tool_tool_not_found() {
 
 	let args = json!({});
 	let result = handler
-		.call_tool("nonexistent_tool", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"nonexistent_tool",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_err());
@@ -311,7 +343,12 @@ async fn test_call_tool_upstream_error() {
 
 	let args = json!({ "path": { "user_id": user_id } });
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	assert!(result.is_err());
@@ -341,10 +378,15 @@ async fn test_call_tool_invalid_header_value() {
 	// We expect the call to succeed, but the invalid header should be skipped (and logged)
 	// The mock doesn't expect the header, so if the request goes through without it, it passes.
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 	assert!(result.is_ok()); // Check that the call still succeeds despite the bad header
-	assert_eq!(result.unwrap(), json!({ "id": user_id }).to_string());
+	assert_eq!(result.unwrap(), json!({ "id": user_id }));
 	// We can't easily assert the log message here, but manual inspection of logs would show the warning.
 }
 
@@ -369,10 +411,15 @@ async fn test_call_tool_invalid_query_param_value() {
 
 	// We expect the call to succeed, but the invalid query param should be skipped (and logged)
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 	assert!(result.is_ok());
-	assert_eq!(result.unwrap(), json!({ "id": user_id }).to_string());
+	assert_eq!(result.unwrap(), json!({ "id": user_id }));
 }
 
 #[tokio::test]
@@ -398,7 +445,12 @@ async fn test_call_tool_invalid_path_param_value() {
 	// or potentially fail if the path is fundamentally invalid after non-substitution.
 	// Here we assume the server returns 404 for the literal path.
 	let result = handler
-		.call_tool("get_user", Some(args.as_object().unwrap().clone()))
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&HeaderMap::new(),
+			None,
+		)
 		.await;
 
 	// Depending on server behavior for the literal path, this might be Ok or Err.
@@ -406,11 +458,49 @@ async fn test_call_tool_invalid_path_param_value() {
 	assert!(result.is_err());
 	assert!(
 		result
+			.as_ref()
 			.unwrap_err()
 			.to_string()
-			.contains("failed with status 404 Not Found")
+			.contains("failed with status 404 Not Found"),
+		"{}",
+		result.unwrap_err().to_string()
 	);
 
 	// If the request *itself* failed before sending (e.g., invalid URL formed),
 	// the error might be different.
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_empty_prefix() {
+	// Test the fix for double slash issue when prefix is empty (host/port config)
+	let result = super::normalize_url_path("", "/mqtt/healthcheck");
+	assert_eq!(result, "/mqtt/healthcheck");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_with_prefix() {
+	// Test with a prefix that has trailing slash
+	let result = super::normalize_url_path("/api/v3/", "/pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_prefix_no_trailing_slash() {
+	// Test with a prefix without trailing slash
+	let result = super::normalize_url_path("/api/v3", "/pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_path_without_leading_slash() {
+	// Test with path that doesn't start with slash
+	let result = super::normalize_url_path("/api/v3", "pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_empty_prefix_path_without_slash() {
+	// Test edge case: empty prefix and path without leading slash
+	let result = super::normalize_url_path("", "pet");
+	assert_eq!(result, "/pet");
 }

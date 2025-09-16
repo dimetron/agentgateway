@@ -93,6 +93,7 @@ impl ConnectionPool {
 	pub(crate) async fn initialize(
 		&mut self,
 		peer: &Peer<RoleServer>,
+		rq_ctx: &RqCtx,
 		request: InitializeRequestParam,
 	) -> anyhow::Result<Vec<(Strng, &upstream::UpstreamTarget)>> {
 		for tgt in self.backend.targets.clone() {
@@ -102,7 +103,7 @@ impl ConnectionPool {
 			let ct = tokio_util::sync::CancellationToken::new(); //TODO
 			debug!("initializing target: {}", tgt.name);
 			self
-				.connect(&ct, &tgt, peer, request.clone())
+				.connect(&ct, rq_ctx, &tgt, peer, request.clone())
 				.await
 				.map_err(|e| {
 					error!("Failed to connect target {}: {}", tgt.name, e);
@@ -161,6 +162,7 @@ impl ConnectionPool {
 	pub(crate) async fn stateless_connect(
 		&self,
 		ct: &tokio_util::sync::CancellationToken,
+		rq_ctx: &RqCtx,
 		service_name: &str,
 		peer: &Peer<RoleServer>,
 		init_request: InitializeRequestParam,
@@ -172,12 +174,15 @@ impl ConnectionPool {
 			.find(|tgt| tgt.name == service_name)
 			.ok_or_else(|| McpError::invalid_request(format!("Target {service_name} not found"), None))?;
 
-		self.inner_connect(ct, target, peer, init_request).await
+		self
+			.inner_connect(ct, rq_ctx, target, peer, init_request)
+			.await
 	}
 
 	async fn inner_connect(
 		&self,
 		ct: &tokio_util::sync::CancellationToken,
+		rq_ctx: &RqCtx,
 		target: &McpTarget,
 		peer: &Peer<RoleServer>,
 		init_request: InitializeRequestParam,
@@ -192,8 +197,13 @@ impl ConnectionPool {
 				};
 				let be = crate::proxy::resolve_simple_backend(&sse.backend, &self.pi)?;
 				let hostport = be.hostport();
-				let client =
-					ClientWrapper::new_with_client(be, self.client.clone(), target.backend_policies.clone());
+				let client = ClientWrapper::new_with_client(
+					be,
+					self.client.clone(),
+					target.backend_policies.clone(),
+					rq_ctx.headers.clone(),
+					rq_ctx.identity.claims.clone(),
+				);
 				let transport = SseClientTransport::start_with_client(
 					client,
 					SseClientConfig {
@@ -228,8 +238,13 @@ impl ConnectionPool {
 					_ => mcp.path.as_str(),
 				};
 				let be = crate::proxy::resolve_simple_backend(&mcp.backend, &self.pi)?;
-				let client =
-					ClientWrapper::new_with_client(be, self.client.clone(), target.backend_policies.clone());
+				let client = ClientWrapper::new_with_client(
+					be,
+					self.client.clone(),
+					target.backend_policies.clone(),
+					rq_ctx.headers.clone(),
+					rq_ctx.identity.claims.clone(),
+				);
 				let transport = StreamableHttpClientTransport::with_client(
 					client,
 					StreamableHttpClientTransportConfig {
@@ -254,7 +269,16 @@ impl ConnectionPool {
 			},
 			McpTargetSpec::Stdio { cmd, args, env } => {
 				debug!("starting stdio transport for target: {}", target.name);
+				#[cfg(target_os = "windows")]
+				// Command has some weird behavior on Windows where it expects the executable extension to be
+				// .exe. The which create will resolve the actual command for us.
+				// See https://github.com/rust-lang/rust/issues/37519#issuecomment-1694507663
+				// for more context.
+				let cmd = which::which(cmd)?;
+				#[cfg(target_family = "unix")]
 				let mut c = Command::new(cmd);
+				#[cfg(target_os = "windows")]
+				let mut c = Command::new(&cmd);
 				c.args(args);
 				for (k, v) in env {
 					c.env(k, v);
@@ -266,7 +290,7 @@ impl ConnectionPool {
 								peer: peer.clone(),
 								init_request,
 							},
-							TokioChildProcess::new(c).context(format!("failed to run command '{cmd}'"))?,
+							TokioChildProcess::new(c).context(format!("failed to run command '{:?}'", &cmd))?,
 							ct.child_token(),
 						)
 						.await?,
@@ -311,6 +335,7 @@ impl ConnectionPool {
 	pub(crate) async fn connect(
 		&mut self,
 		ct: &tokio_util::sync::CancellationToken,
+		rq_ctx: &RqCtx,
 		target: &McpTarget,
 		peer: &Peer<RoleServer>,
 		init_request: InitializeRequestParam,
@@ -322,7 +347,9 @@ impl ConnectionPool {
 			return Ok(());
 		}
 
-		let transport = self.inner_connect(ct, target, peer, init_request).await?;
+		let transport = self
+			.inner_connect(ct, rq_ctx, target, peer, init_request)
+			.await?;
 
 		// In stateless mode, this just overwrites the existing entry
 		self.by_name.insert(target.name.clone(), transport);
@@ -443,6 +470,21 @@ pub struct ClientWrapper {
 	backend: Arc<SimpleBackend>,
 	client: PolicyClient,
 	policies: BackendPolicies,
+	headers: http::HeaderMap,
+	claims: Option<Claims>,
+}
+
+impl ClientWrapper {
+	pub fn insert_headers(&self, req: &mut crate::http::Request) {
+		for (k, v) in &self.headers {
+			if !req.headers().contains_key(k) {
+				req.headers_mut().insert(k.clone(), v.clone());
+			}
+		}
+		if let Some(claims) = self.claims.as_ref() {
+			req.extensions_mut().insert(claims.clone());
+		}
+	}
 }
 
 impl ClientWrapper {
@@ -450,11 +492,15 @@ impl ClientWrapper {
 		backend: SimpleBackend,
 		client: PolicyClient,
 		policies: BackendPolicies,
+		headers: HeaderMap,
+		claims: Option<Claims>,
 	) -> Self {
 		Self {
 			backend: Arc::new(backend),
 			client,
 			policies,
+			headers,
+			claims,
 		}
 	}
 
@@ -506,6 +552,7 @@ impl StreamableHttpClient for ClientWrapper {
 					.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?,
 			);
 		}
+		self.insert_headers(&mut req);
 
 		let resp = client
 			.call_with_default_policies(req, &self.backend, self.policies.clone())
@@ -516,7 +563,7 @@ impl StreamableHttpClient for ClientWrapper {
 			return Ok(StreamableHttpPostResponse::Accepted);
 		}
 
-		if resp.status().is_client_error() || resp.status().is_server_error() {
+		if !resp.status().is_success() {
 			return Err(StreamableHttpError::Client(HttpError::new(anyhow!(
 				"received status code {}",
 				resp.status()
@@ -560,12 +607,13 @@ impl StreamableHttpClient for ClientWrapper {
 
 		let uri = "http://".to_string() + &self.backend.hostport() + &Self::parse_uri(uri)?;
 
-		let req = http::Request::builder()
+		let mut req = http::Request::builder()
 			.uri(uri)
 			.method(http::Method::DELETE)
 			.header(HEADER_SESSION_ID, session_id.as_ref())
 			.body(Body::empty())
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
+		self.insert_headers(&mut req);
 
 		let resp = client
 			.call_with_default_policies(req, &self.backend, self.policies.clone())
@@ -609,9 +657,10 @@ impl StreamableHttpClient for ClientWrapper {
 			reqb = reqb.header(HEADER_LAST_EVENT_ID, last_event_id);
 		}
 
-		let req = reqb
+		let mut req = reqb
 			.body(Body::empty())
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
+		self.insert_headers(&mut req);
 
 		let resp = client
 			.call_with_default_policies(req, &self.backend, self.policies.clone())
@@ -619,7 +668,7 @@ impl StreamableHttpClient for ClientWrapper {
 			.map_err(|e| StreamableHttpError::Client(HttpError::new(e)))?;
 
 		if resp.status() == http::StatusCode::METHOD_NOT_ALLOWED {
-			return Err(StreamableHttpError::SeverDoesNotSupportSse);
+			return Err(StreamableHttpError::ServerDoesNotSupportSse);
 		}
 
 		if resp.status().is_client_error() || resp.status().is_server_error() {
@@ -667,6 +716,7 @@ impl SseClient for ClientWrapper {
 			.header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
 			.body(body.into())
 			.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+		self.insert_headers(&mut req);
 
 		if let JsonRpcMessage::Request(request) = &message {
 			match request.request.extensions().get::<RqCtx>() {
@@ -720,9 +770,10 @@ impl SseClient for ClientWrapper {
 			if let Some(last_event_id) = last_event_id {
 				reqb = reqb.header(HEADER_LAST_EVENT_ID, last_event_id);
 			}
-			let req = reqb
+			let mut req = reqb
 				.body(Body::empty())
 				.map_err(|e| SseTransportError::Client(HttpError::new(e)))?;
+			self.insert_headers(&mut req);
 
 			let resp: Result<Response, ProxyError> = self
 				.client

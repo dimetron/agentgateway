@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use http::Method;
 use http::header::{ACCEPT, CONTENT_TYPE};
+use http::{HeaderMap, Method};
 use openapiv3::{OpenAPI, Parameter, ReferenceOr, RequestBody, Schema, SchemaKind, Type};
 use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::model::{JsonObject, Tool};
@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::instrument;
 
+use crate::http::jwt::Claims;
+use crate::json;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::BackendPolicies;
 use crate::types::agent::SimpleBackend;
@@ -64,7 +66,7 @@ pub enum ParseError {
 
 pub(crate) fn get_server_prefix(server: &OpenAPI) -> Result<String, ParseError> {
 	match server.servers.len() {
-		0 => Ok("/".to_string()),
+		0 => Ok("".to_string()), // Return empty string instead of "/" to avoid double slash
 		1 => Ok(server.servers[0].url.clone()),
 		_ => Err(ParseError::UnsupportedReference(format!(
 			"multiple servers are not supported: {:?}",
@@ -395,6 +397,8 @@ pub(crate) fn parse_openapi_schema(
 										.to_string(),
 								)),
 								input_schema: Arc::new(final_json),
+								// TODO: support output_schema
+								output_schema: None,
 							};
 							let upstream = UpstreamOpenAPICall {
 								// method: Method::from_bytes(method.as_ref()).expect("todo"),
@@ -495,6 +499,24 @@ impl Default for JsonSchema {
 	}
 }
 
+/// Normalizes URL path construction to avoid double slashes
+/// Ensures exactly one slash between prefix and path components
+fn normalize_url_path(prefix: &str, path: &str) -> String {
+	let prefix = prefix.trim_end_matches('/');
+	let path = if path.starts_with('/') {
+		path
+	} else {
+		// If path doesn't start with '/', add one
+		&format!("/{path}")
+	};
+
+	if prefix.is_empty() {
+		path.to_string()
+	} else {
+		format!("{prefix}{path}")
+	}
+}
+
 #[derive(Debug)]
 pub struct Handler {
 	pub prefix: String,
@@ -527,7 +549,9 @@ impl Handler {
 		&self,
 		name: &str,
 		args: Option<JsonObject>,
-	) -> Result<String, anyhow::Error> {
+		user_headers: &HeaderMap,
+		claims: Option<Claims>,
+	) -> Result<serde_json::Value, anyhow::Error> {
 		let (_tool, info) = self
 			.tools
 			.iter()
@@ -576,12 +600,13 @@ impl Handler {
 			}
 		}
 
+		// Use normalize_url_path to avoid double slashes
+		let normalized_path = normalize_url_path(&self.prefix, &path);
 		let base_url = format!(
-			"{}://{}{}{}",
+			"{}://{}{}",
 			"http",
 			self.backend.hostport(),
-			self.prefix,
-			path
+			normalized_path
 		);
 
 		// --- Request Building ---
@@ -661,9 +686,17 @@ impl Handler {
 		};
 
 		// Build the final request
-		let request = rb
+		let mut request = rb
 			.body(body.into())
 			.map_err(|e| anyhow::anyhow!("Failed to build request: {}", e))?;
+		for (k, v) in user_headers {
+			if !request.headers().contains_key(k) {
+				request.headers_mut().insert(k.clone(), v.clone());
+			}
+		}
+		if let Some(claims) = claims.as_ref() {
+			request.extensions_mut().insert(claims.clone());
+		}
 
 		// Make the request
 		let response = self
@@ -673,16 +706,16 @@ impl Handler {
 
 		// Read response body
 		let status = response.status();
-		let body = String::from_utf8(
-			axum::body::to_bytes(response.into_body(), 2_097_152)
-				.await?
-				.to_vec(),
-		)?;
-
 		// Check if the request was successful
 		if status.is_success() {
+			let body = json::from_body::<serde_json::Value>(response.into_body()).await?;
 			Ok(body)
 		} else {
+			let body = String::from_utf8(
+				axum::body::to_bytes(response.into_body(), 2_097_152)
+					.await?
+					.to_vec(),
+			)?;
 			Err(anyhow::anyhow!(
 				"Upstream API call for tool '{}' failed with status {}: {}",
 				name,

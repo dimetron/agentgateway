@@ -6,10 +6,7 @@ use crate::http::{Body, Response, filters};
 use crate::json;
 use crate::types::agent::A2aPolicy;
 
-pub async fn apply_to_request(pol: Option<&A2aPolicy>, req: &mut Request<Body>) -> RequestType {
-	if pol.is_none() {
-		return RequestType::Unknown;
-	};
+pub async fn apply_to_request(_: &A2aPolicy, req: &mut Request<Body>) -> RequestType {
 	// Possible options are POST a JSON-RPC message or GET /.well-known/agent.json
 	// For agent card, we will process only on the response
 	classify_request(req).await
@@ -33,7 +30,7 @@ async fn classify_request(req: &mut Request<Body>) -> RequestType {
 		(m, _) if m == http::Method::POST => {
 			let method = match crate::http::classify_content_type(req.headers()) {
 				crate::http::WellKnownContentTypes::Json => {
-					match json::inspect_body::<a2a_sdk::A2aRequest>(req.body_mut()).await {
+					match json::inspect_body::<a2a_sdk::A2aRequest>(req).await {
 						Ok(call) => call.method(),
 						Err(e) => {
 							warn!("failed to read a2a request: {e}");
@@ -52,7 +49,9 @@ async fn classify_request(req: &mut Request<Body>) -> RequestType {
 	}
 }
 
+#[derive(Debug, Clone, Default)]
 pub enum RequestType {
+	#[default]
 	Unknown,
 	AgentCard(http::Uri),
 	Call(&'static str),
@@ -70,8 +69,9 @@ pub async fn apply_to_response(
 		RequestType::AgentCard(uri) => {
 			// For agent card, we need to mutate the request to insert the proper URL to reach it
 			// through the gateway.
+			let buffer_limit = crate::http::response_buffer_limit(resp);
 			let body = std::mem::replace(resp.body_mut(), Body::empty());
-			let Ok(mut agent_card) = json::from_body::<Value>(body).await else {
+			let Ok(mut agent_card) = json::from_body_with_limit::<Value>(body, buffer_limit).await else {
 				anyhow::bail!("agent card invalid JSON");
 			};
 			let Some(url_field) = json::traverse_mut(&mut agent_card, &["url"]) else {

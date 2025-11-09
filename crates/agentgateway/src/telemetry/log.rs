@@ -6,27 +6,34 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 
-use agent_core::metrics::CustomField;
-use agent_core::strng;
-use agent_core::telemetry::{OptionExt, ValueBag, debug, display};
-use crossbeam::atomic::AtomicCell;
-use frozen_collections::{FzHashSet, FzStringMap};
-use http_body::{Body, Frame, SizeHint};
-use itertools::Itertools;
-use serde::{Serialize, Serializer};
-use serde_json::Value;
-use tracing::{Level, trace};
-
 use crate::cel::{ContextBuilder, Expression};
-use crate::telemetry::metrics::{GenAILabels, GenAILabelsTokenUsage, HTTPLabels, Metrics};
+use crate::llm::LLMInfo;
+use crate::proxy::ProxyResponseReason;
+use crate::telemetry::metrics::{
+	GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
+};
 use crate::telemetry::trc;
 use crate::telemetry::trc::TraceParent;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent::{
-	BackendName, BindName, GatewayName, ListenerName, RouteName, RouteRuleName, Target,
+	BackendInfo, BindName, GatewayName, ListenerName, RouteName, RouteRuleName, Target,
 };
 use crate::types::loadbalancer::ActiveHandle;
 use crate::{cel, llm, mcp};
+use agent_core::metrics::CustomField;
+use agent_core::strng;
+use agent_core::strng::RichStrng;
+use agent_core::telemetry::{OptionExt, ValueBag, debug, display};
+use bytes::Buf;
+use crossbeam::atomic::AtomicCell;
+use frozen_collections::{FzHashSet, FzStringMap};
+use http_body::{Body, Frame, SizeHint};
+use indexmap::IndexMap;
+use itertools::Itertools;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+use tracing::{Level, trace};
 
 /// AsyncLog is a wrapper around an item that can be atomically set.
 /// The intent is to provide additional info to the log after we have lost the RequestLog reference,
@@ -78,15 +85,19 @@ impl<T: Debug> Debug for AsyncLog<T> {
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct Config {
 	pub filter: Option<Arc<cel::Expression>>,
-	pub fields: Arc<LoggingFields>,
+	pub fields: LoggingFields,
 	pub metric_fields: Arc<MetricFields>,
+	pub excluded_metrics: FzHashSet<String>,
+	pub level: String,
+	pub format: crate::LoggingFormat,
 }
 
 #[derive(serde::Serialize, Default, Clone, Debug)]
 pub struct LoggingFields {
-	pub remove: FzHashSet<String>,
-	pub add: OrderedStringMap<Arc<cel::Expression>>,
+	pub remove: Arc<FzHashSet<String>>,
+	pub add: Arc<OrderedStringMap<Arc<cel::Expression>>>,
 }
+
 #[derive(serde::Serialize, Default, Clone, Debug)]
 pub struct MetricFields {
 	pub add: OrderedStringMap<Arc<cel::Expression>>,
@@ -101,6 +112,9 @@ pub struct OrderedStringMap<V> {
 impl<V> OrderedStringMap<V> {}
 
 impl<V> OrderedStringMap<V> {
+	pub fn is_empty(&self) -> bool {
+		self.len() == 0
+	}
 	pub fn len(&self) -> usize {
 		self.map.len()
 	}
@@ -136,6 +150,16 @@ impl<V: Serialize> Serialize for OrderedStringMap<V> {
 	}
 }
 
+impl<'de, V: DeserializeOwned> Deserialize<'de> for OrderedStringMap<V> {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		let im = IndexMap::<String, V>::deserialize(deserializer)?;
+		Ok(OrderedStringMap::from_iter(im))
+	}
+}
+
 impl<K, V> FromIterator<(K, V)> for OrderedStringMap<V>
 where
 	K: AsRef<str>,
@@ -164,7 +188,7 @@ pub struct TraceSampler {
 pub struct CelLogging {
 	pub cel_context: cel::ContextBuilder,
 	pub filter: Option<Arc<cel::Expression>>,
-	pub fields: Arc<LoggingFields>,
+	pub fields: LoggingFields,
 	pub metric_fields: Arc<MetricFields>,
 	pub tracing_sampler: TraceSampler,
 }
@@ -172,7 +196,7 @@ pub struct CelLogging {
 pub struct CelLoggingExecutor<'a> {
 	pub executor: cel::Executor<'a>,
 	pub filter: &'a Option<Arc<cel::Expression>>,
-	pub fields: &'a Arc<LoggingFields>,
+	pub fields: &'a LoggingFields,
 	pub metric_fields: &'a Arc<MetricFields>,
 }
 
@@ -220,6 +244,9 @@ impl<'a> CelLoggingExecutor<'a> {
 			let field = self.executor.eval(v.as_ref());
 			if let Err(err) = &field {
 				trace!(target: "cel", ?err, expression=?v, "expression failed");
+			}
+			if let Ok(cel::Value::Null) = &field {
+				trace!(target: "cel",  expression=?v, "expression evaluated to null");
 			}
 			let celv = field.ok().filter(|v| !matches!(v, cel::Value::Null));
 
@@ -330,6 +357,10 @@ impl CelLogging {
 		&mut self.cel_context
 	}
 
+	pub fn ctx_borrow(&self) -> &ContextBuilder {
+		&self.cel_context
+	}
+
 	pub fn build(&self) -> Result<CelLoggingExecutor, cel::Error> {
 		let CelLogging {
 			cel_context,
@@ -362,6 +393,71 @@ impl DropOnLog {
 			f(l)
 		}
 	}
+
+	fn add_llm_metrics(
+		log: &RequestLog,
+		route_identifier: &RouteIdentifier,
+		end_time: Instant,
+		duration: Duration,
+		llm_response: &Option<LLMInfo>,
+		custom_metric_fields: &CustomField,
+	) {
+		if let Some(llm_response) = &llm_response {
+			let gen_ai_labels = Arc::new(GenAILabels {
+				gen_ai_operation_name: strng::literal!("chat").into(),
+				gen_ai_system: llm_response.request.provider.clone().into(),
+				gen_ai_request_model: llm_response.request.request_model.clone().into(),
+				gen_ai_response_model: llm_response.response.provider_model.clone().into(),
+				custom: custom_metric_fields.clone(),
+				route: route_identifier.clone(),
+			});
+			if let Some(it) = llm_response.input_tokens() {
+				log
+					.metrics
+					.gen_ai_token_usage
+					.get_or_create(&GenAILabelsTokenUsage {
+						gen_ai_token_type: strng::literal!("input").into(),
+						common: gen_ai_labels.clone().into(),
+					})
+					.observe(it as f64)
+			}
+			if let Some(ot) = llm_response.response.output_tokens {
+				log
+					.metrics
+					.gen_ai_token_usage
+					.get_or_create(&GenAILabelsTokenUsage {
+						gen_ai_token_type: strng::literal!("output").into(),
+						common: gen_ai_labels.clone().into(),
+					})
+					.observe(ot as f64)
+			}
+			log
+				.metrics
+				.gen_ai_request_duration
+				.get_or_create(&gen_ai_labels)
+				.observe(duration.as_secs_f64());
+			if let Some(ft) = llm_response.response.first_token {
+				let ttft = ft - log.start;
+				// Duration from start of request to first token
+				// This is the start of when WE got the request, but it should probably be when we SENT the upstream.
+				log
+					.metrics
+					.gen_ai_time_to_first_token
+					.get_or_create(&gen_ai_labels)
+					.observe(ttft.as_secs_f64());
+
+				if let Some(ot) = llm_response.response.output_tokens {
+					let first_to_last = end_time - ft;
+					let throughput = first_to_last.as_secs_f64() / (ot as f64);
+					log
+						.metrics
+						.gen_ai_time_per_output_token
+						.get_or_create(&gen_ai_labels)
+						.observe(throughput);
+				}
+			}
+		}
+	}
 }
 
 impl From<RequestLog> for DropOnLog {
@@ -375,12 +471,14 @@ impl RequestLog {
 		cel: CelLogging,
 		metrics: Arc<Metrics>,
 		start: Instant,
+		start_time: String,
 		tcp_info: TCPConnectionInfo,
 	) -> Self {
 		RequestLog {
 			cel,
 			metrics,
 			start,
+			start_time,
 			tcp_info,
 			tls_info: None,
 			tracer: None,
@@ -390,12 +488,15 @@ impl RequestLog {
 			listener_name: None,
 			route_rule_name: None,
 			route_name: None,
-			backend_name: None,
+			backend_info: None,
+			backend_protocol: None,
 			host: None,
 			method: None,
 			path: None,
+			path_match: None,
 			version: None,
 			status: None,
+			reason: None,
 			retry_after: None,
 			jwt_sub: None,
 			retry_attempt: None,
@@ -409,6 +510,7 @@ impl RequestLog {
 			a2a_method: None,
 			inference_pool: None,
 			request_handle: None,
+			response_bytes: 0,
 		}
 	}
 }
@@ -417,6 +519,7 @@ pub struct RequestLog {
 	pub cel: CelLogging,
 	pub metrics: Arc<Metrics>,
 	pub start: Instant,
+	pub start_time: String,
 	pub tcp_info: TCPConnectionInfo,
 
 	// Set only for TLS traffic
@@ -432,13 +535,16 @@ pub struct RequestLog {
 	pub listener_name: Option<ListenerName>,
 	pub route_rule_name: Option<RouteRuleName>,
 	pub route_name: Option<RouteName>,
-	pub backend_name: Option<BackendName>,
+	pub backend_info: Option<BackendInfo>,
+	pub backend_protocol: Option<cel::BackendProtocol>,
 
 	pub host: Option<String>,
 	pub method: Option<::http::Method>,
 	pub path: Option<String>,
+	pub path_match: Option<String>,
 	pub version: Option<::http::Version>,
 	pub status: Option<crate::http::StatusCode>,
+	pub reason: Option<ProxyResponseReason>,
 	pub retry_after: Option<Duration>,
 
 	pub jwt_sub: Option<String>,
@@ -447,19 +553,21 @@ pub struct RequestLog {
 	pub error: Option<String>,
 
 	pub grpc_status: AsyncLog<u8>,
-	pub mcp_status: AsyncLog<mcp::sse::MCPInfo>,
+	pub mcp_status: AsyncLog<mcp::MCPInfo>,
 
 	pub incoming_span: Option<trc::TraceParent>,
 	pub outgoing_span: Option<trc::TraceParent>,
 
 	pub llm_request: Option<llm::LLMRequest>,
-	pub llm_response: AsyncLog<llm::LLMResponse>,
+	pub llm_response: AsyncLog<llm::LLMInfo>,
 
 	pub a2a_method: Option<&'static str>,
 
 	pub inference_pool: Option<SocketAddr>,
 
 	pub request_handle: Option<ActiveHandle>,
+
+	pub response_bytes: u64,
 }
 
 impl RequestLog {
@@ -494,30 +602,48 @@ impl Drop for DropOnLog {
 			return;
 		};
 
-		let mut http_labels = HTTPLabels {
+		let route_identifier = RouteIdentifier {
 			bind: (&log.bind_name).into(),
 			gateway: (&log.gateway_name).into(),
 			listener: (&log.listener_name).into(),
 			route: (&log.route_name).into(),
 			route_rule: (&log.route_rule_name).into(),
-			backend: (&log.backend_name).into(),
+		};
+
+		let is_tcp = matches!(&log.backend_protocol, &Some(cel::BackendProtocol::tcp));
+
+		let mut http_labels = HTTPLabels {
+			backend: log
+				.backend_info
+				.as_ref()
+				.map(|info| info.backend_name.clone())
+				.into(),
+			protocol: log.backend_protocol.into(),
+			route: route_identifier.clone(),
 			method: log.method.clone().into(),
 			status: log.status.as_ref().map(|s| s.as_u16()).into(),
+			reason: log.reason.into(),
 			custom: CustomField::default(),
 		};
 
-		let enable_custom_metrics = log.cel.metric_fields.add.len() > 0;
+		let enable_custom_metrics = !log.cel.metric_fields.add.is_empty();
 
 		let enable_trace = log.tracer.is_some();
 		// We will later check it also matches a filter, but filter is slower
 		let maybe_enable_log = agent_core::telemetry::enabled("request", &Level::INFO);
 		if !maybe_enable_log && !enable_trace && !enable_custom_metrics {
 			// Report our non-customized metrics
-			log.metrics.requests.get_or_create(&http_labels).inc();
+			if !is_tcp {
+				log.metrics.requests.get_or_create(&http_labels).inc();
+			}
 			return;
 		}
 
 		let end_time = Instant::now();
+		log
+			.cel
+			.cel_context
+			.with_request_completion(agent_core::telemetry::render_current_time());
 		let duration = end_time - log.start;
 		if let Some(rh) = log.request_handle.take() {
 			let status = log
@@ -554,62 +680,49 @@ impl Drop for DropOnLog {
 				}),
 		);
 		http_labels.custom = custom_metric_fields.clone();
-		log.metrics.requests.get_or_create(&http_labels).inc();
-
-		if let Some(llm_response) = &llm_response {
-			let gen_ai_labels = Arc::new(GenAILabels {
-				gen_ai_operation_name: strng::literal!("chat").into(),
-				// TODO: map this properly
-				gen_ai_system: llm_response.request.provider.clone().into(),
-				gen_ai_request_model: llm_response.request.request_model.clone().into(),
-				gen_ai_response_model: llm_response.provider_model.clone().into(),
-				custom: custom_metric_fields.clone(),
-			});
-			if let Some(it) = llm_response.input_tokens() {
-				log
-					.metrics
-					.gen_ai_token_usage
-					.get_or_create(&GenAILabelsTokenUsage {
-						gen_ai_token_type: strng::literal!("input").into(),
-						common: gen_ai_labels.clone().into(),
-					})
-					.observe(it as f64)
-			}
-			if let Some(ot) = llm_response.output_tokens {
-				log
-					.metrics
-					.gen_ai_token_usage
-					.get_or_create(&GenAILabelsTokenUsage {
-						gen_ai_token_type: strng::literal!("output").into(),
-						common: gen_ai_labels.clone().into(),
-					})
-					.observe(ot as f64)
-			}
+		if !is_tcp {
+			log.metrics.requests.get_or_create(&http_labels).inc();
+		}
+		if log.response_bytes > 0 {
 			log
 				.metrics
-				.gen_ai_request_duration
-				.get_or_create(&gen_ai_labels)
-				.observe(duration.as_secs_f64());
-			if let Some(ft) = llm_response.first_token {
-				let ttft = ft - log.start;
-				// Duration from start of request to first token
-				// This is the start of when WE got the request, but it should probably be when we SENT the upstream.
-				log
-					.metrics
-					.gen_ai_time_to_first_token
-					.get_or_create(&gen_ai_labels)
-					.observe(ttft.as_secs_f64());
+				.response_bytes
+				.get_or_create(&http_labels)
+				.inc_by(log.response_bytes);
+		}
+		// Record HTTP request duration for all requests
+		log
+			.metrics
+			.request_duration
+			.get_or_create(&http_labels)
+			.observe(duration.as_secs_f64());
 
-				if let Some(ot) = llm_response.output_tokens {
-					let first_to_last = end_time - ft;
-					let throughput = first_to_last.as_secs_f64() / (ot as f64);
-					log
-						.metrics
-						.gen_ai_time_per_output_token
-						.get_or_create(&gen_ai_labels)
-						.observe(throughput);
-				}
-			}
+		Self::add_llm_metrics(
+			&log,
+			&route_identifier,
+			end_time,
+			duration,
+			&llm_response,
+			&custom_metric_fields,
+		);
+		let mcp = log.mcp_status.take();
+		if let Some(mcp) = &mcp
+			&& mcp.method_name.is_some()
+		{
+			// Check mcp.method_name is set, so we don't count things like GET and DELETE
+			log
+				.metrics
+				.mcp_requests
+				.get_or_create(&MCPCall {
+					method: mcp.method_name.as_ref().map(RichStrng::from).into(),
+					resource_type: mcp.resource.into(),
+					server: mcp.target_name.as_ref().map(RichStrng::from).into(),
+					resource: mcp.resource_name.as_ref().map(RichStrng::from).into(),
+
+					route: route_identifier.clone(),
+					custom: custom_metric_fields.clone(),
+				})
+				.inc();
 		}
 
 		let enable_logs = maybe_enable_log && cel_exec.eval_filter();
@@ -622,12 +735,10 @@ impl Drop for DropOnLog {
 
 		let input_tokens = llm_response.as_ref().and_then(|l| l.input_tokens());
 
-		let mcp = log.mcp_status.take();
-
 		let trace_id = log.outgoing_span.as_ref().map(|id| id.trace_id());
 		let span_id = log.outgoing_span.as_ref().map(|id| id.span_id());
 
-		let fields = cel_exec.fields.as_ref();
+		let fields = cel_exec.fields;
 
 		let mut kv = vec![
 			("gateway", log.gateway_name.display()),
@@ -646,10 +757,26 @@ impl Drop for DropOnLog {
 				log.status.as_ref().map(|s| s.as_u16().into()),
 			),
 			("grpc.status", grpc.map(Into::into)),
+			(
+				"tls.sni",
+				if log.host.is_none() {
+					log.tls_info.as_ref().and_then(|s| s.server_name.display())
+				} else {
+					None
+				},
+			),
 			("trace.id", trace_id.display()),
 			("span.id", span_id.display()),
 			("jwt.sub", log.jwt_sub.display()),
+			("protocol", log.backend_protocol.as_ref().map(debug)),
 			("a2a.method", log.a2a_method.display()),
+			(
+				"mcp.method",
+				mcp
+					.as_ref()
+					.and_then(|m| m.method_name.as_ref())
+					.map(display),
+			),
 			(
 				"mcp.target",
 				mcp
@@ -658,40 +785,97 @@ impl Drop for DropOnLog {
 					.map(display),
 			),
 			(
-				"mcp.tool",
+				"mcp.resource.type",
+				mcp.as_ref().and_then(|m| m.resource.as_ref()).map(display),
+			),
+			(
+				"mcp.resource.name",
 				mcp
 					.as_ref()
-					.and_then(|m| m.tool_call_name.as_ref())
+					.and_then(|m| m.resource_name.as_ref())
 					.map(display),
 			),
 			(
 				"inferencepool.selected_endpoint",
 				log.inference_pool.display(),
 			),
+			// OpenTelemetry Gen AI Semantic Conventions v1.37.0
 			(
-				"llm.provider",
+				"gen_ai.operation.name",
+				log.llm_request.as_ref().map(|_| "chat".into()),
+			),
+			(
+				"gen_ai.provider.name",
 				log.llm_request.as_ref().map(|l| display(&l.provider)),
 			),
 			(
-				"llm.request.model",
+				"gen_ai.request.model",
 				log.llm_request.as_ref().map(|l| display(&l.request_model)),
 			),
-			("llm.request.tokens", input_tokens.map(Into::into)),
 			(
-				"llm.response.model",
+				"gen_ai.response.model",
 				llm_response
 					.as_ref()
-					.and_then(|l| l.provider_model.display()),
+					.and_then(|l| l.response.provider_model.display()),
+			),
+			("gen_ai.usage.input_tokens", input_tokens.map(Into::into)),
+			(
+				"gen_ai.usage.output_tokens",
+				llm_response
+					.as_ref()
+					.and_then(|l| l.response.output_tokens)
+					.map(Into::into),
 			),
 			(
-				"llm.response.tokens",
-				llm_response
+				"gen_ai.request.temperature",
+				log
+					.llm_request
 					.as_ref()
-					.and_then(|l| l.output_tokens)
+					.and_then(|l| l.params.temperature)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.top_p",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.top_p)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.max_tokens",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.max_tokens)
+					.map(|v| (v as i64).into()),
+			),
+			(
+				"gen_ai.request.frequency_penalty",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.frequency_penalty)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.presence_penalty",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.presence_penalty)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.seed",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.seed)
 					.map(Into::into),
 			),
 			("retry.attempt", log.retry_attempt.display()),
-			("error", log.error.display()),
+			("error", log.error.quoted()),
 			("duration", Some(dur.as_str().into())),
 		];
 		if enable_trace && let Some(t) = &log.tracer {
@@ -755,6 +939,12 @@ where
 					&& let Some(grpc) = this.log.as_mut().map(|log| log.grpc_status.clone())
 				{
 					crate::proxy::httpproxy::maybe_set_grpc_status(&grpc, trailer);
+				}
+				if let Some(log) = this.log.as_mut()
+					&& let Some(data) = frame.data_ref()
+				{
+					// Count the bytes in this data frame
+					log.response_bytes = log.response_bytes.saturating_add(data.remaining() as u64);
 				}
 				Poll::Ready(Some(Ok(frame)))
 			},

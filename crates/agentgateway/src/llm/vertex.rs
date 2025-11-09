@@ -18,28 +18,11 @@ pub struct Provider {
 }
 
 impl super::Provider for Provider {
-	const NAME: Strng = strng::literal!("vertex");
+	const NAME: Strng = strng::literal!("gcp.vertex_ai");
 }
 
 impl Provider {
-	pub async fn process_request(
-		&self,
-		mut req: universal::Request,
-	) -> Result<universal::Request, AIError> {
-		if let Some(provider_model) = &self.model {
-			req.model = Some(provider_model.to_string());
-		} else if req.model.is_none() {
-			return Err(AIError::MissingField("model not specified".into()));
-		}
-		// Gemini compat mode is the same!
-		Ok(req)
-	}
-	pub async fn process_response(&self, bytes: &Bytes) -> Result<universal::Response, AIError> {
-		let resp =
-			serde_json::from_slice::<universal::Response>(bytes).map_err(AIError::ResponseParsing)?;
-		Ok(resp)
-	}
-	pub async fn process_error(
+	pub fn process_error(
 		&self,
 		bytes: &Bytes,
 	) -> Result<universal::ChatCompletionErrorResponse, AIError> {

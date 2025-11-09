@@ -17,12 +17,13 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// A Connector for the `https` scheme.
 #[derive(Clone)]
-pub struct HttpsConnector {
+pub struct TLSConnector {
 	pub tls_config: Arc<rustls::ClientConfig>,
 	pub server_name: ServerName<'static>,
+	pub backend_config: Arc<crate::BackendConfig>,
 }
 
-impl Service<SocketAddr> for HttpsConnector {
+impl Service<SocketAddr> for TLSConnector {
 	type Response = Socket;
 	type Error = BoxError;
 
@@ -41,7 +42,7 @@ impl Service<SocketAddr> for HttpsConnector {
 			alpn=?cfg.alpn_protocols.iter().map(|bytes| String::from_utf8_lossy(bytes.as_slice())).collect_vec(),
 			"connecting tls");
 
-		let connecting_future = Socket::dial(dst);
+		let connecting_future = Socket::dial(dst, self.backend_config.clone());
 		Box::pin(async move {
 			let tcp = connecting_future.await?;
 			let (ext, counter, tcp) = tcp.into_parts();
@@ -55,7 +56,7 @@ impl Service<SocketAddr> for HttpsConnector {
 	}
 }
 
-impl fmt::Debug for HttpsConnector {
+impl fmt::Debug for TLSConnector {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		f.debug_struct("HttpsConnector").finish()
 	}

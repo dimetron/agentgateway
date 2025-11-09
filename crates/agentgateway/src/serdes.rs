@@ -243,6 +243,15 @@ where
 	Ok(SecretString::from(k.trim().to_string()))
 }
 
+pub fn deser_key<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let input = String::deserialize(deserializer)?;
+
+	Ok(SecretString::from(input))
+}
+
 pub fn de_as<'de, I, O, D>(deserializer: D) -> Result<O, D::Error>
 where
 	D: Deserializer<'de>,
@@ -315,7 +324,7 @@ impl FileInlineOrRemote {
 					)
 					.await
 					.context(format!("fetch {url}"))?;
-				return crate::json::from_body::<T>(resp.into_body()).await;
+				return crate::json::from_response_body::<T>(resp).await;
 			},
 		};
 		serde_json::from_str(&s).map_err(Into::into)

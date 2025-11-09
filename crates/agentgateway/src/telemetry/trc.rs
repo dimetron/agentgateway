@@ -20,7 +20,7 @@ use crate::telemetry::log::{CelLoggingExecutor, LoggingFields, RequestLog};
 pub struct Tracer {
 	pub tracer: Arc<opentelemetry_sdk::trace::SdkTracer>,
 	pub provider: SdkTracerProvider,
-	pub fields: Arc<LoggingFields>,
+	pub fields: LoggingFields,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Copy, Eq, PartialEq, Clone, Debug)]
@@ -37,7 +37,7 @@ pub struct Config {
 	pub endpoint: Option<String>,
 	pub headers: HashMap<String, String>,
 	pub protocol: Protocol,
-	pub fields: Arc<LoggingFields>,
+	pub fields: LoggingFields,
 	pub random_sampling: Option<Arc<cel::Expression>>,
 	pub client_sampling: Option<Arc<cel::Expression>>,
 }
@@ -139,21 +139,17 @@ impl Tracer {
 		// TODO: we could allow log() to take a list of borrows and then a list of OwnedValueBag
 		let raws = cel_exec.eval(&self.fields.add);
 		let mut span_name = None;
-		for (k, v) in &raws {
-			// TODO: convert directly instead of via json()
+		for (k, v) in raws {
 			if k == "span.name"
 				&& let Some(serde_json::Value::String(s)) = v
 			{
-				span_name = Some(s.clone());
-			} else if let Some(eval) = v.as_ref().map(ValueBag::capture_serde1) {
-				attributes.push(KeyValue::new(Key::new(k.to_string()), to_otel(&eval)));
+				span_name = Some(s);
 			}
 		}
 
-		let span_name = span_name.unwrap_or_else(|| match (&request.method, &request.path) {
-			(Some(method), Some(path)) => {
-				// TODO: should be path match, not the path!
-				format!("{method} {path}")
+		let span_name = span_name.unwrap_or_else(|| match (&request.method, &request.path_match) {
+			(Some(method), Some(path_match)) => {
+				format!("{method} {path_match}")
 			},
 			_ => "unknown".to_string(),
 		});

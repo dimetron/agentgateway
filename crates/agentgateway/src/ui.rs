@@ -54,7 +54,7 @@ impl UiHandler {
 			.layer(add_cors_layer())
 			.with_state(App {
 				state: cfg.clone(),
-				client: client::Client::new(&cfg.dns, None),
+				client: client::Client::new(&cfg.dns, None, Default::default(), None),
 			});
 		Self { router }
 	}
@@ -106,9 +106,12 @@ async fn write_config(
 	let yaml_content =
 		yamlviajson::to_string(&config_json).map_err(|e| ErrorResponse::Anyhow(e.into()))?;
 
-	if let Err(e) =
-		crate::types::local::NormalizedLocalConfig::from(app.client.clone(), yaml_content.as_str())
-			.await
+	if let Err(e) = crate::types::local::NormalizedLocalConfig::from(
+		app.client.clone(),
+		app.state.gateway(),
+		yaml_content.as_str(),
+	)
+	.await
 	{
 		return Err(ErrorResponse::String(e.to_string()));
 	}

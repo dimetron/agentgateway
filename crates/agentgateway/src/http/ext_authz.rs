@@ -6,19 +6,25 @@ use ::http::{HeaderMap, StatusCode, Version};
 use prost_types::Timestamp;
 use serde_json::Value as JsonValue;
 
+use crate::cel::{Executor, Expression};
 use crate::http::ext_authz::proto::attribute_context::HttpRequest;
 use crate::http::ext_authz::proto::authorization_client::AuthorizationClient;
 use crate::http::ext_authz::proto::check_response::HttpResponse;
 use crate::http::ext_authz::proto::{
-	AttributeContext, CheckRequest, DeniedHttpResponse, HeaderValueOption, OkHttpResponse,
+	AttributeContext, CheckRequest, DeniedHttpResponse, HeaderValueOption, Metadata, OkHttpResponse,
 };
 use crate::http::ext_proc::GrpcReferenceChannel;
 use crate::http::{HeaderName, HeaderValue, PolicyResponse, Request};
+use crate::http::{HeaderOrPseudo, jwt};
 use crate::proxy::ProxyError;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent::SimpleBackendReference;
 use crate::{serde_dur_option, *};
+
+#[cfg(test)]
+#[path = "ext_authz_tests.rs"]
+mod tests;
 
 #[allow(warnings)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -68,15 +74,21 @@ pub enum FailureMode {
 pub struct ExtAuthz {
 	/// Reference to the external authorization service backend
 	pub target: Arc<SimpleBackendReference>,
-	/// Additional context to send to the authorization service
+	/// Additional context to send to the authorization service.
+	/// This maps to the `context_extensions` field of the request, and only allows static values.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub context: Option<HashMap<String, String>>,
+	/// Additional metadata to send to the authorization service.
+	/// This maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.
+	/// If unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub metadata: Option<HashMap<String, Arc<cel::Expression>>>,
 	/// Behavior when the authorization service is unavailable or returns an error
 	#[serde(default)]
 	pub failure_mode: FailureMode,
 	/// Specific headers to include in the authorization request (empty = all headers)
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub include_request_headers: Vec<String>,
+	pub include_request_headers: Vec<HeaderOrPseudo>,
 	/// Options for including the request body in the authorization request
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub include_request_body: Option<BodyOptions>,
@@ -98,7 +110,7 @@ impl ExtAuthz {
 				debug!("Allowing request due to FailureMode::Allow configuration");
 				Ok(PolicyResponse::default())
 			},
-			FailureMode::Deny => Err(ProxyError::AuthorizationFailed(None)),
+			FailureMode::Deny => Err(ProxyError::ExternalAuthorizationFailed(None)),
 			FailureMode::DenyWithStatus(status_code) => {
 				let status = StatusCode::from_u16(*status_code).unwrap_or(StatusCode::FORBIDDEN);
 				let resp = ::http::Response::builder()
@@ -113,8 +125,33 @@ impl ExtAuthz {
 		}
 	}
 
+	fn get_header_values(
+		&self,
+		req: &Request,
+		name: &HeaderName,
+		headers: &mut HashMap<String, String>,
+	) {
+		let values: Vec<String> = req
+			.headers()
+			.get_all(name)
+			.iter()
+			.filter_map(|v| v.to_str().ok())
+			.map(|s| s.to_string())
+			.collect();
+
+		if !values.is_empty() {
+			let joined = if name.as_str() == "cookie" {
+				values.join("; ")
+			} else {
+				values.join(", ")
+			};
+			headers.insert(name.as_str().to_string(), joined);
+		}
+	}
+
 	pub async fn check(
 		&self,
+		exec: &Executor<'_>,
 		client: PolicyClient,
 		req: &mut Request,
 	) -> Result<PolicyResponse, ProxyError> {
@@ -139,32 +176,24 @@ impl ExtAuthz {
 		// https://github.com/envoyproxy/envoy/blob/d9e0412bd471a80e0938102c0c8cbff1caedd4cf/source/common/http/header_map_impl.cc#L28-L33
 		let mut headers = std::collections::HashMap::new();
 
-		let header_allowlist: std::collections::HashSet<&str> = self
-			.include_request_headers
-			.iter()
-			.map(|s| s.as_str())
-			.collect();
-
-		for name in req.headers().keys() {
-			if !self.include_request_headers.is_empty() && !header_allowlist.contains(name.as_str()) {
-				continue;
+		if self.include_request_headers.is_empty() {
+			for name in req.headers().keys() {
+				self.get_header_values(req, name, &mut headers);
 			}
-
-			let values: Vec<String> = req
-				.headers()
-				.get_all(name)
-				.iter()
-				.filter_map(|v| v.to_str().ok())
-				.map(|s| s.to_string())
-				.collect();
-
-			if !values.is_empty() {
-				let joined = if name.as_str() == "cookie" {
-					values.join("; ")
-				} else {
-					values.join(", ")
-				};
-				headers.insert(name.as_str().to_string(), joined);
+		} else {
+			// Only include requested headers (both regular and pseudo headers)
+			let pseudo_headers = crate::http::get_request_pseudo_headers(req);
+			for header_spec in &self.include_request_headers {
+				match header_spec {
+					HeaderOrPseudo::Header(header_name) => {
+						self.get_header_values(req, header_name, &mut headers);
+					},
+					pseudo => {
+						if let Some((_, value)) = pseudo_headers.iter().find(|(p, _)| p == pseudo) {
+							headers.insert(header_spec.to_string(), value.clone());
+						}
+					},
+				}
 			}
 		}
 
@@ -295,6 +324,7 @@ impl ExtAuthz {
 				source,
 				destination,
 				request: Some(request),
+				metadata_context: self.build_metadata(exec, req)?,
 				context_extensions: self.context.clone().unwrap_or_default(),
 				tls_session,
 			}),
@@ -359,7 +389,7 @@ impl ExtAuthz {
 					response_headers: None,
 				});
 			}
-			return Err(ProxyError::AuthorizationFailed(None));
+			return Err(ProxyError::ExternalAuthorizationFailed(None));
 		}
 
 		let mut res = PolicyResponse::default();
@@ -385,12 +415,19 @@ impl ExtAuthz {
 					}
 				}
 
+				// Apply pseudo-header mutations first
+				apply_pseudo_headers_to_request(req, &headers);
+
+				// Then process regular headers, excluding host and any pseudo-headers
 				let filtered_headers: Vec<_> = headers
 					.into_iter()
 					.filter(|h| {
 						h.header
 							.as_ref()
-							.map(|hdr| hdr.key.to_lowercase() != "host")
+							.map(|hdr| {
+								let k = hdr.key.as_str();
+								k.to_lowercase() != "host" && !k.starts_with(':')
+							})
 							.unwrap_or(true)
 					})
 					.collect();
@@ -415,10 +452,77 @@ impl ExtAuthz {
 		}
 		Ok(res)
 	}
+
+	fn build_metadata(
+		&self,
+		exec: &Executor,
+		req: &mut Request,
+	) -> Result<Option<Metadata>, ProxyError> {
+		Ok(match &self.metadata {
+			Some(meta) => {
+				let m = meta
+					.iter()
+					.filter_map(|(k, v)| match Self::eval(exec, v) {
+						Ok(r) => Some((k.to_string(), r)),
+						Err(e) => {
+							trace!("failed to evaluate: {e}");
+							None
+						},
+					})
+					.collect();
+				Some(Metadata { filter_metadata: m })
+			},
+			None => {
+				if let Some(jc) = req.extensions().get::<jwt::Claims>() {
+					Some(Metadata {
+						filter_metadata: HashMap::from([(
+							"envoy.filters.http.jwt_authn".to_string(),
+							json_to_struct(serde_json::json!({"jwt_payload": jc.inner.clone()}))?,
+						)]),
+					})
+				} else {
+					None
+				}
+			},
+		})
+	}
+
+	fn eval(exec: &Executor, v: &Expression) -> anyhow::Result<prost_wkt_types::Struct> {
+		let res = exec.eval(v)?;
+		let js = res.json().map_err(|_| cel::Error::JsonConvert)?;
+		let pb = json_to_struct(js)?;
+		Ok(pb)
+	}
 }
 
 fn convert_prost_value_to_json(value: &prost_wkt_types::Value) -> Result<JsonValue, ProxyError> {
 	serde_json::to_value(value).map_err(|e| ProxyError::Processing(e.into()))
+}
+
+fn json_to_struct(value: serde_json::Value) -> Result<prost_wkt_types::Struct, ProxyError> {
+	serde_json::from_value(value).map_err(|e| ProxyError::Processing(e.into()))
+}
+
+/// Apply HTTP/2 pseudo-headers returned by the ext_authz server to the inbound request
+fn apply_pseudo_headers_to_request(req: &mut Request, headers: &[HeaderValueOption]) {
+	for header in headers {
+		let Some(h) = header.header.as_ref() else {
+			continue;
+		};
+		// Only consider pseudo-headers (start with ':') and ignore others
+		if !h.key.starts_with(':') {
+			continue;
+		}
+		if let Ok(pseudo) = HeaderOrPseudo::try_from(h.key.as_str()) {
+			let raw = if !h.raw_value.is_empty() {
+				h.raw_value.as_slice()
+			} else {
+				h.value.as_bytes()
+			};
+			let mut rr = crate::http::RequestOrResponse::Request(req);
+			let _ = crate::http::apply_pseudo(&mut rr, &pseudo, raw);
+		}
+	}
 }
 
 fn process_headers(
@@ -459,209 +563,5 @@ fn process_headers(
 		} else {
 			hm.insert(hn, hv);
 		}
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::http::ext_authz::proto::{HeaderValue as ProtoHeaderValue, HeaderValueOption};
-
-	#[test]
-	fn test_process_headers_with_allowlist() {
-		let mut headers = HeaderMap::new();
-
-		let header_options = vec![
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-allowed".to_string(),
-					value: "allowed-value".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-not-allowed".to_string(),
-					value: "should-be-filtered".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-		];
-
-		// Test with allowlist
-		let allowlist = vec!["x-allowed".to_string()];
-		process_headers(&mut headers, header_options, Some(&allowlist));
-
-		assert_eq!(headers.get("x-allowed").unwrap(), "allowed-value");
-		assert!(headers.get("x-not-allowed").is_none());
-	}
-
-	#[test]
-	fn test_process_headers() {
-		let mut headers = HeaderMap::new();
-
-		let header_options = vec![
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-custom-header".to_string(),
-					value: "test-value".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-append-header".to_string(),
-					value: "value1".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-append-header".to_string(),
-					value: "value2".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(true),
-			},
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-raw-header".to_string(),
-					value: "ignored".to_string(),
-					raw_value: b"raw-value".to_vec(),
-				}),
-				append: Some(false),
-			},
-		];
-
-		process_headers(&mut headers, header_options, None);
-
-		assert_eq!(headers.get("x-custom-header").unwrap(), "test-value");
-		assert_eq!(headers.get("x-raw-header").unwrap(), "raw-value");
-
-		let append_values: Vec<_> = headers.get_all("x-append-header").iter().collect();
-		assert_eq!(append_values.len(), 2);
-		assert_eq!(append_values[0], "value1");
-		assert_eq!(append_values[1], "value2");
-	}
-
-	#[test]
-	fn test_body_truncation() {
-		let body_opts = BodyOptions {
-			max_request_bytes: 10,
-			allow_partial_message: true,
-			pack_as_bytes: false,
-		};
-
-		// Test truncation
-		let long_body = b"This is a very long body that exceeds max size";
-		assert!(long_body.len() > body_opts.max_request_bytes as usize);
-
-		let mut truncated = long_body.to_vec();
-		truncated.truncate(body_opts.max_request_bytes as usize);
-		assert_eq!(truncated.len(), 10);
-		assert_eq!(&truncated, b"This is a ");
-	}
-
-	#[test]
-	fn test_multi_value_headers() {
-		use ::http::Request;
-
-		let req = Request::builder()
-			.header("cookie", "session=abc")
-			.header("cookie", "user=123")
-			.header("x-forwarded-for", "10.0.0.1")
-			.header("x-forwarded-for", "10.0.0.2")
-			.body(http::Body::empty())
-			.unwrap();
-
-		// Collect all cookie values
-		let cookies: Vec<_> = req
-			.headers()
-			.get_all("cookie")
-			.iter()
-			.filter_map(|v| v.to_str().ok())
-			.collect();
-		assert_eq!(cookies.len(), 2);
-		assert_eq!(cookies[0], "session=abc");
-		assert_eq!(cookies[1], "user=123");
-
-		// Test joining with semicolon for cookies
-		let joined = cookies.join("; ");
-		assert_eq!(joined, "session=abc; user=123");
-	}
-
-	#[test]
-	fn test_pseudo_header_protection() {
-		let headers_to_remove = [
-			":method".to_string(),
-			":path".to_string(),
-			"host".to_string(),
-			"Host".to_string(),
-			"content-type".to_string(),
-		];
-
-		// Only non-pseudo and non-host headers should be removable
-		let removable: Vec<_> = headers_to_remove
-			.iter()
-			.filter(|h| !h.starts_with(':') && h.to_lowercase() != "host")
-			.collect();
-
-		assert_eq!(removable.len(), 1);
-		assert_eq!(removable[0], "content-type");
-	}
-
-	#[test]
-	fn test_host_header_protection() {
-		// Test that host header cannot be added through upstream headers
-		let header_options = vec![
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "host".to_string(),
-					value: "evil.com".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-			HeaderValueOption {
-				header: Some(ProtoHeaderValue {
-					key: "x-custom".to_string(),
-					value: "allowed".to_string(),
-					raw_value: vec![],
-				}),
-				append: Some(false),
-			},
-		];
-
-		// Filter out host header
-		let filtered: Vec<_> = header_options
-			.into_iter()
-			.filter(|h| {
-				h.header
-					.as_ref()
-					.map(|hdr| hdr.key.to_lowercase() != "host")
-					.unwrap_or(false)
-			})
-			.collect();
-
-		assert_eq!(filtered.len(), 1);
-		assert_eq!(filtered[0].header.as_ref().unwrap().key, "x-custom");
-	}
-
-	#[test]
-	fn test_dynamic_metadata_extraction() {
-		let mut metadata = ExtAuthzDynamicMetadata::default();
-
-		metadata
-			.metadata
-			.insert("user_id".to_string(), serde_json::json!("12345"));
-		metadata
-			.metadata
-			.insert("role".to_string(), serde_json::json!("admin"));
-		assert_eq!(metadata.metadata.get("user_id").unwrap(), "12345");
-		assert_eq!(metadata.metadata.get("role").unwrap(), "admin");
 	}
 }

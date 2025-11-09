@@ -27,6 +27,7 @@ pub async fn run_with_drain<F, O>(
 	component: String,
 	drain: DrainWatcher,
 	deadline: Duration,
+	min_delay: Duration,
 	make_future: F,
 ) where
 	F: AsyncFnOnce(DrainWatcher, watch::Receiver<()>) -> O,
@@ -44,15 +45,23 @@ pub async fn run_with_drain<F, O>(
 		if res.mode() == DrainMode::Graceful {
 			info!(
 				component,
-				"drain started, waiting {:?} for any connections to complete", deadline
+				"drain started, waiting {:?}-{:?} for any connections to complete", min_delay, deadline
 			);
-			if tokio::time::timeout(
+			// Due to https://github.com/hyperium/hyper/issues/3961, we are forced to not start the drain until after
+			// the deadline.
+			// If this feature is implemented, we can instead join!() the min_delay and `start_drain_and_wait`.
+			tokio::time::sleep(min_delay).await;
+			info!(
+				component,
+				"minimum drain completed, waiting, not accepting new connections and waiting {:?} for any connections to complete",
+				deadline
+			);
+			let res = tokio::time::timeout(
 				deadline,
 				sub_drain_signal.start_drain_and_wait(DrainMode::Graceful),
 			)
-			.await
-			.is_err()
-			{
+			.await;
+			if res.is_err() {
 				// Not all connections completed within time, we will force shut them down
 				warn!(
 					component,

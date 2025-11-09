@@ -36,6 +36,8 @@ pub mod serdes;
 pub mod state_manager;
 pub mod store;
 mod telemetry;
+#[cfg(any(test, feature = "internal_benches"))]
+pub mod test_helpers;
 pub mod transport;
 pub mod types;
 #[cfg(feature = "ui")]
@@ -45,7 +47,9 @@ pub mod util;
 use control::caclient;
 use telemetry::{metrics, trc};
 
+use crate::control::{AuthSource, RootCert};
 use crate::telemetry::trc::Protocol;
+use crate::types::agent::GatewayName;
 
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +70,9 @@ pub struct RawConfig {
 	local_xds_path: Option<PathBuf>,
 
 	ca_address: Option<String>,
+	ca_auth_token: Option<String>,
 	xds_address: Option<String>,
+	xds_auth_token: Option<String>,
 	namespace: Option<String>,
 	gateway: Option<String>,
 	trust_domain: Option<String>,
@@ -80,8 +86,6 @@ pub struct RawConfig {
 	stats_addr: Option<String>,
 	/// Readiness probe server address in the format "ip:port"
 	readiness_addr: Option<String>,
-
-	auth_token: Option<String>,
 
 	#[serde(default, with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
@@ -97,16 +101,74 @@ pub struct RawConfig {
 	logging: Option<RawLogging>,
 	metrics: Option<RawMetrics>,
 
-	http2: Option<RawHTTP2>,
+	#[serde(default)]
+	backend: BackendConfig,
+
+	hbone: Option<RawHBONE>,
+}
+
+#[apply(schema!)]
+pub struct BackendConfig {
+	#[serde(default)]
+	keepalives: types::agent::KeepaliveConfig,
+	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	#[serde(default = "defaults::connect_timeout")]
+	connect_timeout: Duration,
+	/// The maximum duration to keep an idle connection alive.
+	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	#[serde(default = "defaults::pool_idle_timeout")]
+	pool_idle_timeout: Duration,
+	/// The maximum number of connections allowed in the pool, per hostname. If set, this will limit
+	/// the total number of connections kept alive to any given host.
+	/// Note: excess connections will still be created, they will just not remain idle.
+	/// If unset, there is no limit
+	#[serde(default)]
+	pool_max_size: Option<usize>,
+}
+
+impl Default for BackendConfig {
+	fn default() -> Self {
+		crate::BackendConfig {
+			keepalives: Default::default(),
+			connect_timeout: defaults::connect_timeout(),
+			pool_idle_timeout: defaults::pool_idle_timeout(),
+			pool_max_size: None,
+		}
+	}
+}
+
+mod defaults {
+	use std::time::Duration;
+
+	pub fn connect_timeout() -> Duration {
+		Duration::from_secs(10)
+	}
+	pub fn pool_idle_timeout() -> Duration {
+		Duration::from_secs(90)
+	}
+
+	pub fn max_buffer_size() -> usize {
+		2_097_152
+	}
+
+	pub fn tls_handshake_timeout() -> Duration {
+		Duration::from_secs(15)
+	}
+	pub fn http1_idle_timeout() -> Duration {
+		// Default to 10 minutes
+		Duration::from_secs(60 * 10)
+	}
 }
 
 #[apply(schema_de!)]
-pub struct RawHTTP2 {
+pub struct RawHBONE {
 	window_size: Option<u32>,
 	connection_window_size: Option<u32>,
 	frame_size: Option<u32>,
 	pool_max_streams_per_conn: Option<u16>,
-	#[serde(deserialize_with = "serde_dur_option::deserialize")]
+	#[serde(with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	pool_unused_release_timeout: Option<Duration>,
 }
@@ -135,10 +197,29 @@ pub struct RawTracing {
 pub struct RawLogging {
 	filter: Option<String>,
 	fields: Option<RawLoggingFields>,
+	level: Option<RawLoggingLevel>,
+	format: Option<LoggingFormat>,
+}
+
+#[apply(schema_de!)]
+#[serde(untagged)]
+pub enum RawLoggingLevel {
+	Single(String),
+	List(Vec<String>),
+}
+
+#[apply(schema!)]
+#[derive(Default, Eq, PartialEq)]
+pub enum LoggingFormat {
+	#[default]
+	Text,
+	Json,
 }
 
 #[apply(schema_de!)]
 pub struct RawMetrics {
+	#[serde(default)]
+	remove: Vec<String>,
 	fields: Option<RawMetricFields>,
 }
 
@@ -276,6 +357,14 @@ pub struct Config {
 	pub dns: client::Config,
 	pub proxy_metadata: ProxyMetadata,
 	pub threading_mode: ThreadingMode,
+
+	pub backend: BackendConfig,
+}
+
+impl Config {
+	pub fn gateway(&self) -> GatewayName {
+		strng::format!("{}/{}", self.xds.namespace, self.xds.gateway)
+	}
 }
 
 #[derive(serde::Serialize, Copy, PartialOrd, PartialEq, Eq, Clone, Debug, Default)]
@@ -292,6 +381,8 @@ pub enum ThreadingMode {
 pub struct XDSConfig {
 	/// XDS address to use. If unset, XDS will not be used.
 	pub address: Option<String>,
+	pub auth: AuthSource,
+	pub ca_cert: RootCert,
 	pub namespace: String,
 	pub gateway: String,
 
@@ -347,7 +438,7 @@ pub struct ProxyInputs {
 	metrics: Arc<metrics::Metrics>,
 	tracer: Option<trc::Tracer>,
 
-	mcp_state: mcp::sse::App,
+	mcp_state: mcp::App,
 	ca: Option<Arc<CaClient>>,
 }
 

@@ -3,10 +3,11 @@ DOCKER_REGISTRY ?= ghcr.io
 DOCKER_REPO ?= agentgateway
 IMAGE_NAME ?= agentgateway
 VERSION ?= $(shell git describe --tags --always --dirty)
+GIT_REVISION ?= $(shell git rev-parse HEAD)
 IMAGE_TAG ?= $(VERSION)
 IMAGE_FULL_NAME ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO)/$(IMAGE_NAME):$(IMAGE_TAG)
 DOCKER_BUILDER ?= docker
-DOCKER_BUILD_ARGS ?=
+DOCKER_BUILD_ARGS ?= --build-arg VERSION=$(VERSION) --build-arg GIT_REVISION=$(GIT_REVISION)
 KIND_CLUSTER_NAME ?= agentgateway
 
 # docker
@@ -77,7 +78,7 @@ generate-apis:
 ifeq ($(OS),Windows_NT)
 	@powershell -ExecutionPolicy Bypass -Command common/tools/buf.ps1 generate --path crates/agentgateway/proto/resource.proto --path crates/agentgateway/proto/workload.proto
 else
-	@PATH=./common/tools:$(PATH) buf generate --path crates/agentgateway/proto/resource.proto --path crates/agentgateway/proto/workload.proto
+	@PATH="./common/tools:$(PATH)" buf generate --path crates/agentgateway/proto/resource.proto --path crates/agentgateway/proto/workload.proto
 endif
 
 .PHONY: run-validation-deps

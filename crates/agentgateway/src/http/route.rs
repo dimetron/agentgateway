@@ -1,9 +1,8 @@
+use agent_core::strng;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-
-use agent_core::strng;
 
 use crate::http::Request;
 use crate::types::agent;
@@ -100,16 +99,14 @@ pub fn select_best_route(
 			rule_name: None,
 			hostnames: vec![],
 			matches: vec![],
-			filters: vec![],
 			inline_policies: vec![],
-			policies: None,
 			backends: vec![RouteBackendReference {
 				weight: 1,
 				backend: BackendReference::Service {
 					name: svc.namespaced_hostname(),
 					port: dst.port(), // TODO: get from req
 				},
-				filters: Vec::new(),
+				inline_policies: Vec::new(),
 			}],
 		};
 		// If there is no route, use a default one
@@ -207,8 +204,7 @@ pub fn select_best_route(
 			true
 		});
 		if let Some((route, matcher)) = best_match {
-			// TODO
-			return Some((Arc::new(route.clone()), matcher.path.clone()));
+			return Some((route, matcher.path.clone()));
 		}
 	}
 	default_response

@@ -9,7 +9,9 @@ This folder contains JSON schemas for various parts of the project
 |`config.enableIpv6`||
 |`config.localXdsPath`|Local XDS path. If not specified, the current configuration file will be used.|
 |`config.caAddress`||
+|`config.caAuthToken`||
 |`config.xdsAddress`||
+|`config.xdsAuthToken`||
 |`config.namespace`||
 |`config.gateway`||
 |`config.trustDomain`||
@@ -19,7 +21,6 @@ This folder contains JSON schemas for various parts of the project
 |`config.adminAddr`|Admin UI address in the format "ip:port"|
 |`config.statsAddr`|Stats/metrics server address in the format "ip:port"|
 |`config.readinessAddr`|Readiness probe server address in the format "ip:port"|
-|`config.authToken`||
 |`config.connectionTerminationDeadline`||
 |`config.connectionMinTerminationDeadline`||
 |`config.workerThreads`||
@@ -37,15 +38,27 @@ This folder contains JSON schemas for various parts of the project
 |`config.logging.fields`||
 |`config.logging.fields.remove`||
 |`config.logging.fields.add`||
+|`config.logging.level`||
+|`config.logging.format`||
 |`config.metrics`||
+|`config.metrics.remove`||
 |`config.metrics.fields`||
 |`config.metrics.fields.add`||
-|`config.http2`||
-|`config.http2.windowSize`||
-|`config.http2.connectionWindowSize`||
-|`config.http2.frameSize`||
-|`config.http2.poolMaxStreamsPerConn`||
-|`config.http2.poolUnusedReleaseTimeout`||
+|`config.backend`||
+|`config.backend.keepalives`||
+|`config.backend.keepalives.enabled`||
+|`config.backend.keepalives.time`||
+|`config.backend.keepalives.interval`||
+|`config.backend.keepalives.retries`||
+|`config.backend.connectTimeout`||
+|`config.backend.poolIdleTimeout`|The maximum duration to keep an idle connection alive.|
+|`config.backend.poolMaxSize`|The maximum number of connections allowed in the pool, per hostname. If set, this will limit<br>the total number of connections kept alive to any given host.<br>Note: excess connections will still be created, they will just not remain idle.<br>If unset, there is no limit|
+|`config.hbone`||
+|`config.hbone.windowSize`||
+|`config.hbone.connectionWindowSize`||
+|`config.hbone.frameSize`||
+|`config.hbone.poolMaxStreamsPerConn`||
+|`config.hbone.poolUnusedReleaseTimeout`||
 |`binds`||
 |`binds[].port`||
 |`binds[].listeners`||
@@ -134,7 +147,6 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.mcpAuthentication.provider.(any)(1)auth0`||
 |`binds[].listeners[].routes[].policies.mcpAuthentication.provider.(any)(1)keycloak`||
 |`binds[].listeners[].routes[].policies.mcpAuthentication.resourceMetadata`||
-|`binds[].listeners[].routes[].policies.mcpAuthentication.resourceMetadata.resource`||
 |`binds[].listeners[].routes[].policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].policies.ai`|Mark this as LLM traffic to enable LLM processing.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard`||
@@ -142,12 +154,20 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.body`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.status`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.headers.add`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.headers.set`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.rejection.headers.remove`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.body`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.remove`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.rules`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.rules[].(any)builtin`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request.regex.rules[].(any)pattern`||
@@ -172,6 +192,10 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.body`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.remove`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.rules`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.rules[].(any)builtin`||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response.regex.rules[].(any)pattern`||
@@ -187,11 +211,17 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.ai.overrides`||
 |`binds[].listeners[].routes[].policies.ai.prompts`||
 |`binds[].listeners[].routes[].policies.ai.prompts.append`||
-|`binds[].listeners[].routes[].policies.ai.prompts.append.role`||
-|`binds[].listeners[].routes[].policies.ai.prompts.append.content`||
+|`binds[].listeners[].routes[].policies.ai.prompts.append[].role`||
+|`binds[].listeners[].routes[].policies.ai.prompts.append[].content`||
 |`binds[].listeners[].routes[].policies.ai.prompts.prepend`||
-|`binds[].listeners[].routes[].policies.ai.prompts.prepend.role`||
-|`binds[].listeners[].routes[].policies.ai.prompts.prepend.content`||
+|`binds[].listeners[].routes[].policies.ai.prompts.prepend[].role`||
+|`binds[].listeners[].routes[].policies.ai.prompts.prepend[].content`||
+|`binds[].listeners[].routes[].policies.ai.modelAliases`||
+|`binds[].listeners[].routes[].policies.ai.promptCaching`||
+|`binds[].listeners[].routes[].policies.ai.promptCaching.cacheSystem`||
+|`binds[].listeners[].routes[].policies.ai.promptCaching.cacheMessages`||
+|`binds[].listeners[].routes[].policies.ai.promptCaching.cacheTools`||
+|`binds[].listeners[].routes[].policies.ai.promptCaching.minTokens`||
 |`binds[].listeners[].routes[].policies.backendTLS`|Send TLS to the backend.|
 |`binds[].listeners[].routes[].policies.backendTLS.cert`||
 |`binds[].listeners[].routes[].policies.backendTLS.key`||
@@ -199,6 +229,7 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.backendTLS.hostname`||
 |`binds[].listeners[].routes[].policies.backendTLS.insecure`||
 |`binds[].listeners[].routes[].policies.backendTLS.insecureHost`||
+|`binds[].listeners[].routes[].policies.backendTLS.alpn`||
 |`binds[].listeners[].routes[].policies.backendAuth`|Authenticate to the backend.|
 |`binds[].listeners[].routes[].policies.backendAuth.(any)(1)passthrough`||
 |`binds[].listeners[].routes[].policies.backendAuth.(any)(1)key`||
@@ -209,6 +240,19 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
 |`binds[].listeners[].routes[].policies.backendAuth.(any)(1)aws.(any)region`||
 |`binds[].listeners[].routes[].policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`binds[].listeners[].routes[].policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
 |`binds[].listeners[].routes[].policies.localRateLimit`|Rate limit incoming requests. State is kept local.|
 |`binds[].listeners[].routes[].policies.localRateLimit[].maxTokens`||
 |`binds[].listeners[].routes[].policies.localRateLimit[].tokensPerFill`||
@@ -241,6 +285,16 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.jwtAuth.(any)(any)jwks`||
 |`binds[].listeners[].routes[].policies.jwtAuth.(any)(any)jwks.(any)file`||
 |`binds[].listeners[].routes[].policies.jwtAuth.(any)(any)jwks.(any)url`||
+|`binds[].listeners[].routes[].policies.basicAuth`|Authenticate incoming requests using Basic Authentication with htpasswd.|
+|`binds[].listeners[].routes[].policies.basicAuth.htpasswd`|.htpasswd file contents/reference|
+|`binds[].listeners[].routes[].policies.basicAuth.htpasswd.(any)file`||
+|`binds[].listeners[].routes[].policies.basicAuth.realm`|Realm name for the WWW-Authenticate header|
+|`binds[].listeners[].routes[].policies.basicAuth.mode`|Validation mode for basic authentication|
+|`binds[].listeners[].routes[].policies.apiKey`|Authenticate incoming requests using API Keys|
+|`binds[].listeners[].routes[].policies.apiKey.keys`|List of API keys|
+|`binds[].listeners[].routes[].policies.apiKey.keys[].key`||
+|`binds[].listeners[].routes[].policies.apiKey.keys[].metadata`||
+|`binds[].listeners[].routes[].policies.apiKey.mode`|Validation mode for API keys|
 |`binds[].listeners[].routes[].policies.extAuthz`|Authenticate incoming requests by calling an external authorization server.|
 |`binds[].listeners[].routes[].policies.extAuthz.(any)(1)service`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)(1)service.name`||
@@ -249,8 +303,21 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.extAuthz.(any)(1)service.port`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)(1)host`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)context`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)metadata`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)failOpen`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)statusOnError`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
+|`binds[].listeners[].routes[].policies.extProc`|Extend agentgateway with an external processor|
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)service`||
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)service.name`||
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)service.name.namespace`||
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)service.name.hostname`||
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)service.port`||
+|`binds[].listeners[].routes[].policies.extProc.(any)(1)host`||
+|`binds[].listeners[].routes[].policies.extProc.(any)failureMode`||
 |`binds[].listeners[].routes[].policies.transformations`|Modify requests and responses|
 |`binds[].listeners[].routes[].policies.transformations.request`||
 |`binds[].listeners[].routes[].policies.transformations.request.add`||
@@ -262,6 +329,8 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.transformations.response.set`||
 |`binds[].listeners[].routes[].policies.transformations.response.remove`||
 |`binds[].listeners[].routes[].policies.transformations.response.body`||
+|`binds[].listeners[].routes[].policies.csrf`|Handle CSRF protection by validating request origins against configured allowed origins.|
+|`binds[].listeners[].routes[].policies.csrf.additionalOrigins`||
 |`binds[].listeners[].routes[].policies.timeout`|Timeout requests that exceed the configured duration.|
 |`binds[].listeners[].routes[].policies.timeout.requestTimeout`||
 |`binds[].listeners[].routes[].policies.timeout.backendRequestTimeout`||
@@ -298,6 +367,7 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].backends[].(1)mcp.targets[].(1)openapi.schema`||
 |`binds[].listeners[].routes[].backends[].(1)mcp.targets[].name`||
 |`binds[].listeners[].routes[].backends[].(1)mcp.statefulMode`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.prefixMode`||
 |`binds[].listeners[].routes[].backends[].(1)ai`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)name`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)provider`||
@@ -316,26 +386,141 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)bedrock.region`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)bedrock.guardrailIdentifier`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)bedrock.guardrailVersion`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)azureOpenAI`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)azureOpenAI.model`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)azureOpenAI.host`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)provider.(1)azureOpenAI.apiVersion`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)hostOverride`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)pathOverride`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)tokenize`|Whether to tokenize on the request flow. This enables us to do more accurate rate limits,<br>since we know (part of) the cost of the request upfront.<br>This comes with the cost of an expensive operation.|
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.cert`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.key`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.root`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.hostname`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.insecure`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendTLS.insecureHost`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)passthrough`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)key`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)key.(any)file`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)gcp`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)aws`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)aws.(any)accessKeyId`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)aws.(any)secretAccessKey`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)aws.(any)region`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)routes`|Routes defines how to identify the type of traffic we should handle<br>The keys are URL suffix matches, like `/v1/models`. The special `*` can be used to match anything.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.responseHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.responseHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.responseHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.scheme`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.authority`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.authority.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.authority.(any)(1)host`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.authority.(any)(1)port`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.path`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.path.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.path.(any)(1)prefix`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.requestRedirect.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.mcpAuthorization`|Authorization policies for MCP access.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.mcpAuthorization.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai`|Mark this as LLM traffic to enable LLM processing.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.rejection.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.target`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration.model`|Model to use. Defaults to `omni-moderation-latest`|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration.auth`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration.auth.(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration.auth.(1)key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.request.openaiModeration.auth.(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.target`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.defaults`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.overrides`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.append`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.append[].role`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.append[].content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.prepend`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.prepend[].role`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.prompts.prepend[].content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.modelAliases`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptCaching`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptCaching.cacheSystem`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptCaching.cacheMessages`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptCaching.cacheTools`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.ai.promptCaching.minTokens`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS`|Send TLS to the backend.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.cert`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.root`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.hostname`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.insecure`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.insecureHost`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendTLS.alpn`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth`|Authenticate to the backend.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)gcp`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)aws`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)aws.(any)region`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].name`||
@@ -355,49 +540,382 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)bedrock.region`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)bedrock.guardrailIdentifier`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)bedrock.guardrailVersion`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)azureOpenAI`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)azureOpenAI.model`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)azureOpenAI.host`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].provider.(1)azureOpenAI.apiVersion`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].hostOverride`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].pathOverride`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].tokenize`|Whether to tokenize on the request flow. This enables us to do more accurate rate limits,<br>since we know (part of) the cost of the request upfront.<br>This comes with the cost of an expensive operation.|
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.cert`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.key`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.root`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.hostname`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.insecure`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendTLS.insecureHost`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)passthrough`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)key`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)key.(any)file`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)gcp`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)aws`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)aws.(any)accessKeyId`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)aws.(any)secretAccessKey`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)aws.(any)region`||
-|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].routes`|Routes defines how to identify the type of traffic we should handle<br>The keys are URL suffix matches, like `/v1/models`. The special `*` can be used to match anything.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.responseHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.responseHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.responseHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.scheme`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.authority`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.authority.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.authority.(any)(1)host`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.authority.(any)(1)port`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.path`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.path.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.path.(any)(1)prefix`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.requestRedirect.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.mcpAuthorization`|Authorization policies for MCP access.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.mcpAuthorization.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai`|Mark this as LLM traffic to enable LLM processing.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.rejection.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.target`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration.model`|Model to use. Defaults to `omni-moderation-latest`|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration.auth`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration.auth.(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration.auth.(1)key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.request.openaiModeration.auth.(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.rules`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.target`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.defaults`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.overrides`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.append`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.append[].role`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.append[].content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.prepend`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.prepend[].role`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.prompts.prepend[].content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.modelAliases`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptCaching`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptCaching.cacheSystem`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptCaching.cacheMessages`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptCaching.cacheTools`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.ai.promptCaching.minTokens`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS`|Send TLS to the backend.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.cert`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.root`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.hostname`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.insecure`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.insecureHost`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendTLS.alpn`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth`|Authenticate to the backend.|
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)key`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)gcp`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)aws`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)aws.(any)region`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
 |`binds[].listeners[].routes[].backends[].weight`||
+|`binds[].listeners[].routes[].backends[].policies`||
+|`binds[].listeners[].routes[].backends[].policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`binds[].listeners[].routes[].backends[].policies.requestHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].policies.requestHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].policies.requestHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`binds[].listeners[].routes[].backends[].policies.responseHeaderModifier.add`||
+|`binds[].listeners[].routes[].backends[].policies.responseHeaderModifier.set`||
+|`binds[].listeners[].routes[].backends[].policies.responseHeaderModifier.remove`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.scheme`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.authority`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.authority.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.authority.(any)(1)host`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.authority.(any)(1)port`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.path`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.path.(any)(1)full`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.path.(any)(1)prefix`||
+|`binds[].listeners[].routes[].backends[].policies.requestRedirect.status`||
+|`binds[].listeners[].routes[].backends[].policies.mcpAuthorization`|Authorization policies for MCP access.|
+|`binds[].listeners[].routes[].backends[].policies.mcpAuthorization.rules`||
+|`binds[].listeners[].routes[].backends[].policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
+|`binds[].listeners[].routes[].backends[].policies.ai`|Mark this as LLM traffic to enable LLM processing.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.body`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.status`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.headers.add`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.headers.set`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.rejection.headers.remove`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.rules`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.target`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration.model`|Model to use. Defaults to `omni-moderation-latest`|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration.auth`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration.auth.(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration.auth.(1)key`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request.openaiModeration.auth.(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.body`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.status`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.add`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.set`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.action.(1)reject.response.headers.remove`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.rules`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.rules[].(any)builtin`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.rules[].(any)pattern`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.regex.rules[].(any)name`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.target`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].name`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)exact`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response.webhook.forwardHeaderMatches[].value.(1)regex`||
+|`binds[].listeners[].routes[].backends[].policies.ai.defaults`||
+|`binds[].listeners[].routes[].backends[].policies.ai.overrides`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.append`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.append[].role`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.append[].content`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.prepend`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.prepend[].role`||
+|`binds[].listeners[].routes[].backends[].policies.ai.prompts.prepend[].content`||
+|`binds[].listeners[].routes[].backends[].policies.ai.modelAliases`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptCaching`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptCaching.cacheSystem`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptCaching.cacheMessages`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptCaching.cacheTools`||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptCaching.minTokens`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS`|Send TLS to the backend.|
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.cert`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.key`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.root`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.hostname`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.insecure`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.insecureHost`||
+|`binds[].listeners[].routes[].backends[].policies.backendTLS.alpn`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth`|Authenticate to the backend.|
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)passthrough`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)key`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)key.(any)file`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)gcp`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)aws`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)aws.(any)region`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
 |`binds[].listeners[].tcpRoutes`||
 |`binds[].listeners[].tcpRoutes[].name`||
 |`binds[].listeners[].tcpRoutes[].ruleName`||
 |`binds[].listeners[].tcpRoutes[].hostnames`|Can be a wildcard|
 |`binds[].listeners[].tcpRoutes[].policies`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.cert`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.key`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.root`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.hostname`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.insecure`||
-|`binds[].listeners[].tcpRoutes[].policies.backendTls.insecureHost`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.cert`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.key`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.root`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.hostname`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.insecure`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.insecureHost`||
+|`binds[].listeners[].tcpRoutes[].policies.backendTLS.alpn`||
 |`binds[].listeners[].tcpRoutes[].backends`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)service`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)service.name`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)service.name.namespace`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)service.name.hostname`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)service.port`||
+|`binds[].listeners[].tcpRoutes[].backends[].(1)host`||
 |`binds[].listeners[].tcpRoutes[].backends[].weight`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)service`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)service.name`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)service.name.namespace`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)service.name.hostname`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)service.port`||
-|`binds[].listeners[].tcpRoutes[].backends[].backend.(1)host`||
-|`policies`|policies defines additional policies that can be attached to various other configurations.<br>This is an advanced feature; users should typically use the inline `policies` field under route.|
+|`binds[].listeners[].tcpRoutes[].backends[].policies`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS`|Send TLS to the backend.|
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.cert`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.key`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.root`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.hostname`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.insecure`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.insecureHost`||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.alpn`||
+|`binds[].listeners[].policies`||
+|`binds[].listeners[].policies.jwtAuth`|Authenticate incoming JWT requests.|
+|`binds[].listeners[].policies.jwtAuth.(any)(any)mode`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers[].issuer`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers[].audiences`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers[].jwks`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers[].jwks.(any)file`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)providers[].jwks.(any)url`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)mode`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)issuer`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)audiences`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)jwks`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)jwks.(any)file`||
+|`binds[].listeners[].policies.jwtAuth.(any)(any)jwks.(any)url`||
+|`binds[].listeners[].policies.extAuthz`|Authenticate incoming requests by calling an external authorization server.|
+|`binds[].listeners[].policies.extAuthz.(any)(1)service`||
+|`binds[].listeners[].policies.extAuthz.(any)(1)service.name`||
+|`binds[].listeners[].policies.extAuthz.(any)(1)service.name.namespace`||
+|`binds[].listeners[].policies.extAuthz.(any)(1)service.name.hostname`||
+|`binds[].listeners[].policies.extAuthz.(any)(1)service.port`||
+|`binds[].listeners[].policies.extAuthz.(any)(1)host`||
+|`binds[].listeners[].policies.extAuthz.(any)context`||
+|`binds[].listeners[].policies.extAuthz.(any)metadata`||
+|`binds[].listeners[].policies.extAuthz.(any)failOpen`||
+|`binds[].listeners[].policies.extAuthz.(any)statusOnError`||
+|`binds[].listeners[].policies.extAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`binds[].listeners[].policies.extAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`binds[].listeners[].policies.extAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`binds[].listeners[].policies.extAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
+|`binds[].listeners[].policies.extProc`|Extend agentgateway with an external processor|
+|`binds[].listeners[].policies.extProc.(any)(1)service`||
+|`binds[].listeners[].policies.extProc.(any)(1)service.name`||
+|`binds[].listeners[].policies.extProc.(any)(1)service.name.namespace`||
+|`binds[].listeners[].policies.extProc.(any)(1)service.name.hostname`||
+|`binds[].listeners[].policies.extProc.(any)(1)service.port`||
+|`binds[].listeners[].policies.extProc.(any)(1)host`||
+|`binds[].listeners[].policies.extProc.(any)failureMode`||
+|`binds[].listeners[].policies.transformations`|Modify requests and responses|
+|`binds[].listeners[].policies.transformations.request`||
+|`binds[].listeners[].policies.transformations.request.add`||
+|`binds[].listeners[].policies.transformations.request.set`||
+|`binds[].listeners[].policies.transformations.request.remove`||
+|`binds[].listeners[].policies.transformations.request.body`||
+|`binds[].listeners[].policies.transformations.response`||
+|`binds[].listeners[].policies.transformations.response.add`||
+|`binds[].listeners[].policies.transformations.response.set`||
+|`binds[].listeners[].policies.transformations.response.remove`||
+|`binds[].listeners[].policies.transformations.response.body`||
+|`binds[].listeners[].policies.basicAuth`|Authenticate incoming requests using Basic Authentication with htpasswd.|
+|`binds[].listeners[].policies.basicAuth.htpasswd`|.htpasswd file contents/reference|
+|`binds[].listeners[].policies.basicAuth.htpasswd.(any)file`||
+|`binds[].listeners[].policies.basicAuth.realm`|Realm name for the WWW-Authenticate header|
+|`binds[].listeners[].policies.basicAuth.mode`|Validation mode for basic authentication|
+|`binds[].listeners[].policies.apiKey`|Authenticate incoming requests using API Keys|
+|`binds[].listeners[].policies.apiKey.keys`|List of API keys|
+|`binds[].listeners[].policies.apiKey.keys[].key`||
+|`binds[].listeners[].policies.apiKey.keys[].metadata`||
+|`binds[].listeners[].policies.apiKey.mode`|Validation mode for API keys|
+|`frontendPolicies`||
+|`frontendPolicies.http`|Settings for handling incoming HTTP requests.|
+|`frontendPolicies.http.maxBufferSize`||
+|`frontendPolicies.http.http1MaxHeaders`|The maximum number of headers allowed in a request. Changing this value results in a performance<br>degradation, even if set to a lower value than the default (100)|
+|`frontendPolicies.http.http1IdleTimeout`||
+|`frontendPolicies.http.http2WindowSize`||
+|`frontendPolicies.http.http2ConnectionWindowSize`||
+|`frontendPolicies.http.http2FrameSize`||
+|`frontendPolicies.http.http2KeepaliveInterval`||
+|`frontendPolicies.http.http2KeepaliveTimeout`||
+|`frontendPolicies.tls`|Settings for handling incoming TLS connections.|
+|`frontendPolicies.tls.tlsHandshakeTimeout`||
+|`frontendPolicies.tcp`|Settings for handling incoming TCP connections.|
+|`frontendPolicies.tcp.keepalives`||
+|`frontendPolicies.tcp.keepalives.enabled`||
+|`frontendPolicies.tcp.keepalives.time`||
+|`frontendPolicies.tcp.keepalives.interval`||
+|`frontendPolicies.tcp.keepalives.retries`||
+|`frontendPolicies.accessLog`|Settings for request access logs.|
+|`frontendPolicies.accessLog.filter`||
+|`frontendPolicies.accessLog.add`||
+|`frontendPolicies.accessLog.remove`||
+|`frontendPolicies.tracing`||
+|`policies`|policies defines additional policies that can be attached to various other configurations.<br>This is an advanced feature; users should typically use the inline `policies` field under route/gateway.|
 |`policies[].name`||
 |`policies[].target`||
 |`policies[].target.(1)gateway`||
@@ -407,6 +925,7 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].target.(1)service`||
 |`policies[].target.(1)backend`||
 |`policies[].target.(1)subBackend`||
+|`policies[].phase`|phase defines at what level the policy runs at. Gateway policies run pre-routing, while<br>Route policies apply post-routing.<br>Only a subset of policies are eligible as Gateway policies.<br>In general, normal (route level) policies should be used, except you need the policy to influence<br>routing.|
 |`policies[].policy`||
 |`policies[].policy.requestHeaderModifier`|Headers to be modified in the request.|
 |`policies[].policy.requestHeaderModifier.add`||
@@ -465,7 +984,6 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.mcpAuthentication.provider.(any)(1)auth0`||
 |`policies[].policy.mcpAuthentication.provider.(any)(1)keycloak`||
 |`policies[].policy.mcpAuthentication.resourceMetadata`||
-|`policies[].policy.mcpAuthentication.resourceMetadata.resource`||
 |`policies[].policy.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`policies[].policy.ai`|Mark this as LLM traffic to enable LLM processing.|
 |`policies[].policy.ai.promptGuard`||
@@ -473,12 +991,20 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.ai.promptGuard.request.rejection`||
 |`policies[].policy.ai.promptGuard.request.rejection.body`||
 |`policies[].policy.ai.promptGuard.request.rejection.status`||
+|`policies[].policy.ai.promptGuard.request.rejection.headers`|Optional headers to add, set, or remove from the rejection response|
+|`policies[].policy.ai.promptGuard.request.rejection.headers.add`||
+|`policies[].policy.ai.promptGuard.request.rejection.headers.set`||
+|`policies[].policy.ai.promptGuard.request.rejection.headers.remove`||
 |`policies[].policy.ai.promptGuard.request.regex`||
 |`policies[].policy.ai.promptGuard.request.regex.action`||
 |`policies[].policy.ai.promptGuard.request.regex.action.(1)reject`||
 |`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response`||
 |`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.body`||
 |`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.status`||
+|`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.headers.add`||
+|`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.headers.set`||
+|`policies[].policy.ai.promptGuard.request.regex.action.(1)reject.response.headers.remove`||
 |`policies[].policy.ai.promptGuard.request.regex.rules`||
 |`policies[].policy.ai.promptGuard.request.regex.rules[].(any)builtin`||
 |`policies[].policy.ai.promptGuard.request.regex.rules[].(any)pattern`||
@@ -503,6 +1029,10 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response`||
 |`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.body`||
 |`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.status`||
+|`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.headers`|Optional headers to add, set, or remove from the rejection response|
+|`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.headers.add`||
+|`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.headers.set`||
+|`policies[].policy.ai.promptGuard.response.regex.action.(1)reject.response.headers.remove`||
 |`policies[].policy.ai.promptGuard.response.regex.rules`||
 |`policies[].policy.ai.promptGuard.response.regex.rules[].(any)builtin`||
 |`policies[].policy.ai.promptGuard.response.regex.rules[].(any)pattern`||
@@ -518,11 +1048,17 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.ai.overrides`||
 |`policies[].policy.ai.prompts`||
 |`policies[].policy.ai.prompts.append`||
-|`policies[].policy.ai.prompts.append.role`||
-|`policies[].policy.ai.prompts.append.content`||
+|`policies[].policy.ai.prompts.append[].role`||
+|`policies[].policy.ai.prompts.append[].content`||
 |`policies[].policy.ai.prompts.prepend`||
-|`policies[].policy.ai.prompts.prepend.role`||
-|`policies[].policy.ai.prompts.prepend.content`||
+|`policies[].policy.ai.prompts.prepend[].role`||
+|`policies[].policy.ai.prompts.prepend[].content`||
+|`policies[].policy.ai.modelAliases`||
+|`policies[].policy.ai.promptCaching`||
+|`policies[].policy.ai.promptCaching.cacheSystem`||
+|`policies[].policy.ai.promptCaching.cacheMessages`||
+|`policies[].policy.ai.promptCaching.cacheTools`||
+|`policies[].policy.ai.promptCaching.minTokens`||
 |`policies[].policy.backendTLS`|Send TLS to the backend.|
 |`policies[].policy.backendTLS.cert`||
 |`policies[].policy.backendTLS.key`||
@@ -530,6 +1066,7 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.backendTLS.hostname`||
 |`policies[].policy.backendTLS.insecure`||
 |`policies[].policy.backendTLS.insecureHost`||
+|`policies[].policy.backendTLS.alpn`||
 |`policies[].policy.backendAuth`|Authenticate to the backend.|
 |`policies[].policy.backendAuth.(any)(1)passthrough`||
 |`policies[].policy.backendAuth.(any)(1)key`||
@@ -540,6 +1077,19 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.backendAuth.(any)(1)aws.(any)secretAccessKey`||
 |`policies[].policy.backendAuth.(any)(1)aws.(any)region`||
 |`policies[].policy.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`policies[].policy.backendAuth.(any)(1)azure`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`policies[].policy.backendAuth.(any)(1)azure.(1)developerImplicit`||
 |`policies[].policy.localRateLimit`|Rate limit incoming requests. State is kept local.|
 |`policies[].policy.localRateLimit[].maxTokens`||
 |`policies[].policy.localRateLimit[].tokensPerFill`||
@@ -572,6 +1122,16 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.jwtAuth.(any)(any)jwks`||
 |`policies[].policy.jwtAuth.(any)(any)jwks.(any)file`||
 |`policies[].policy.jwtAuth.(any)(any)jwks.(any)url`||
+|`policies[].policy.basicAuth`|Authenticate incoming requests using Basic Authentication with htpasswd.|
+|`policies[].policy.basicAuth.htpasswd`|.htpasswd file contents/reference|
+|`policies[].policy.basicAuth.htpasswd.(any)file`||
+|`policies[].policy.basicAuth.realm`|Realm name for the WWW-Authenticate header|
+|`policies[].policy.basicAuth.mode`|Validation mode for basic authentication|
+|`policies[].policy.apiKey`|Authenticate incoming requests using API Keys|
+|`policies[].policy.apiKey.keys`|List of API keys|
+|`policies[].policy.apiKey.keys[].key`||
+|`policies[].policy.apiKey.keys[].metadata`||
+|`policies[].policy.apiKey.mode`|Validation mode for API keys|
 |`policies[].policy.extAuthz`|Authenticate incoming requests by calling an external authorization server.|
 |`policies[].policy.extAuthz.(any)(1)service`||
 |`policies[].policy.extAuthz.(any)(1)service.name`||
@@ -580,8 +1140,21 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.extAuthz.(any)(1)service.port`||
 |`policies[].policy.extAuthz.(any)(1)host`||
 |`policies[].policy.extAuthz.(any)context`||
+|`policies[].policy.extAuthz.(any)metadata`||
 |`policies[].policy.extAuthz.(any)failOpen`||
 |`policies[].policy.extAuthz.(any)statusOnError`||
+|`policies[].policy.extAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`policies[].policy.extAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`policies[].policy.extAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`policies[].policy.extAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
+|`policies[].policy.extProc`|Extend agentgateway with an external processor|
+|`policies[].policy.extProc.(any)(1)service`||
+|`policies[].policy.extProc.(any)(1)service.name`||
+|`policies[].policy.extProc.(any)(1)service.name.namespace`||
+|`policies[].policy.extProc.(any)(1)service.name.hostname`||
+|`policies[].policy.extProc.(any)(1)service.port`||
+|`policies[].policy.extProc.(any)(1)host`||
+|`policies[].policy.extProc.(any)failureMode`||
 |`policies[].policy.transformations`|Modify requests and responses|
 |`policies[].policy.transformations.request`||
 |`policies[].policy.transformations.request.add`||
@@ -593,6 +1166,8 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.transformations.response.set`||
 |`policies[].policy.transformations.response.remove`||
 |`policies[].policy.transformations.response.body`||
+|`policies[].policy.csrf`|Handle CSRF protection by validating request origins against configured allowed origins.|
+|`policies[].policy.csrf.additionalOrigins`||
 |`policies[].policy.timeout`|Timeout requests that exceed the configured duration.|
 |`policies[].policy.timeout.requestTimeout`||
 |`policies[].policy.timeout.backendRequestTimeout`||
@@ -607,14 +1182,23 @@ This folder contains JSON schemas for various parts of the project
 |Field|Description|
 |-|-|
 |`request`|`request` contains attributes about the incoming HTTP request|
-|`request.method`|The HTTP method of the request.|
-|`request.uri`|The URI of the request.|
-|`request.path`|The path of the request URI.|
+|`request.method`|The HTTP method of the request. For example, `GET`|
+|`request.uri`|The complete URI of the request. For example, `http://example.com/path`.|
+|`request.host`||
+|`request.scheme`||
+|`request.path`|The path of the request URI. For example, `/path`.|
 |`request.headers`|The headers of the request.|
 |`request.body`|The body of the request. Warning: accessing the body will cause the body to be buffered.|
+|`request.startTime`|The (pre-rendered) time the request started|
+|`request.endTime`|The (pre-rendered) time the request completed|
 |`response`|`response` contains attributes about the HTTP response|
 |`response.code`|The HTTP status code of the response.|
+|`response.body`|The body of the response. Warning: accessing the body will cause the body to be buffered.|
 |`jwt`|`jwt` contains the claims from a verified JWT token. This is only present if the JWT policy is enabled.|
+|`apiKey`|`apiKey` contains the claims from a verified API Key. This is only present if the API Key policy is enabled.|
+|`apiKey.key`||
+|`basicAuth`|`basicAuth` contains the claims from a verified basic authentication Key. This is only present if the Basic authentication policy is enabled.|
+|`basicAuth.username`||
 |`llm`|`llm` contains attributes about an LLM request or response. This is only present when using an `ai` backend.|
 |`llm.streaming`|Whether the LLM response is streamed.|
 |`llm.requestModel`|The model requested for the LLM request. This may differ from the actual model used.|
@@ -651,4 +1235,8 @@ This folder contains JSON schemas for various parts of the project
 |`mcp.(any)(1)resource`||
 |`mcp.(any)(1)resource.target`|The target of the resource|
 |`mcp.(any)(1)resource.name`|The name of the resource|
+|`backend`|`backend` contains information about the backend being used.|
+|`backend.name`|The name of the backend being used. For example, `my-service` or `service/my-namespace/my-service:8080`.|
+|`backend.type`|The type of backend. For example, `ai`, `mcp`, `static`, `dynamic`, or `service`.|
+|`backend.protocol`|The protocol of backend. For example, `http`, `tcp`, `a2a`, `mcp`, or `llm`.|
 |`extauthz`|`extauthz` contains dynamic metadata from ext_authz filters|

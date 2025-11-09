@@ -1,12 +1,22 @@
 #![allow(deprecated)]
 #![allow(deprecated_in_future)]
 
+use std::collections::HashMap;
+
+use crate::llm;
+use crate::llm::bedrock::Provider;
+use crate::llm::{AIError, LLMRequest, LLMResponse};
+use agent_core::strng;
+use agent_core::strng::Strng;
 #[allow(deprecated)]
 #[allow(deprecated_in_future)]
 pub use async_openai::types::ChatCompletionFunctions;
-use async_openai::types::Stop;
+use async_openai::types::{
+	ChatChoiceLogprobs, ChatCompletionMessageToolCall, ChatCompletionMessageToolCallChunk,
+	ChatCompletionResponseMessageAudio, CompletionUsage, FunctionCallStream, ServiceTierResponse,
+};
 pub use async_openai::types::{
-	ChatChoice, ChatChoiceStream, ChatCompletionAudio, ChatCompletionFunctionCall,
+	ChatCompletionAudio, ChatCompletionFunctionCall,
 	ChatCompletionMessageToolCall as MessageToolCall, ChatCompletionModalities,
 	ChatCompletionNamedToolChoice as NamedToolChoice,
 	ChatCompletionRequestAssistantMessage as RequestAssistantMessage,
@@ -21,16 +31,510 @@ pub use async_openai::types::{
 	ChatCompletionRequestToolMessageContent as RequestToolMessageContent,
 	ChatCompletionRequestUserMessage as RequestUserMessage,
 	ChatCompletionRequestUserMessageContent as RequestUserMessageContent,
-	ChatCompletionResponseMessage as ResponseMessage, ChatCompletionStreamOptions as StreamOptions,
-	ChatCompletionStreamResponseDelta as StreamResponseDelta, ChatCompletionTool,
+	ChatCompletionStreamOptions as StreamOptions, ChatCompletionTool, ChatCompletionTool as Tool,
 	ChatCompletionToolChoiceOption as ToolChoiceOption, ChatCompletionToolChoiceOption,
 	ChatCompletionToolType as ToolType, CompletionUsage as Usage, CreateChatCompletionRequest,
-	CreateChatCompletionResponse as Response, CreateChatCompletionStreamResponse as StreamResponse,
-	FinishReason, FunctionCall, PredictionContent, ReasoningEffort, ResponseFormat, Role,
-	ServiceTier, WebSearchOptions,
+	FinishReason, FunctionCall, FunctionName, FunctionObject, PredictionContent, ReasoningEffort,
+	ResponseFormat, Role, ServiceTier, Stop, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+pub trait ResponseType: Send + Sync {
+	fn to_llm_response(&self, include_completion_in_log: bool) -> LLMResponse;
+	fn to_webhook_choices(&self) -> Vec<crate::llm::policy::webhook::ResponseChoice>;
+	fn set_webhook_choices(
+		&mut self,
+		resp: Vec<crate::llm::policy::webhook::ResponseChoice>,
+	) -> anyhow::Result<()>;
+	fn serialize(&self) -> serde_json::Result<Vec<u8>>;
+}
+pub trait RequestType: Send + Sync {
+	fn model(&mut self) -> Option<&mut String>;
+	fn prepend_prompts(&mut self, prompts: Vec<llm::SimpleChatCompletionMessage>);
+	fn to_llm_request(&self, provider: Strng, tokenize: bool) -> Result<LLMRequest, AIError>;
+	fn get_messages(&self) -> Vec<llm::SimpleChatCompletionMessage>;
+	fn set_messages(&mut self, messages: Vec<llm::SimpleChatCompletionMessage>);
+
+	fn to_openai(&self) -> Result<Vec<u8>, AIError> {
+		Err(AIError::UnsupportedConversion(strng::literal!("openai")))
+	}
+
+	fn to_anthropic(&self) -> Result<Vec<u8>, AIError> {
+		Err(AIError::UnsupportedConversion(strng::literal!("anthropic")))
+	}
+
+	fn to_bedrock(
+		&self,
+		_provider: &Provider,
+		_headers: Option<&::http::HeaderMap>,
+		_prompt_caching: Option<&crate::llm::policy::PromptCachingConfig>,
+	) -> Result<Vec<u8>, AIError> {
+		Err(AIError::UnsupportedConversion(strng::literal!("bedrock")))
+	}
+}
+
+pub mod passthrough {
+	use crate::{json, llm};
+
+	use crate::llm::bedrock::Provider;
+	use crate::llm::policy::webhook::{Message, ResponseChoice};
+	use crate::llm::universal::ResponseType;
+	use crate::llm::{
+		AIError, InputFormat, LLMRequest, LLMRequestParams, LLMResponse, SimpleChatCompletionMessage,
+		anthropic, universal,
+	};
+	use agent_core::strng;
+	use agent_core::strng::Strng;
+	use bytes::Bytes;
+	use itertools::Itertools;
+	use serde::{Deserialize, Serialize};
+
+	pub fn process_response(
+		bytes: &Bytes,
+		input_format: InputFormat,
+	) -> Result<Box<dyn ResponseType>, AIError> {
+		match input_format {
+			InputFormat::Completions => {
+				let resp = serde_json::from_slice::<universal::passthrough::Response>(bytes)
+					.map_err(AIError::ResponseParsing)?;
+
+				Ok(Box::new(resp))
+			},
+			InputFormat::Messages => {
+				let resp =
+					serde_json::from_slice::<universal::Response>(bytes).map_err(AIError::ResponseParsing)?;
+				let anthropic = anthropic::translate_anthropic_response(resp);
+				let passthrough = json::convert::<_, anthropic::passthrough::Response>(&anthropic)
+					.map_err(AIError::ResponseParsing)?;
+				Ok(Box::new(passthrough))
+			},
+			InputFormat::Responses => {
+				unreachable!("Responses format should not be routed to Universal (OpenAI) provider")
+			},
+		}
+	}
+
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	pub struct Request {
+		pub messages: Vec<RequestMessage>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub model: Option<String>,
+
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub top_p: Option<f32>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub temperature: Option<f32>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub stream: Option<bool>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub frequency_penalty: Option<f32>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub presence_penalty: Option<f32>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub seed: Option<i64>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub stream_options: Option<StreamOptions>,
+
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub max_tokens: Option<u32>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub max_completion_tokens: Option<u32>,
+
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+
+	/// Options for streaming response. Only set this when you set `stream: true`.
+	#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+	pub struct StreamOptions {
+		/// If set, an additional chunk will be streamed before the `data: [DONE]` message. The `usage` field on this chunk shows the token usage statistics for the entire request, and the `choices` field will always be an empty array. All other chunks will also include a `usage` field, but with a null value.
+		pub include_usage: bool,
+	}
+
+	#[derive(Debug, Deserialize, Clone, Serialize)]
+	pub struct Response {
+		pub model: String,
+		pub usage: Option<Usage>,
+		/// A list of chat completion choices. Can be more than one if `n` is greater than 1.
+		pub choices: Vec<Choice>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+
+	#[derive(Debug, Deserialize, Clone, Serialize)]
+	pub struct Choice {
+		pub message: ResponseMessage,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+
+	#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+	pub struct ResponseMessage {
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub content: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub role: Option<String>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+	#[derive(Debug, Deserialize, Clone, Serialize)]
+	pub struct Usage {
+		/// Number of tokens in the prompt.
+		pub prompt_tokens: u32,
+		/// Number of tokens in the generated completion.
+		pub completion_tokens: u32,
+		/// Total number of tokens used in the request (prompt + completion).
+		pub total_tokens: u32,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+
+	impl super::ResponseType for Response {
+		fn to_llm_response(&self, include_completion_in_log: bool) -> LLMResponse {
+			LLMResponse {
+				input_tokens: self.usage.as_ref().map(|u| u.prompt_tokens as u64),
+				output_tokens: self.usage.as_ref().map(|u| u.completion_tokens as u64),
+				total_tokens: self.usage.as_ref().map(|u| u.total_tokens as u64),
+				provider_model: Some(strng::new(&self.model)),
+				completion: if include_completion_in_log {
+					Some(
+						self
+							.choices
+							.iter()
+							.flat_map(|c| c.message.content.clone())
+							.collect_vec(),
+					)
+				} else {
+					None
+				},
+				first_token: Default::default(),
+			}
+		}
+
+		fn set_webhook_choices(&mut self, choices: Vec<ResponseChoice>) -> anyhow::Result<()> {
+			if self.choices.len() != choices.len() {
+				anyhow::bail!("webhook response message count mismatch");
+			}
+			for (m, wh) in self.choices.iter_mut().zip(choices.into_iter()) {
+				m.message.content = Some(wh.message.content.to_string());
+			}
+			Ok(())
+		}
+
+		fn to_webhook_choices(&self) -> Vec<ResponseChoice> {
+			self
+				.choices
+				.iter()
+				.map(|c| {
+					let role = c.message.role.clone().unwrap_or_default().into();
+					let content = c.message.content.clone().unwrap_or_default().into();
+					ResponseChoice {
+						message: Message { role, content },
+					}
+				})
+				.collect()
+		}
+
+		fn serialize(&self) -> serde_json::Result<Vec<u8>> {
+			serde_json::to_vec(&self)
+		}
+	}
+
+	impl super::RequestType for Request {
+		fn model(&mut self) -> Option<&mut String> {
+			self.model.as_mut()
+		}
+		fn prepend_prompts(&mut self, prompts: Vec<llm::SimpleChatCompletionMessage>) {
+			self
+				.messages
+				.splice(..0, prompts.into_iter().map(convert_message));
+		}
+
+		fn to_anthropic(&self) -> Result<Vec<u8>, AIError> {
+			let typed = json::convert::<_, universal::Request>(self).map_err(AIError::RequestMarshal)?;
+			let xlated = anthropic::translate_request(typed);
+			serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)
+		}
+
+		fn to_bedrock(
+			&self,
+			provider: &Provider,
+			headers: Option<&::http::HeaderMap>,
+			prompt_caching: Option<&crate::llm::policy::PromptCachingConfig>,
+		) -> Result<Vec<u8>, AIError> {
+			let typed = json::convert::<_, universal::Request>(self).map_err(AIError::RequestMarshal)?;
+			let xlated =
+				llm::bedrock::translate_request_completions(typed, provider, headers, prompt_caching);
+			serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)
+		}
+
+		fn to_openai(&self) -> Result<Vec<u8>, AIError> {
+			serde_json::to_vec(&self).map_err(AIError::RequestMarshal)
+		}
+
+		fn to_llm_request(&self, provider: Strng, tokenize: bool) -> Result<LLMRequest, AIError> {
+			let model = strng::new(self.model.as_deref().unwrap_or_default());
+			let input_tokens = if tokenize {
+				let tokens = crate::llm::num_tokens_from_messages(&model, &self.messages)?;
+				Some(tokens)
+			} else {
+				None
+			};
+			// Pass the original body through
+			let llm = LLMRequest {
+				input_tokens,
+				input_format: InputFormat::Completions,
+				request_model: model,
+				provider,
+				streaming: self.stream.unwrap_or_default(),
+				params: LLMRequestParams {
+					temperature: self.temperature.map(Into::into),
+					top_p: self.top_p.map(Into::into),
+					frequency_penalty: self.frequency_penalty.map(Into::into),
+					presence_penalty: self.presence_penalty.map(Into::into),
+					seed: self.seed,
+					max_tokens: self
+						.max_completion_tokens
+						.or(self.max_tokens)
+						.map(Into::into),
+				},
+			};
+			Ok(llm)
+		}
+
+		fn get_messages(&self) -> Vec<SimpleChatCompletionMessage> {
+			self
+				.messages
+				.iter()
+				.map(|m| {
+					let content = m
+						.content
+						.as_ref()
+						.and_then(|c| match c {
+							Content::Text(t) => Some(strng::new(t)),
+							// TODO?
+							Content::Array(_) => None,
+						})
+						.unwrap_or_default();
+					SimpleChatCompletionMessage {
+						role: strng::new(&m.role),
+						content,
+					}
+				})
+				.collect()
+		}
+
+		fn set_messages(&mut self, messages: Vec<llm::SimpleChatCompletionMessage>) {
+			self.messages = messages.into_iter().map(convert_message).collect();
+		}
+	}
+
+	fn convert_message(r: SimpleChatCompletionMessage) -> RequestMessage {
+		RequestMessage {
+			role: r.role.to_string(),
+			content: Some(Content::Text(r.content.to_string())),
+			name: None,
+			rest: Default::default(),
+		}
+	}
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	pub struct RequestMessage {
+		pub role: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub name: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub content: Option<Content>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+
+	impl RequestMessage {
+		pub fn message_text(&self) -> Option<&str> {
+			self.content.as_ref().and_then(|c| match c {
+				Content::Text(t) => Some(t.as_str()),
+				// TODO?
+				Content::Array(_) => None,
+			})
+		}
+	}
+
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	#[serde(untagged)]
+	pub enum Content {
+		Text(String),
+		Array(Vec<ContentPart>),
+	}
+
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	pub struct ContentPart {
+		pub r#type: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub text: Option<String>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
+	}
+}
+
+/// Represents a chat completion response returned by model, based on the provided input.
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+pub struct Response {
+	/// A unique identifier for the chat completion.
+	pub id: String,
+	/// A list of chat completion choices. Can be more than one if `n` is greater than 1.
+	pub choices: Vec<ChatChoice>,
+	/// The Unix timestamp (in seconds) of when the chat completion was created.
+	pub created: u32,
+	/// The model used for the chat completion.
+	pub model: String,
+	/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub service_tier: Option<ServiceTierResponse>,
+	/// This fingerprint represents the backend configuration that the model runs with.
+	///
+	/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub system_fingerprint: Option<String>,
+
+	/// The object type, which is always `chat.completion`.
+	pub object: String,
+	pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents a streamed chunk of a chat completion response returned by model, based on the provided input.
+pub struct StreamResponse {
+	/// A unique identifier for the chat completion. Each chunk has the same ID.
+	pub id: String,
+	/// A list of chat completion choices. Can contain more than one elements if `n` is greater than 1. Can also be empty for the last chunk if you set `stream_options: {"include_usage": true}`.
+	pub choices: Vec<ChatChoiceStream>,
+
+	/// The Unix timestamp (in seconds) of when the chat completion was created. Each chunk has the same timestamp.
+	pub created: u32,
+	/// The model to generate the completion.
+	pub model: String,
+	/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
+	pub service_tier: Option<ServiceTierResponse>,
+	/// This fingerprint represents the backend configuration that the model runs with.
+	/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
+	pub system_fingerprint: Option<String>,
+	/// The object type, which is always `chat.completion.chunk`.
+	pub object: String,
+
+	/// An optional field that will only be present when you set `stream_options: {"include_usage": true}` in your request.
+	/// When present, it contains a null value except for the last chunk which contains the token usage statistics for the entire request.
+	pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatChoiceStream {
+	/// The index of the choice in the list of choices.
+	pub index: u32,
+	pub delta: StreamResponseDelta,
+	/// The reason the model stopped generating tokens. This will be
+	/// `stop` if the model hit a natural stop point or a provided
+	/// stop sequence,
+	///
+	/// `length` if the maximum number of tokens specified in the
+	/// request was reached,
+	/// `content_filter` if content was omitted due to a flag from our
+	/// content filters,
+	/// `tool_calls` if the model called a tool, or `function_call`
+	/// (deprecated) if the model called a function.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub finish_reason: Option<FinishReason>,
+	/// Log probability information for the choice.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub logprobs: Option<ChatChoiceLogprobs>,
+}
+
+/// A chat completion delta generated by streamed model responses.
+#[derive(Default, Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct StreamResponseDelta {
+	/// The contents of the chunk message.
+	pub content: Option<String>,
+	/// Deprecated and replaced by `tool_calls`. The name and arguments of a function that should be called, as generated by the model.
+	#[deprecated]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub function_call: Option<FunctionCallStream>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_calls: Option<Vec<ChatCompletionMessageToolCallChunk>>,
+	/// The role of the author of this message.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub role: Option<Role>,
+	/// The refusal message generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub refusal: Option<String>,
+
+	/// Agentgateway: added reasoning_content
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub reasoning_content: Option<String>,
+
+	/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
+	#[serde(flatten)]
+	pub extra: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatChoice {
+	/// The index of the choice in the list of choices.
+	pub index: u32,
+	pub message: ResponseMessage,
+	/// The reason the model stopped generating tokens. This will be `stop` if the model hit a natural stop point or a provided stop sequence,
+	/// `length` if the maximum number of tokens specified in the request was reached,
+	/// `content_filter` if content was omitted due to a flag from our content filters,
+	/// `tool_calls` if the model called a tool, or `function_call` (deprecated) if the model called a function.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub finish_reason: Option<FinishReason>,
+	/// Log probability information for the choice.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub logprobs: Option<ChatChoiceLogprobs>,
+}
+
+/// A chat completion message generated by the model.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ResponseMessage {
+	/// The contents of the message.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub content: Option<String>,
+	/// The refusal message generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub refusal: Option<String>,
+	/// The tool calls generated by the model, such as function calls.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_calls: Option<Vec<ChatCompletionMessageToolCall>>,
+
+	/// The role of the author of this message.
+	pub role: Role,
+
+	/// Deprecated and replaced by `tool_calls`.
+	/// The name and arguments of a function that should be called, as generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[deprecated]
+	pub function_call: Option<FunctionCall>,
+
+	/// If the audio output modality is requested, this object contains data about the audio response from the model. [Learn more](https://platform.openai.com/docs/guides/audio).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio: Option<ChatCompletionResponseMessageAudio>,
+
+	/// Agentgateway: add reasoning, which is non-standard.
+	///
+	/// There is no consistent standard for OpenAI compatible endpoints in how to express 'reasoning'
+	/// Deepseek: reasoning_content (https://api-docs.deepseek.com/guides/reasoning_model)
+	/// z.ai: reasoning_content (https://docs.z.ai/api-reference/llm/chat-completion#response-message-reasoning-content
+	/// OpenRouter: `reasoning` and `reasoning_details` (https://openrouter.ai/docs/use-cases/reasoning-tokens#reasoning_details-array-structure)
+	/// LiteLLM: `reasoning_content` and `thinking_blocks` (https://docs.litellm.ai/docs/reasoning_content)
+	///
+	/// Since 3/4 of these use `reasoning_content`, it seems like a reasonable default.
+	/// Note: due to 'extra' below we still get other fields passed through, too; we just won't do anything
+	/// specific with them.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub reasoning_content: Option<String>,
+
+	/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
+	#[serde(flatten)]
+	pub extra: Option<serde_json::Value>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -39,6 +543,7 @@ pub struct Request {
 
 	/// ID of the model to use.
 	/// See the [model endpoint compatibility](https://platform.openai.com/docs/models#model-endpoint-compatibility) table for details on which models work with the Chat API.
+	/// Agentgateway: translated this to Option<> since the users can override the model.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub model: Option<String>,
 
@@ -212,45 +717,20 @@ pub struct Request {
 	#[allow(deprecated_in_future)]
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub functions: Option<Vec<ChatCompletionFunctions>>,
+
+	/// Agentgateway: vendor specific fields we allow only for internal creation
+	#[serde(flatten, skip_deserializing)]
+	pub vendor_extensions: RequestVendorExtensions,
 }
 
-impl From<Request> for CreateChatCompletionRequest {
-	fn from(req: Request) -> Self {
-		#[allow(deprecated)]
-		CreateChatCompletionRequest {
-			messages: req.messages,
-			model: req.model.unwrap_or_default(),
-			store: req.store,
-			reasoning_effort: req.reasoning_effort,
-			metadata: req.metadata,
-			frequency_penalty: req.frequency_penalty,
-			logit_bias: req.logit_bias,
-			logprobs: req.logprobs,
-			top_logprobs: req.top_logprobs,
-			max_tokens: req.max_tokens,
-			max_completion_tokens: req.max_completion_tokens,
-			n: req.n,
-			modalities: req.modalities,
-			prediction: req.prediction,
-			audio: req.audio,
-			presence_penalty: req.presence_penalty,
-			response_format: req.response_format,
-			seed: req.seed,
-			service_tier: req.service_tier,
-			stop: req.stop,
-			stream: req.stream,
-			stream_options: req.stream_options,
-			temperature: req.temperature,
-			top_p: req.top_p,
-			tools: req.tools,
-			tool_choice: req.tool_choice,
-			parallel_tool_calls: req.parallel_tool_calls,
-			user: req.user,
-			web_search_options: req.web_search_options,
-			function_call: req.function_call,
-			functions: req.functions,
-		}
-	}
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct RequestVendorExtensions {
+	/// Anthropic
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub top_k: Option<usize>,
+	/// Anthropic
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub thinking_budget_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -7,7 +7,7 @@ use axum_extra::TypedHeader;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm};
-use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use secrecy::SecretString;
 use serde_json::{Map, Value};
 
@@ -15,6 +15,10 @@ use crate::client::Client;
 use crate::http::Request;
 use crate::telemetry::log::RequestLog;
 use crate::*;
+
+#[cfg(test)]
+#[path = "jwt_tests.rs"]
+mod tests;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum TokenError {
@@ -61,7 +65,7 @@ pub struct Jwt {
 }
 
 #[derive(Clone)]
-struct Provider {
+pub struct Provider {
 	issuer: String,
 	keys: HashMap<String, Jwk>,
 }
@@ -122,7 +126,7 @@ pub enum LocalJwtConfig {
 		#[serde(default)]
 		mode: Mode,
 		issuer: String,
-		audiences: Vec<String>,
+		audiences: Option<Vec<String>>,
 		jwks: serdes::FileInlineOrRemote,
 	},
 }
@@ -132,7 +136,7 @@ pub enum LocalJwtConfig {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ProviderConfig {
 	pub issuer: String,
-	pub audiences: Vec<String>,
+	pub audiences: Option<Vec<String>>,
 	pub jwks: serdes::FileInlineOrRemote,
 }
 
@@ -189,7 +193,7 @@ impl Provider {
 	pub fn from_jwks(
 		jwks: JwkSet,
 		issuer: String,
-		audiences: Vec<String>,
+		audiences: Option<Vec<String>>,
 	) -> Result<Provider, JwkError> {
 		let mut keys = HashMap::new();
 		let to_supported_alg = |key_algorithm: Option<KeyAlgorithm>| match key_algorithm {
@@ -198,10 +202,10 @@ impl Provider {
 		};
 
 		for jwk in jwks.keys {
-			if let Some(key_alg) = to_supported_alg(jwk.common.key_algorithm) {
-				let kid = jwk.common.key_id.ok_or(JwkError::MissingKeyId)?;
+			let kid = jwk.common.key_id.ok_or(JwkError::MissingKeyId)?;
 
-				let decoding_key = match &jwk.algorithm {
+			let decoding_key =
+				match &jwk.algorithm {
 					AlgorithmParameters::RSA(rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e)
 						.map_err(|err| JwkError::DecodingError {
 							key_id: kid.clone(),
@@ -220,23 +224,44 @@ impl Provider {
 					},
 				};
 
-				let mut validation = Validation::new(key_alg);
-				validation.set_audience(&audiences);
-				validation.set_issuer(std::slice::from_ref(&issuer));
-
-				keys.insert(
-					kid,
-					Jwk {
-						decoding: decoding_key,
-						validation,
-					},
-				);
+			let supported_algorithms = match to_supported_alg(jwk.common.key_algorithm) {
+				None => {
+					// If they did not explicitly set the key algorithm, which is optional, then we can infer it
+					// based on the algorithm properties.
+					// Add each key algorithm in the correct family.
+					match &jwk.algorithm {
+						AlgorithmParameters::EllipticCurve(_) => {
+							vec![Algorithm::ES256, Algorithm::ES384]
+						},
+						AlgorithmParameters::RSA(_) => {
+							vec![Algorithm::RS256, Algorithm::RS384, Algorithm::RS512]
+						},
+						_ => unreachable!(),
+					}
+				},
+				Some(explicit_alg) => {
+					vec![explicit_alg]
+				},
+			};
+			// The new() requires 1 algorithm, so just pass the first before we override it
+			let mut validation = Validation::new(*supported_algorithms.first().unwrap());
+			validation.algorithms = supported_algorithms;
+			// only set audience if audiences were provided
+			// otherwise, disable audience validation
+			if let Some(audiences) = &audiences {
+				validation.set_audience(audiences);
 			} else {
-				warn!(
-					"JWK key algorithm {:?} is not supported. Tokens signed by that key will not be accepted.",
-					jwk.common.key_algorithm
-				)
+				validation.validate_aud = false;
 			}
+			validation.set_issuer(std::slice::from_ref(&issuer));
+
+			keys.insert(
+				kid,
+				Jwk {
+					decoding: decoding_key,
+					validation,
+				},
+			);
 		}
 
 		Ok(Provider { issuer, keys })
@@ -244,17 +269,8 @@ impl Provider {
 }
 
 impl Jwt {
-	pub fn from_jwks(
-		jwks: JwkSet,
-		mode: Mode,
-		issuer: String,
-		audiences: Vec<String>,
-	) -> Result<Jwt, JwkError> {
-		let provider = Provider::from_jwks(jwks, issuer, audiences)?;
-		Ok(Jwt {
-			mode,
-			providers: vec![provider],
-		})
+	pub fn from_providers(providers: Vec<Provider>, mode: Mode) -> Jwt {
+		Jwt { mode, providers }
 	}
 }
 
@@ -307,7 +323,7 @@ impl Jwt {
 			log.jwt_sub = Some(sub.to_string());
 		};
 		log.cel.ctx().with_jwt(&claims);
-		// Remove the token. TODO: allow keep it
+		// Remove the token.
 		req.headers_mut().remove(http::header::AUTHORIZATION);
 		// Insert the claims into extensions so we can reference it later
 		req.extensions_mut().insert(claims);

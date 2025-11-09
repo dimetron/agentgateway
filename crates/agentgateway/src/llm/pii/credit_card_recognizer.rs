@@ -8,7 +8,7 @@ pub struct CreditCardRecognizer {
 impl CreditCardRecognizer {
 	pub fn new() -> Self {
 		let mut recognizer = PatternRecognizer::new(
-			"URL",
+			"CREDIT_CARD",
 			vec![
 				"credit".to_string(),
 				"card".to_string(),

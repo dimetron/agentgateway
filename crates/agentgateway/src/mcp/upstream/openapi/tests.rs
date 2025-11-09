@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use agent_core::{drain, metrics, strng};
+use agent_core::{metrics, strng};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use prometheus_client::registry::Registry;
 use rmcp::model::Tool;
@@ -13,7 +13,7 @@ use super::*;
 use crate::client::Client;
 use crate::store::Stores;
 use crate::types::agent::Target;
-use crate::{ProxyInputs, client, mcp};
+use crate::{BackendConfig, ProxyInputs, client, mcp};
 
 // Helper to create a handler and mock server for tests
 async fn setup() -> (MockServer, Handler) {
@@ -28,26 +28,21 @@ async fn setup() -> (MockServer, Handler) {
 			resolver_opts: ResolverOpts::default(),
 		},
 		None,
+		BackendConfig::default(),
+		None,
 	);
-	let (_drain_tx, drain_rx) = drain::new();
 	let pi = Arc::new(ProxyInputs {
 		cfg: Arc::new(config),
 		stores: stores.clone(),
 		tracer: None,
-		metrics: Arc::new(crate::metrics::Metrics::new(metrics::sub_registry(
-			&mut Registry::default(),
-		))),
+		metrics: Arc::new(crate::metrics::Metrics::new(
+			metrics::sub_registry(&mut Registry::default()),
+			Default::default(),
+		)),
 		upstream: client.clone(),
 		ca: None,
 
-		mcp_state: mcp::sse::App::new(
-			stores.clone(),
-			Arc::new(crate::mcp::relay::metrics::Metrics::new(
-				&mut Registry::default(),
-				None, // TODO custom tags
-			)),
-			drain_rx.clone(),
-		),
+		mcp_state: mcp::router::App::new(stores.clone()),
 	});
 
 	let client = PolicyClient { inputs: pi };
@@ -55,6 +50,8 @@ async fn setup() -> (MockServer, Handler) {
 	let test_tool_get = Tool {
 		name: Cow::Borrowed("get_user"),
 		description: Some(Cow::Borrowed("Get user details")), // Added description
+		icons: None,
+		title: None,
 		input_schema: Arc::new(
 			json!({ // Define a simple schema for testing
 					"type": "object",
@@ -96,6 +93,8 @@ async fn setup() -> (MockServer, Handler) {
 	let test_tool_post = Tool {
 		name: Cow::Borrowed("create_user"),
 		description: Some(Cow::Borrowed("Create a new user")),
+		icons: None,
+		title: None,
 		input_schema: Arc::new(
 			json!({
 				"type": "object",
@@ -173,8 +172,7 @@ async fn test_call_tool_get_simple_success() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -203,8 +201,7 @@ async fn test_call_tool_get_with_query() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -232,8 +229,7 @@ async fn test_call_tool_get_with_header() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -260,8 +256,7 @@ async fn test_call_tool_post_with_body() {
 		.call_tool(
 			"create_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -296,8 +291,7 @@ async fn test_call_tool_post_all_params() {
 		.call_tool(
 			"create_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -314,8 +308,7 @@ async fn test_call_tool_tool_not_found() {
 		.call_tool(
 			"nonexistent_tool",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -346,8 +339,7 @@ async fn test_call_tool_upstream_error() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 
@@ -381,8 +373,7 @@ async fn test_call_tool_invalid_header_value() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 	assert!(result.is_ok()); // Check that the call still succeeds despite the bad header
@@ -414,8 +405,7 @@ async fn test_call_tool_invalid_query_param_value() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 	assert!(result.is_ok());
@@ -448,8 +438,7 @@ async fn test_call_tool_invalid_path_param_value() {
 		.call_tool(
 			"get_user",
 			Some(args.as_object().unwrap().clone()),
-			&HeaderMap::new(),
-			None,
+			&IncomingRequestContext::empty(),
 		)
 		.await;
 

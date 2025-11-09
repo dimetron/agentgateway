@@ -3,14 +3,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_core::{telemetry, version};
-use agentgateway::{Config, client, serdes};
+use agent_core::{strng, telemetry, version};
+use agentgateway::{BackendConfig, Config, LoggingFormat, client, serdes};
 use clap::Parser;
 use tracing::info;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// Enable profiling, unless on musl due to https://github.com/tikv/jemallocator/issues/146
+#[cfg(not(target_env = "musl"))]
+#[cfg(feature = "jemalloc")]
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 lazy_static::lazy_static! {
 	// The memory is intentionally leaked here using Box::leak to achieve a 'static lifetime
@@ -49,8 +56,6 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-	let _log_flush = telemetry::setup_logging();
-
 	let args = Args::parse();
 	let Args {
 		config,
@@ -92,6 +97,10 @@ fn main() -> anyhow::Result<()> {
 				return validate(contents, filename).await;
 			}
 			let config = agentgateway::config::parse_config(contents, filename)?;
+			let _log_flush = telemetry::setup_logging(
+				&config.logging.level,
+				config.logging.format == LoggingFormat::Json,
+			);
 			proxy(Arc::new(config)).await
 		})
 }
@@ -117,10 +126,15 @@ fn copy_binary(copy_self: PathBuf) -> anyhow::Result<()> {
 
 async fn validate(contents: String, filename: Option<PathBuf>) -> anyhow::Result<()> {
 	let config = agentgateway::config::parse_config(contents, filename)?;
-	let client = client::Client::new(&config.dns, None);
+	let client = client::Client::new(&config.dns, None, BackendConfig::default(), None);
 	if let Some(cfg) = config.xds.local_config {
 		let cs = cfg.read_to_string().await?;
-		agentgateway::types::local::NormalizedLocalConfig::from(client, cs.as_str()).await?;
+		agentgateway::types::local::NormalizedLocalConfig::from(
+			client,
+			strng::literal!("default/default"),
+			cs.as_str(),
+		)
+		.await?;
 	} else {
 		println!("No local configuration");
 	}

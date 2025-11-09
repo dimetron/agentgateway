@@ -1,4 +1,4 @@
-use std::fmt::{Display, Error, Write};
+use std::fmt::{Debug, Display, Error, Write};
 use std::mem;
 use std::sync::Arc;
 
@@ -12,9 +12,13 @@ use tracing_core::field::Value;
 
 use crate::strng::{RichStrng, Strng};
 
+pub use crate::tokio_metrics::TokioCollector;
+
+pub const PREFIX: &str = "agentgateway";
+
 /// Creates a metrics sub registry for agentgateway.
 pub fn sub_registry(registry: &mut Registry) -> &mut Registry {
-	registry.sub_registry_with_prefix("agentgateway")
+	registry.sub_registry_with_prefix(PREFIX)
 }
 
 pub struct Deferred<'a, F, T>
@@ -215,6 +219,28 @@ impl<T: Display> From<Option<T>> for DefaultedUnknown<EncodeDisplay<T>> {
 	}
 }
 
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+// EncodeDebug is a wrapper around a type that will be encoded with display
+pub struct EncodeDebug<T>(T);
+
+impl<T: Debug> EncodeLabelValue for EncodeDebug<T> {
+	fn encode(&self, writer: &mut LabelValueEncoder) -> Result<(), std::fmt::Error> {
+		write!(writer, "{:?}", self.0)
+	}
+}
+
+impl<T: Debug> From<T> for EncodeDebug<T> {
+	fn from(value: T) -> Self {
+		EncodeDebug(value)
+	}
+}
+
+impl<T: Debug> From<Option<T>> for DefaultedUnknown<EncodeDebug<T>> {
+	fn from(t: Option<T>) -> Self {
+		DefaultedUnknown(t.map(EncodeDebug::from))
+	}
+}
+
 #[derive(Default, Hash, PartialEq, Eq, Clone, Debug)]
 // EncodeArc is a wrapper around a type to make Arc<T> encodable if T is
 pub struct EncodeArc<T>(pub Arc<T>);
@@ -228,6 +254,27 @@ impl<T: EncodeLabelSet> EncodeLabelSet for EncodeArc<T> {
 impl<T: EncodeLabelSet> From<Arc<T>> for EncodeArc<T> {
 	fn from(value: Arc<T>) -> Self {
 		EncodeArc(value)
+	}
+}
+
+/// OptionallyEncode is a wrapper that will optionally encode the entire label set.
+/// This differs from something like DefaultedUnknown which handles only the value - this makes the
+/// entire label not show up.
+#[derive(Clone, Hash, Default, Debug, PartialEq, Eq)]
+pub struct OptionallyEncode<T>(Option<T>);
+
+impl<T> From<Option<T>> for OptionallyEncode<T> {
+	fn from(t: Option<T>) -> Self {
+		OptionallyEncode(t)
+	}
+}
+
+impl<T: EncodeLabelSet> EncodeLabelSet for OptionallyEncode<T> {
+	fn encode(&self, encoder: &mut LabelSetEncoder) -> Result<(), std::fmt::Error> {
+		match &self.0 {
+			None => Ok(()),
+			Some(ll) => ll.encode(encoder),
+		}
 	}
 }
 

@@ -25,8 +25,9 @@ use crate::http::authorization::RuleSet;
 use crate::http::{
 	HeaderName, HeaderValue, ext_authz, ext_proc, filters, remoteratelimit, retry, timeout,
 };
-use crate::mcp::rbac::McpAuthorization;
+use crate::mcp::McpAuthorization;
 use crate::types::discovery::{NamespacedHostname, Service};
+use crate::types::{agent, frontend};
 use crate::*;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -99,9 +100,13 @@ pub fn parse_key(mut key: &[u8]) -> Result<PrivateKeyDer<'static>, anyhow::Error
 }
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum ListenerProtocol {
+	/// HTTP
 	HTTP,
+	/// HTTPS, terminating TLS then treating as HTTP
 	HTTPS(TLSConfig),
-	TLS(TLSConfig),
+	/// TLS (passthrough or termination)
+	TLS(Option<TLSConfig>),
+	/// Opaque TCP
 	TCP,
 	HBONE,
 }
@@ -109,7 +114,8 @@ pub enum ListenerProtocol {
 impl ListenerProtocol {
 	pub fn tls(&self) -> Option<Arc<rustls::ServerConfig>> {
 		match self {
-			ListenerProtocol::HTTPS(t) | ListenerProtocol::TLS(t) => Some(t.config.clone()),
+			ListenerProtocol::HTTPS(t) => Some(t.config.clone()),
+			ListenerProtocol::TLS(t) => t.as_ref().map(|t| t.config.clone()),
 			_ => None,
 		}
 	}
@@ -144,13 +150,9 @@ pub struct Route {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub matches: Vec<RouteMatch>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub filters: Vec<RouteFilter>,
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub backends: Vec<RouteBackendReference>,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub policies: Option<TrafficPolicy>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub inline_policies: Vec<Policy>,
+	pub inline_policies: Vec<TrafficPolicy>,
 }
 
 pub type RouteKey = Strng;
@@ -257,27 +259,6 @@ pub enum PathMatch {
 	),
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RouteFilter {
-	RequestHeaderModifier(filters::HeaderModifier),
-	ResponseHeaderModifier(filters::HeaderModifier),
-	RequestRedirect(filters::RequestRedirect),
-	UrlRewrite(filters::UrlRewrite),
-	RequestMirror(filters::RequestMirror),
-	// TODO: xds support
-	DirectResponse(filters::DirectResponse),
-	#[serde(rename = "cors")]
-	CORS(http::cors::Cors),
-}
-
-#[derive(Default, Eq, PartialEq)]
-#[apply(schema!)]
-pub struct TrafficPolicy {
-	pub timeout: timeout::Policy,
-	pub retry: Option<retry::Policy>,
-}
-
 #[apply(schema!)]
 #[derive(Eq, PartialEq)]
 pub enum HostRedirect {
@@ -285,6 +266,14 @@ pub enum HostRedirect {
 	Host(Strng),
 	Port(NonZeroU16),
 	Auto,
+	None,
+}
+
+#[apply(schema!)]
+#[derive(Eq, PartialEq, Copy)]
+pub enum HostRedirectOverride {
+	Auto,
+	None,
 }
 
 #[apply(schema!)]
@@ -302,7 +291,7 @@ pub struct RouteBackendReference {
 	#[serde(flatten)]
 	pub backend: BackendReference,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub filters: Vec<RouteFilter>,
+	pub inline_policies: Vec<BackendPolicy>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -310,15 +299,23 @@ pub struct RouteBackendReference {
 pub struct RouteBackend {
 	#[serde(default = "default_weight")]
 	pub weight: usize,
-	#[serde(flatten)]
-	pub backend: Backend,
+	pub backend: BackendWithPolicies,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub filters: Vec<RouteFilter>,
+	pub inline_policies: Vec<BackendPolicy>,
 }
 
 #[allow(unused)]
 fn default_weight() -> usize {
 	1
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendWithPolicies {
+	pub backend: Backend,
+
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub inline_policies: Vec<BackendPolicy>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -333,6 +330,15 @@ pub enum Backend {
 	AI(BackendName, crate::llm::AIBackend),
 	Dynamic {},
 	Invalid,
+}
+
+impl From<Backend> for BackendWithPolicies {
+	fn from(val: Backend) -> Self {
+		BackendWithPolicies {
+			backend: val,
+			inline_policies: vec![],
+		}
+	}
 }
 
 pub fn serialize_backend_tuple<S: Serializer, T: serde::Serialize>(
@@ -389,6 +395,7 @@ impl TryFrom<Backend> for SimpleBackend {
 	}
 }
 
+#[derive(Eq, PartialEq)]
 #[apply(schema_ser!)]
 pub enum SimpleBackendReference {
 	Service { name: NamespacedHostname, port: u16 },
@@ -427,6 +434,21 @@ impl SimpleBackend {
 			SimpleBackend::Invalid => strng::format!("invalid"),
 		}
 	}
+
+	pub fn backend_type(&self) -> cel::BackendType {
+		match self {
+			SimpleBackend::Service(_, _) => cel::BackendType::Service,
+			SimpleBackend::Opaque(_, _) => cel::BackendType::Static,
+			SimpleBackend::Invalid => cel::BackendType::Unknown,
+		}
+	}
+
+	pub fn backend_info(&self) -> BackendInfo {
+		BackendInfo {
+			backend_type: self.backend_type(),
+			backend_name: self.name(),
+		}
+	}
 }
 
 impl BackendReference {
@@ -454,6 +476,38 @@ impl Backend {
 			Backend::Invalid => strng::format!("invalid"),
 		}
 	}
+
+	pub fn backend_type(&self) -> cel::BackendType {
+		match self {
+			Backend::Service(_, _) => cel::BackendType::Service,
+			Backend::Opaque(_, _) => cel::BackendType::Static,
+			Backend::MCP(_, _) => cel::BackendType::MCP,
+			Backend::AI(_, _) => cel::BackendType::AI,
+			Backend::Dynamic { .. } => cel::BackendType::Dynamic,
+			Backend::Invalid => cel::BackendType::Unknown,
+		}
+	}
+
+	pub fn backend_protocol(&self) -> Option<cel::BackendProtocol> {
+		match self {
+			Backend::MCP(_, _) => Some(cel::BackendProtocol::mcp),
+			Backend::AI(_, _) => Some(cel::BackendProtocol::llm),
+			_ => None,
+		}
+	}
+
+	pub fn backend_info(&self) -> BackendInfo {
+		BackendInfo {
+			backend_type: self.backend_type(),
+			backend_name: self.name(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct BackendInfo {
+	pub backend_type: cel::BackendType,
+	pub backend_name: BackendName,
 }
 
 pub type BackendName = Strng;
@@ -466,6 +520,7 @@ pub type ServiceName = Strng;
 pub struct McpBackend {
 	pub targets: Vec<Arc<McpTarget>>,
 	pub stateful: bool,
+	pub always_use_prefix: bool,
 }
 
 impl McpBackend {
@@ -507,6 +562,17 @@ pub enum McpTargetSpec {
 	},
 	#[serde(rename = "openapi")]
 	OpenAPI(OpenAPITarget),
+}
+
+impl McpTargetSpec {
+	pub fn backend(&self) -> Option<&SimpleBackendReference> {
+		match self {
+			McpTargetSpec::Sse(s) => Some(&s.backend),
+			McpTargetSpec::Mcp(s) => Some(&s.backend),
+			McpTargetSpec::OpenAPI(s) => Some(&s.backend),
+			McpTargetSpec::Stdio { .. } => None,
+		}
+	}
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -555,7 +621,11 @@ where
 		},
 		Serde::Inline(s) => s,
 	};
-	let schema: OpenAPI = yamlviajson::from_str(s.as_str()).map_err(serde::de::Error::custom)?;
+	// OpenAPI can be huge, so grow our stack
+	let schema: OpenAPI = stacker::grow(2 * 1024 * 1024, || {
+		yamlviajson::from_str(s.as_str()).map_err(serde::de::Error::custom)
+	})?;
+
 	Ok(Arc::new(schema))
 }
 
@@ -690,7 +760,7 @@ pub struct RouteSet {
 	// Hostname -> []routes, sorted so that route matching can do a linear traversal
 	inner: HashMap<HostnameMatch, Vec<SingleRouteMatch>>,
 	// All routes
-	all: HashMap<RouteKey, Route>,
+	all: HashMap<RouteKey, Arc<Route>>,
 }
 
 impl serde::Serialize for RouteSet {
@@ -711,16 +781,20 @@ impl RouteSet {
 		rs
 	}
 
-	pub fn get_hostname(&self, hnm: &HostnameMatch) -> impl Iterator<Item = (&Route, &RouteMatch)> {
+	pub fn get_hostname(
+		&self,
+		hnm: &HostnameMatch,
+	) -> impl Iterator<Item = (Arc<Route>, &RouteMatch)> {
 		self.inner.get(hnm).into_iter().flatten().flat_map(|rl| {
 			self
 				.all
 				.get(&rl.key)
-				.map(|r| (r, r.matches.get(rl.index).expect("corrupted state")))
+				.map(|r| (r.clone(), r.matches.get(rl.index).expect("corrupted state")))
 		})
 	}
 
 	pub fn insert(&mut self, r: Route) {
+		let r = Arc::new(r);
 		// Insert the route into all HashMap first so it's available during binary search
 		self.all.insert(r.key.clone(), r.clone());
 
@@ -953,11 +1027,86 @@ pub type PolicyName = Strng;
 pub struct TargetedPolicy {
 	pub name: PolicyName,
 	pub target: PolicyTarget,
-	pub policy: Policy,
+	pub policy: PolicyType,
 }
 
-#[derive(Hash, Eq, PartialEq)]
+impl From<BackendPolicy> for PolicyType {
+	fn from(value: BackendPolicy) -> Self {
+		Self::Backend(value)
+	}
+}
+
+impl From<FrontendPolicy> for PolicyType {
+	fn from(value: FrontendPolicy) -> Self {
+		Self::Frontend(value)
+	}
+}
+
+impl From<TrafficPolicy> for PolicyType {
+	fn from(value: TrafficPolicy) -> Self {
+		// Default to route for simplicity.
+		(value, PolicyPhase::Route).into()
+	}
+}
+impl From<(TrafficPolicy, PolicyPhase)> for PolicyType {
+	fn from((p, phase): (TrafficPolicy, PolicyPhase)) -> Self {
+		Self::Traffic(PhasedTrafficPolicy { phase, policy: p })
+	}
+}
+
 #[apply(schema!)]
+#[derive(Copy, Default, Eq, PartialEq)]
+pub enum PolicyPhase {
+	#[default]
+	Route,
+	Gateway,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhasedTrafficPolicy {
+	pub phase: PolicyPhase,
+	#[serde(flatten)]
+	pub policy: TrafficPolicy,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PolicyType {
+	Frontend(FrontendPolicy),
+	Traffic(PhasedTrafficPolicy),
+	Backend(BackendPolicy),
+}
+
+impl PolicyType {
+	pub fn as_traffic_gateway_phase(&self) -> Option<&TrafficPolicy> {
+		match self {
+			PolicyType::Traffic(t) if t.phase == PolicyPhase::Gateway => Some(&t.policy),
+			_ => None,
+		}
+	}
+	pub fn as_traffic_route_phase(&self) -> Option<&TrafficPolicy> {
+		match self {
+			PolicyType::Traffic(t) if t.phase == PolicyPhase::Route => Some(&t.policy),
+			_ => None,
+		}
+	}
+	pub fn as_backend(&self) -> Option<&BackendPolicy> {
+		match self {
+			PolicyType::Backend(t) => Some(t),
+			_ => None,
+		}
+	}
+	pub fn as_frontend(&self) -> Option<&FrontendPolicy> {
+		match self {
+			PolicyType::Frontend(t) => Some(t),
+			_ => None,
+		}
+	}
+}
+
+#[apply(schema!)]
+#[derive(Hash, Eq, PartialEq)]
 pub enum PolicyTarget {
 	Gateway(GatewayName),
 	Listener(ListenerKey),
@@ -973,37 +1122,59 @@ pub enum PolicyTarget {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Policy {
-	// Supported targets: Backend, only when Backend type is MCP
-	McpAuthorization(McpAuthorization),
-	// Supported targets: Backend, only when Backend type is MCP
-	McpAuthentication(McpAuthentication),
-	// Support targets: Backend; single policy allowed
-	A2a(A2aPolicy),
-	// Supported targets: Backend; single policy allowed
-	#[serde(rename = "backendTLS")]
-	BackendTLS(http::backendtls::BackendTLS),
-	// Supported targets: Backend; single policy allowed
-	BackendAuth(BackendAuth),
-	// Supported targets: Backend; single policy allowed
-	InferenceRouting(ext_proc::InferenceRouting),
+pub enum FrontendPolicy {
+	HTTP(frontend::HTTP),
+	TLS(frontend::TLS),
+	TCP(frontend::TCP),
+	AccessLog(frontend::LoggingPolicy),
+	Tracing(()),
+}
 
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrafficPolicy {
+	Timeout(timeout::Policy),
+	Retry(retry::Policy),
 	#[serde(rename = "ai")]
 	AI(Arc<llm::Policy>),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	Authorization(Authorization),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	LocalRateLimit(Vec<crate::http::localratelimit::RateLimit>),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	RemoteRateLimit(remoteratelimit::RemoteRateLimit),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	ExtAuthz(ext_authz::ExtAuthz),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
+	ExtProc(ext_proc::ExtProc),
 	JwtAuth(crate::http::jwt::Jwt),
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
-	// Supported targets: Gateway < Route < RouteRule; single policy allowed
+	BasicAuth(crate::http::basicauth::BasicAuthentication),
+	APIKey(crate::http::apikey::APIKeyAuthentication),
 	Transformation(crate::http::transformation_cel::Transformation),
+	Csrf(crate::http::csrf::Csrf),
+
+	RequestHeaderModifier(filters::HeaderModifier),
+	ResponseHeaderModifier(filters::HeaderModifier),
+	RequestRedirect(filters::RequestRedirect),
+	UrlRewrite(filters::UrlRewrite),
+	HostRewrite(agent::HostRedirectOverride),
+	RequestMirror(Vec<filters::RequestMirror>),
+	DirectResponse(filters::DirectResponse),
+	#[serde(rename = "cors")]
+	CORS(http::cors::Cors),
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackendPolicy {
+	McpAuthorization(McpAuthorization),
+	McpAuthentication(McpAuthentication),
+	A2a(A2aPolicy),
+	#[serde(rename = "backendTLS")]
+	BackendTLS(http::backendtls::BackendTLS),
+	BackendAuth(BackendAuth),
+	InferenceRouting(ext_proc::InferenceRouting),
+	AI(Arc<llm::Policy>),
+
+	RequestHeaderModifier(filters::HeaderModifier),
+	ResponseHeaderModifier(filters::HeaderModifier),
+	RequestRedirect(filters::RequestRedirect),
+	RequestMirror(Vec<filters::RequestMirror>),
 }
 
 #[apply(schema!)]
@@ -1017,7 +1188,6 @@ pub struct Authorization(pub RuleSet);
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ResourceMetadata {
-	pub resource: String,
 	#[serde(flatten)]
 	pub extra: BTreeMap<String, Value>,
 }
@@ -1025,35 +1195,30 @@ pub struct ResourceMetadata {
 impl ResourceMetadata {
 	/// Build RFC-compliant JSON for the protected resource metadata.
 	///
-	/// - Enforces computed `resource` and `authorization_servers`.
+	/// - Defaults computed `resource` and `authorization_servers`.
 	/// - Converts any additional config keys from camelCase to snake_case.
 	/// - Adds MCP-specific fields used by the gateway.
 	pub fn to_rfc_json(&self, resource_uri: String, issuer: String) -> Value {
 		let mut map = serde_json::Map::new();
 
-		// Copy user-provided extra keys, converting to snake_case, while preventing overrides
-		// of fields we compute.
-		for (key, value) in &self.extra {
-			let snake = key.to_snake_case();
-			if snake == "resource" || snake == "authorization_servers" {
-				continue;
-			}
-			map.insert(snake, value.clone());
-		}
-
-		// Computed fields
+		// Computed fields. User can override them if they explicitly configure them.
 		map.insert("resource".into(), Value::String(resource_uri));
 		map.insert(
 			"authorization_servers".into(),
 			Value::Array(vec![Value::String(issuer)]),
 		);
-
 		// MCP-specific additions
 		map.insert(
 			"mcp_protocol_version".into(),
 			Value::String("2025-06-18".into()),
 		);
 		map.insert("resource_type".into(), Value::String("mcp-server".into()));
+
+		// Copy user-provided extra keys, converting to snake_case
+		for (key, value) in &self.extra {
+			let snake = key.to_snake_case();
+			map.insert(snake, value.clone());
+		}
 
 		Value::Object(map)
 	}
@@ -1073,7 +1238,7 @@ impl McpAuthentication {
 		Ok(http::jwt::LocalJwtConfig::Single {
 			mode: http::jwt::Mode::Optional,
 			issuer: self.issuer.clone(),
-			audiences: vec![self.audience.clone()],
+			audiences: Some(vec![self.audience.clone()]),
 			jwks: FileInlineOrRemote::Remote {
 				url: if !self.jwks_url.is_empty() {
 					self.jwks_url.parse()?
@@ -1158,9 +1323,76 @@ impl Display for Target {
 	}
 }
 
+#[apply(schema!)]
+pub struct KeepaliveConfig {
+	#[serde(default = "defaults::always_true")]
+	pub enabled: bool,
+	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	#[serde(default = "defaults::keepalive_time")]
+	pub time: Duration,
+	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	#[serde(default = "defaults::keepalive_interval")]
+	pub interval: Duration,
+	#[serde(default = "defaults::keepalive_retries")]
+	pub retries: u32,
+}
+
+impl Default for KeepaliveConfig {
+	fn default() -> Self {
+		KeepaliveConfig {
+			enabled: true,
+			time: defaults::keepalive_time(),
+			interval: defaults::keepalive_interval(),
+			retries: defaults::keepalive_retries(),
+		}
+	}
+}
+
+pub mod defaults {
+	use std::time::Duration;
+
+	pub fn always_true() -> bool {
+		true
+	}
+	pub fn keepalive_retries() -> u32 {
+		9
+	}
+	pub fn keepalive_interval() -> Duration {
+		Duration::from_secs(180)
+	}
+	pub fn keepalive_time() -> Duration {
+		Duration::from_secs(180)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn test_backend_type_categorization() {
+		let opaque_backend = Backend::Opaque(
+			strng::new("test-opaque"),
+			crate::types::agent::Target::Hostname(strng::new("example.com"), 443),
+		);
+		assert_eq!(opaque_backend.backend_type(), cel::BackendType::Static);
+		assert_eq!(
+			opaque_backend.backend_info().backend_type,
+			cel::BackendType::Static
+		);
+
+		let invalid_backend = Backend::Invalid;
+		assert_eq!(invalid_backend.backend_type(), cel::BackendType::Unknown);
+		assert_eq!(
+			invalid_backend.backend_info().backend_type,
+			cel::BackendType::Unknown
+		);
+
+		let info = opaque_backend.backend_info();
+		assert_eq!(info.backend_name, strng::new("test-opaque"));
+	}
 
 	#[test]
 	fn test_parse_key_ec_p256() {

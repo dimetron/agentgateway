@@ -1,17 +1,18 @@
+use rand::prelude::IndexedRandom;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use rand::prelude::IndexedRandom;
-
-use crate::proxy::ProxyError;
+use crate::proxy::httpproxy::BackendCall;
+use crate::proxy::{ProxyError, httpproxy};
+use crate::store::BackendPolicies;
 use crate::telemetry::log;
 use crate::telemetry::log::{DropOnLog, RequestLog};
 use crate::telemetry::metrics::TCPLabels;
 use crate::transport::stream::{Socket, TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent;
 use crate::types::agent::{
-	BindName, BindProtocol, Listener, ListenerProtocol, PolicyTarget, SimpleBackend, TCPRoute,
-	TCPRouteBackend, TCPRouteBackendReference, Target,
+	BindName, BindProtocol, Listener, ListenerProtocol, SimpleBackend, TCPRoute, TCPRouteBackend,
+	TCPRouteBackendReference,
 };
 use crate::{ProxyInputs, *};
 
@@ -27,6 +28,7 @@ pub struct TCPProxy {
 impl TCPProxy {
 	pub async fn proxy(&self, connection: Socket) {
 		let start = Instant::now();
+		let start_time = agent_core::telemetry::render_current_time();
 
 		let tcp = connection
 			.ext::<TCPConnectionInfo>()
@@ -38,6 +40,7 @@ impl TCPProxy {
 			),
 			self.inputs.metrics.clone(),
 			start,
+			start_time,
 			tcp.clone(),
 		)
 		.into();
@@ -53,6 +56,7 @@ impl TCPProxy {
 		log: &mut RequestLog,
 	) -> Result<(), ProxyError> {
 		log.tls_info = connection.ext::<TLSConnectionInfo>().cloned();
+		log.backend_protocol = Some(cel::BackendProtocol::tcp);
 		self
 			.inputs
 			.metrics
@@ -74,7 +78,6 @@ impl TCPProxy {
 			.and_then(|tls| tls.server_name.as_deref());
 
 		let selected_listener = self.selected_listener.clone();
-		let _upstream = self.inputs.upstream.clone();
 		let inputs = self.inputs.clone();
 		let bind_name = self.bind_name.clone();
 		debug!(bind=%bind_name, "route for bind");
@@ -92,57 +95,62 @@ impl TCPProxy {
 		let selected_backend =
 			select_tcp_backend(selected_route.as_ref()).ok_or(ProxyError::NoValidBackends)?;
 		let selected_backend = resolve_backend(selected_backend, self.inputs.as_ref())?;
+		let backend_policies = get_backend_policies(&self.inputs, &selected_backend.backend);
 
-		let (_target, _policy_key) = match &selected_backend.backend {
-			SimpleBackend::Service(svc, port) => {
-				let port = *port;
-				let workloads = &inputs.stores.read_discovery().workloads;
-				let (ep, _, wl) = svc
-					.endpoints
-					.select_endpoint(workloads, svc.as_ref(), port, None)
-					.ok_or(ProxyError::NoHealthyEndpoints)?;
-				let svc_target_port = svc.ports.get(&port).copied().unwrap_or_default();
-				let target_port = if let Some(&ep_target_port) = ep.port.get(&port) {
-					// use endpoint port mapping
-					ep_target_port
-				} else if svc_target_port > 0 {
-					// otherwise, check if the service has the port
-					svc_target_port
-				} else {
-					return Err(ProxyError::NoHealthyEndpoints);
-				};
-				let Some(ip) = wl.workload_ips.first() else {
-					return Err(ProxyError::NoHealthyEndpoints);
-				};
-				let dest = std::net::SocketAddr::from((*ip, target_port));
-				(
-					Target::Address(dest),
-					PolicyTarget::Backend(selected_backend.backend.name()),
-				)
+		let backend_call = match &selected_backend.backend {
+			SimpleBackend::Service(svc, port) => httpproxy::build_service_call(
+				inputs.as_ref(),
+				backend_policies,
+				&mut Some(log),
+				None,
+				svc,
+				port,
+			)?,
+			SimpleBackend::Opaque(_, target) => BackendCall {
+				target: target.clone(),
+				http_version_override: None,
+				transport_override: None,
+				backend_policies,
 			},
-			SimpleBackend::Opaque(name, target) => (target.clone(), PolicyTarget::Backend(name.clone())),
 			SimpleBackend::Invalid => return Err(ProxyError::BackendDoesNotExist),
 		};
 
-		// let _policies = inputs
-		// .stores
-		// .read_binds()
-		// .backend_policies(todo!(), None);
-		// let transport = policies.i // TODO
-		// let Target::Address(addr) = _target else {
-		// panic!("TODO")
-		// };
-		// let upstream = stream::Socket::dial(addr)
-		// .await
-		// .map_err(ProxyError::Processing)?;
-		// agent_core::copy::copy_bidirectional(
-		// connection,
-		// upstream,
-		// &agent_core::copy::ConnectionResult {},
-		// )
-		// .await
-		// .map_err(|e| ProxyError::Processing(e.into()))?;
-		//
+		let bi = selected_backend.backend.backend_info();
+		if let Some(bp) = log.backend_protocol {
+			log.cel.ctx().with_backend(&bi, bp)
+		}
+		log.endpoint = Some(backend_call.target.clone());
+		log.backend_info = Some(bi);
+
+		let transport = crate::proxy::httpproxy::build_transport(
+			&inputs,
+			&backend_call,
+			backend_call.backend_policies.backend_tls.clone(),
+		)
+		.await?;
+
+		// export rx/tx bytes on drop
+		let mut connection = connection;
+		let labels = TCPLabels {
+			bind: Some(&self.bind_name).into(),
+			gateway: Some(&self.selected_listener.gateway_name).into(),
+			listener: Some(&self.selected_listener.name).into(),
+			protocol: if log.tls_info.is_some() {
+				BindProtocol::tls
+			} else {
+				BindProtocol::tcp
+			},
+		};
+		connection.set_transport_metrics(self.inputs.metrics.clone(), labels);
+
+		inputs
+			.upstream
+			.call_tcp(client::TCPCall {
+				source: connection,
+				target: backend_call.target,
+				transport,
+			})
+			.await?;
 		Ok(())
 	}
 }
@@ -184,4 +192,16 @@ fn resolve_backend(
 		weight: b.weight,
 		backend,
 	})
+}
+
+pub fn get_backend_policies(inputs: &ProxyInputs, backend: &SimpleBackend) -> BackendPolicies {
+	let service = match backend {
+		SimpleBackend::Service(svc, _) => Some(strng::format!("{}/{}", svc.namespace, svc.hostname)),
+		_ => None,
+	};
+
+	inputs
+		.stores
+		.read_binds()
+		.backend_policies(Some(backend.name()), service, None, &[])
 }

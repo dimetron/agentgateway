@@ -51,7 +51,6 @@ import {
   BACKEND_TYPES,
   BACKEND_TABLE_HEADERS,
   HOST_TYPES,
-  AI_HOST_OVERRIDE_TYPES,
   AI_MODEL_PLACEHOLDERS,
   AI_REGION_PLACEHOLDERS,
 } from "@/lib/backend-constants";
@@ -197,7 +196,7 @@ export const BackendTable: React.FC<BackendTableProps> = ({
                             </TableCell>
                             <TableCell>
                               <Badge variant="outline">
-                                {backendContext.listener.name || "unnamed listener"}
+                                {backendContext.listener.name || "unnamed"}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -409,7 +408,7 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
             }
           >
             {/* Only show name input for backends that support custom names */}
-            {selectedBackendType !== "ai" && selectedBackendType !== "mcp" && (
+            {selectedBackendType !== "mcp" && (
               <div className="space-y-2">
                 <Label htmlFor="backend-name">Name *</Label>
                 <Input
@@ -443,8 +442,7 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
             {editingBackend ? (
               <div className="p-3 bg-muted rounded-md">
                 <p className="text-sm">
-                  Port {editingBackend.bind.port} →{" "}
-                  {editingBackend.listener.name || "unnamed listener"} →{" "}
+                  Port {editingBackend.bind.port} → {editingBackend.listener.name || "unnamed"} →{" "}
                   {editingBackend.route.name || `Route ${editingBackend.routeIndex + 1}`}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -726,43 +724,13 @@ const McpBackendForm: React.FC<McpBackendFormProps> = ({
           {(target.type === "sse" || target.type === "mcp" || target.type === "openapi") && (
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label>Full URL *</Label>
+                <Label>URL *</Label>
                 <Input
                   value={target.fullUrl}
                   onChange={(e) => parseAndUpdateUrl(index, e.target.value)}
-                  placeholder="http://localhost:3000/api/mcp"
+                  placeholder="https://example.com/mcp"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Paste the full URL and it will be automatically parsed into host, port, and path
-                </p>
               </div>
-
-              {target.host && target.port && (
-                <div className="p-3 bg-muted/30 rounded-md">
-                  <p className="text-sm font-medium mb-2">Parsed Components:</p>
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">Host:</span>
-                        <span className="ml-2 font-mono">{target.host}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Port:</span>
-                        <span className="ml-2 font-mono">{target.port}</span>
-                      </div>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Path:</span>
-                      <span
-                        className="ml-2 font-mono truncate block max-w-full"
-                        title={target.path || "/"}
-                      >
-                        {target.path || "/"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -997,66 +965,49 @@ const AiBackendForm: React.FC<AiBackendFormProps> = ({ backendForm, setBackendFo
       </div>
     )}
 
-    {/* AI Host Override */}
-    <div className="space-y-4">
+    {backendForm.aiProvider === "azureOpenAI" && (
       <div className="space-y-2">
-        <Label>Host Override (optional)</Label>
-        <div className="flex space-x-4">
-          {AI_HOST_OVERRIDE_TYPES.map(({ value, label }) => (
-            <Button
-              key={value}
-              type="button"
-              variant={backendForm.aiHostOverrideType === value ? "default" : "outline"}
-              onClick={() =>
-                setBackendForm((prev) => ({ ...prev, aiHostOverrideType: value as any }))
-              }
-              size="sm"
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
+        <Label htmlFor="ai-host">Host *</Label>
+        <Input
+          id="ai-host"
+          value={backendForm.aiHost}
+          onChange={(e) => setBackendForm((prev) => ({ ...prev, aiHost: e.target.value }))}
+          placeholder="my-resource-name.openai.azure.com"
+        />
       </div>
+    )}
+    {backendForm.aiProvider === "azureOpenAI" && (
+      <div className="space-y-2">
+        <Label htmlFor="ai-api-version">API Version (optional)</Label>
+        <Input
+          id="ai-api-version"
+          value={backendForm.aiApiVersion}
+          onChange={(e) => setBackendForm((prev) => ({ ...prev, aiApiVersion: e.target.value }))}
+          placeholder="v1, preview, 2024-10-21, etc. (defaults to v1)"
+        />
+      </div>
+    )}
 
-      {backendForm.aiHostOverrideType === "address" && (
-        <div className="space-y-2">
-          <Label htmlFor="ai-host-address">Host Address</Label>
-          <Input
-            id="ai-host-address"
-            value={backendForm.aiHostAddress}
-            onChange={(e) => setBackendForm((prev) => ({ ...prev, aiHostAddress: e.target.value }))}
-            placeholder="api.custom-ai-provider.com:443"
-          />
-        </div>
-      )}
+    {/* AI Host Override */}
+    <div className="space-y-2">
+      <Label htmlFor="ai-host-override">Host Override (optional)</Label>
+      <Input
+        id="ai-host-override"
+        value={backendForm.aiHostOverride}
+        onChange={(e) => setBackendForm((prev) => ({ ...prev, aiHostOverride: e.target.value }))}
+        placeholder="api.custom-ai-provider.com:443"
+      />
+    </div>
 
-      {backendForm.aiHostOverrideType === "hostname" && (
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="ai-host-hostname">Hostname</Label>
-            <Input
-              id="ai-host-hostname"
-              value={backendForm.aiHostHostname}
-              onChange={(e) =>
-                setBackendForm((prev) => ({ ...prev, aiHostHostname: e.target.value }))
-              }
-              placeholder="api.custom-ai-provider.com"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ai-host-port">Port</Label>
-            <Input
-              id="ai-host-port"
-              type="number"
-              min="1"
-              max="65535"
-              value={backendForm.aiHostPort}
-              onChange={(e) => setBackendForm((prev) => ({ ...prev, aiHostPort: e.target.value }))}
-              placeholder="443"
-            />
-          </div>
-        </div>
-      )}
+    {/* AI Path Override */}
+    <div className="space-y-2">
+      <Label htmlFor="ai-path-override">Path Override (optional)</Label>
+      <Input
+        id="ai-path-override"
+        value={backendForm.aiPathOverride}
+        onChange={(e) => setBackendForm((prev) => ({ ...prev, aiPathOverride: e.target.value }))}
+        placeholder="/v1/chat/completions"
+      />
     </div>
   </div>
 );

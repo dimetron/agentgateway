@@ -97,19 +97,66 @@ impl RemoteRateLimit {
 		cost: Option<u64>,
 	) -> RateLimitRequest {
 		let mut descriptors = Vec::with_capacity(self.descriptors.0.len());
-		for entries in self
+		let candidate_count = self
+			.descriptors
+			.0
+			.iter()
+			.filter(|e| e.limit_type == limit_type)
+			.count();
+		trace!(
+			"ratelimit build_request start: domain={}, type={:?}, cost={:?}, candidates={}",
+			self.domain, limit_type, cost, candidate_count
+		);
+		for desc_entry in self
 			.descriptors
 			.0
 			.iter()
 			.filter(|e| e.limit_type == limit_type)
 		{
-			if let Some(rl_entries) = Self::eval_descriptor(exec, &entries.entries) {
+			if let Some(rl_entries) = Self::eval_descriptor(exec, &desc_entry.entries) {
+				// Trace evaluated descriptor key/value pairs for visibility
+				let kv_pairs: Vec<String> = rl_entries
+					.iter()
+					.map(|e| format!("{}={}", e.key, e.value))
+					.collect();
+				trace!(
+					"ratelimit evaluated descriptors (domain: {}, type: {:?}): {}",
+					self.domain,
+					limit_type,
+					kv_pairs.join(", ")
+				);
 				descriptors.push(RateLimitDescriptor {
 					entries: rl_entries,
 					limit: None,
 					hits_addend: cost,
 				});
+			} else {
+				let attempted: Vec<String> = desc_entry
+					.entries
+					.iter()
+					.map(|d| format!("{}={:?}", d.0, d.1))
+					.collect();
+				trace!(
+					"ratelimit skipped descriptor set (domain: {}, type: {:?}) due to evaluation failure/non-string values: {}",
+					self.domain,
+					limit_type,
+					attempted.join(", ")
+				);
 			}
+		}
+
+		if descriptors.is_empty() {
+			trace!(
+				"ratelimit built empty descriptor list (domain: {}, type: {:?}); candidates={}, cost={:?}",
+				self.domain, limit_type, candidate_count, cost
+			);
+		} else {
+			trace!(
+				"ratelimit built request descriptors (domain: {}, type: {:?}): count={}",
+				self.domain,
+				limit_type,
+				descriptors.len()
+			);
 		}
 
 		proto::RateLimitRequest {
@@ -133,6 +180,10 @@ impl RemoteRateLimit {
 			.any(|d| d.limit_type == RateLimitType::Tokens)
 		{
 			// Nothing to do
+			trace!(
+				"ratelimit: no token descriptors configured for domain={}, skipping",
+				self.domain
+			);
 			return Ok((PolicyResponse::default(), None));
 		}
 		let request = self.build_request(exec, RateLimitType::Tokens, Some(cost));
@@ -143,7 +194,7 @@ impl RemoteRateLimit {
 			request,
 		};
 
-		cr.and_then(|pr| (Self::apply(req, pr).map(|x| (x, Some(r)))))
+		cr.and_then(|pr| Self::apply(req, pr).map(|x| (x, Some(r))))
 	}
 
 	pub async fn check(
@@ -160,6 +211,10 @@ impl RemoteRateLimit {
 			.any(|d| d.limit_type == RateLimitType::Requests)
 		{
 			// Nothing to do
+			trace!(
+				"ratelimit: no request descriptors configured for domain={}, skipping",
+				self.domain
+			);
 			return Ok(PolicyResponse::default());
 		}
 		let request = self.build_request(exec, RateLimitType::Requests, None);
@@ -173,6 +228,24 @@ impl RemoteRateLimit {
 		request: proto::RateLimitRequest,
 	) -> Result<proto::RateLimitResponse, ProxyError> {
 		trace!("connecting to {:?}", self.target);
+		let descriptor_summaries: Vec<String> = request
+			.descriptors
+			.iter()
+			.map(|d| {
+				let kvs: Vec<String> = d
+					.entries
+					.iter()
+					.map(|e| format!("{}={}", e.key, e.value))
+					.collect();
+				format!("[hits_addend={:?}; {}]", d.hits_addend, kvs.join(", "))
+			})
+			.collect();
+		trace!(
+			"ratelimit request summary (domain: {}): descriptors={} {}",
+			request.domain,
+			request.descriptors.len(),
+			descriptor_summaries.join(" | ")
+		);
 		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
 			client,
@@ -216,16 +289,30 @@ impl RemoteRateLimit {
 	fn eval_descriptor(exec: &Executor, entries: &Vec<Descriptor>) -> Option<Vec<Entry>> {
 		let mut rl_entries = Vec::with_capacity(entries.len());
 		for Descriptor(k, lookup) in entries {
-			// We drop the entire set if we cannot eval one
-			let value = exec.eval(lookup).ok()?;
-			let cel::Value::String(value) = value else {
-				return None;
-			};
-			let entry = Entry {
-				key: k.clone(),
-				value: value.to_string(),
-			};
-			rl_entries.push(entry);
+			// We drop the entire set if we cannot eval one; emit trace to aid debugging
+			match exec.eval(lookup) {
+				Ok(value) => {
+					let Some(string_value) = cel::value_as_string(&value) else {
+						trace!(
+							"ratelimit descriptor value not convertible to string: key={}, expr={:?}",
+							k, lookup
+						);
+						return None;
+					};
+					let entry = Entry {
+						key: k.clone(),
+						value: string_value,
+					};
+					rl_entries.push(entry);
+				},
+				Err(e) => {
+					trace!(
+						"ratelimit failed to evaluate expression: key={}, expr={:?}, error={}",
+						k, lookup, e
+					);
+					return None;
+				},
+			}
 		}
 		Some(rl_entries)
 	}

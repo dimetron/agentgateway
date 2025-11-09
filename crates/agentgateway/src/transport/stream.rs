@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::io;
 use std::io::{Error, IoSlice};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -7,6 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Instant;
 
+use crate::telemetry::metrics::{Metrics as TelemetryMetrics, TCPLabels};
+use crate::transport::rewind;
+use crate::transport::rewind::RewindSocket;
+use crate::types::discovery::Identity;
+use crate::types::frontend::TCP;
 use agent_hbone::RWStream;
 use hyper_util::client::legacy::connect::{Connected, Connection};
 use prometheus_client::metrics::counter::Atomic;
@@ -14,8 +20,6 @@ use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsStream;
 use tracing::event;
-
-use crate::types::discovery::Identity;
 
 #[derive(Debug, Clone)]
 pub struct TCPConnectionInfo {
@@ -43,7 +47,7 @@ impl From<&[u8]> for Alpn {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct TLSConnectionInfo {
 	pub src_identity: Option<Identity>,
 	pub server_name: Option<String>,
@@ -59,6 +63,7 @@ pub struct HBONEConnectionInfo {
 pub struct Metrics {
 	counter: Option<BytesCounter>,
 	logging: LoggingMode,
+	ctx: Option<TransportMetricsCtx>,
 }
 
 impl Metrics {
@@ -66,8 +71,15 @@ impl Metrics {
 		Self {
 			counter: Some(Default::default()),
 			logging: LoggingMode::default(),
+			ctx: None,
 		}
 	}
+}
+
+#[derive(Debug, Clone)]
+pub struct TransportMetricsCtx {
+	pub metrics: std::sync::Arc<TelemetryMetrics>,
+	pub labels: TCPLabels,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -116,8 +128,35 @@ impl hyper_util_fork::client::legacy::connect::Connection for Socket {
 }
 
 impl Socket {
+	pub fn new_rewind(st: SocketType) -> RewindSocket {
+		RewindSocket::new(st)
+	}
 	pub fn into_parts(self) -> (Extension, Metrics, SocketType) {
 		(self.ext, self.metrics, self.inner)
+	}
+
+	pub fn from_rewind(ext: Extension, metrics: Metrics, socket: RewindSocket) -> Socket {
+		Self {
+			ext,
+			inner: SocketType::Rewind(Box::new(socket)),
+			metrics,
+		}
+	}
+
+	pub fn from_parts(ext: Extension, metrics: Metrics, socket: SocketType) -> Socket {
+		Self {
+			ext,
+			inner: socket,
+			metrics,
+		}
+	}
+
+	pub fn set_transport_metrics(
+		&mut self,
+		metrics: std::sync::Arc<TelemetryMetrics>,
+		labels: TCPLabels,
+	) {
+		self.metrics.ctx = Some(TransportMetricsCtx { metrics, labels });
 	}
 
 	pub fn from_memory(stream: DuplexStream, info: TCPConnectionInfo) -> Self {
@@ -130,7 +169,7 @@ impl Socket {
 		}
 	}
 
-	pub fn from_tcp(stream: TcpStream) -> anyhow::Result<Self> {
+	pub fn from_tcp(stream: TcpStream) -> io::Result<Self> {
 		let mut ext = Extension::new();
 		stream.set_nodelay(true)?;
 		ext.insert(TCPConnectionInfo {
@@ -180,8 +219,7 @@ impl Socket {
 		Socket {
 			ext,
 			inner: SocketType::Hbone(hbone),
-			// TODO: we probably want a counter here...
-			metrics: Default::default(),
+			metrics: Metrics::with_counter(),
 		}
 	}
 
@@ -213,10 +251,37 @@ impl Socket {
 		}
 	}
 
-	pub async fn dial(target: SocketAddr) -> anyhow::Result<Socket> {
-		// TODO: settings like timeout, etc from hyper
-		let res = TcpStream::connect(target).await?;
+	pub async fn dial(target: SocketAddr, cfg: Arc<crate::BackendConfig>) -> io::Result<Socket> {
+		let res = tokio::time::timeout(cfg.connect_timeout, TcpStream::connect(target))
+			.await
+			.map_err(|to| io::Error::new(io::ErrorKind::TimedOut, to))??;
+		if cfg.keepalives.enabled {
+			let ka = socket2::TcpKeepalive::new()
+				.with_time(cfg.keepalives.time)
+				.with_retries(cfg.keepalives.retries)
+				.with_interval(cfg.keepalives.interval);
+			tracing::trace!(
+				"set keepalive: {:?}",
+				socket2::SockRef::from(&res).set_tcp_keepalive(&ka)
+			);
+		}
 		Socket::from_tcp(res)
+	}
+
+	pub fn apply_tcp_settings(&mut self, settings: &TCP) {
+		if let SocketType::Tcp(tcp) = &self.inner
+			&& settings.keepalives.enabled
+		{
+			let ka = socket2::TcpKeepalive::new()
+				.with_time(settings.keepalives.time)
+				.with_retries(settings.keepalives.retries)
+				.with_interval(settings.keepalives.interval);
+			tracing::trace!(
+				"set keepalive: {:?}",
+				socket2::SockRef::from(tcp).set_tcp_keepalive(&ka)
+			);
+		}
+		todo!()
 	}
 
 	pub fn counter(&self) -> Option<BytesCounter> {
@@ -226,6 +291,7 @@ impl Socket {
 
 pub enum SocketType {
 	Tcp(TcpStream),
+	Rewind(Box<rewind::RewindSocket>),
 	Tls(Box<TlsStream<Box<SocketType>>>),
 	Hbone(RWStream),
 	Memory(DuplexStream),
@@ -240,6 +306,7 @@ impl AsyncRead for SocketType {
 	) -> Poll<std::io::Result<()>> {
 		match self.get_mut() {
 			SocketType::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
+			SocketType::Rewind(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Tls(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Memory(inner) => Pin::new(inner).poll_read(cx, buf),
@@ -255,6 +322,7 @@ impl AsyncWrite for SocketType {
 	) -> Poll<Result<usize, std::io::Error>> {
 		match self.get_mut() {
 			SocketType::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+			SocketType::Rewind(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Tls(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Memory(inner) => Pin::new(inner).poll_write(cx, buf),
@@ -265,6 +333,7 @@ impl AsyncWrite for SocketType {
 	fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
 		match self.get_mut() {
 			SocketType::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+			SocketType::Rewind(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Tls(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Memory(inner) => Pin::new(inner).poll_flush(cx),
@@ -275,6 +344,7 @@ impl AsyncWrite for SocketType {
 	fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
 		match self.get_mut() {
 			SocketType::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
+			SocketType::Rewind(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Tls(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Memory(inner) => Pin::new(inner).poll_shutdown(cx),
@@ -289,6 +359,7 @@ impl AsyncWrite for SocketType {
 	) -> Poll<Result<usize, std::io::Error>> {
 		match self.get_mut() {
 			SocketType::Tcp(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
+			SocketType::Rewind(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Tls(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Memory(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
@@ -299,6 +370,7 @@ impl AsyncWrite for SocketType {
 	fn is_write_vectored(&self) -> bool {
 		match &self {
 			SocketType::Tcp(inner) => inner.is_write_vectored(),
+			SocketType::Rewind(inner) => inner.is_write_vectored(),
 			SocketType::Tls(inner) => inner.is_write_vectored(),
 			SocketType::Hbone(inner) => inner.is_write_vectored(),
 			SocketType::Memory(inner) => inner.is_write_vectored(),
@@ -442,8 +514,23 @@ impl Drop for Metrics {
 		if self.logging == LoggingMode::None {
 			return;
 		}
-		// let src = self.tcp().peer_addr;
-		let (sent, recv) = if let Some((a, b)) = self.counter.take().map(|counter| counter.load()) {
+		// Export counters if a metrics context is present
+		let counts = self.counter.take().map(|c| c.load());
+		if let Some(ctx) = &self.ctx
+			&& let Some((tx, rx)) = counts
+		{
+			ctx
+				.metrics
+				.tcp_downstream_tx_bytes
+				.get_or_create(&ctx.labels)
+				.inc_by(tx);
+			ctx
+				.metrics
+				.tcp_downstream_rx_bytes
+				.get_or_create(&ctx.labels)
+				.inc_by(rx);
+		}
+		let (sent, recv) = if let Some((a, b)) = counts {
 			(Some(a), Some(b))
 		} else {
 			(None, None)

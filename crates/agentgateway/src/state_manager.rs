@@ -7,9 +7,10 @@ use tokio::fs;
 
 use crate::client::Client;
 use crate::store::Stores;
+use crate::types::agent::GatewayName;
 use crate::types::proto::agent::Resource as ADPResource;
 use crate::types::proto::workload::Address as XdsAddress;
-use crate::{ConfigSource, client, store};
+use crate::{ConfigSource, client, control, store};
 
 #[derive(serde::Serialize)]
 pub struct StateManager {
@@ -37,9 +38,16 @@ impl StateManager {
 		let stores = Stores::new();
 
 		let xds_client = if config.address.is_some() {
+			let connector = control::grpc_connector(
+				client.clone(),
+				config.address.as_ref().unwrap().clone(),
+				config.auth.clone(),
+				config.ca_cert.clone(),
+			)
+			.await?;
 			Some(
 				agent_xds::Config::new(
-					config.address.as_ref().unwrap().clone(),
+					agent_xds::GrpcClient::new(connector),
 					config.gateway.clone(),
 					config.namespace.clone(),
 				)
@@ -56,6 +64,7 @@ impl StateManager {
 				stores: stores.clone(),
 				cfg: cfg.clone(),
 				client,
+				gateway: strng::format!("{}/{}", config.namespace, config.gateway),
 			};
 			local_client.run().await?;
 		}
@@ -80,6 +89,7 @@ pub struct LocalClient {
 	pub cfg: ConfigSource,
 	pub stores: Stores,
 	pub client: Client,
+	pub gateway: GatewayName,
 }
 
 impl LocalClient {
@@ -173,6 +183,7 @@ impl LocalClient {
 		let config_content = self.cfg.read_to_string().await?;
 		let config = crate::types::local::NormalizedLocalConfig::from(
 			self.client.clone(),
+			self.gateway.clone(),
 			config_content.as_str(),
 		)
 		.await?;

@@ -13,8 +13,8 @@ use crate::telemetry::log::{LoggingFields, MetricFields};
 use crate::telemetry::trc;
 use crate::types::discovery::Identity;
 use crate::{
-	Address, Config, ConfigSource, NestedRawConfig, StringOrInt, ThreadingMode, XDSConfig, cel,
-	client, serdes, telemetry,
+	Address, Config, ConfigSource, NestedRawConfig, RawLoggingLevel, StringOrInt, ThreadingMode,
+	XDSConfig, cel, client, serdes, telemetry,
 };
 
 pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Result<Config> {
@@ -44,7 +44,9 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		.map(ConfigSource::File);
 
 	let (resolver_cfg, resolver_opts) = hickory_resolver::system_conf::read_system_conf()?;
-
+	let cluster: String = parse("CLUSTER_ID")?
+		.or(raw.cluster_id.clone())
+		.unwrap_or("Kubernetes".to_string());
 	let xds = {
 		let address = validate_uri(empty_to_none(parse("XDS_ADDRESS")?).or(raw.xds_address))?;
 		// if local_config.is_none() && address.is_none() {
@@ -60,10 +62,46 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 					.context("GATEWAY is required")?,
 			)
 		} else {
-			("".to_string(), "".to_string())
+			("default".to_string(), "default".to_string())
+		};
+
+		let tok = parse("XDS_AUTH_TOKEN")?.or(raw.xds_auth_token);
+		let auth = match tok {
+			None => {
+				// If nothing is set, conditionally use the default if it exists
+				if Path::new(&"./var/run/secrets/xds-tokens/xds-token").exists() {
+					crate::control::AuthSource::Token(
+						PathBuf::from("./var/run/secrets/xds-tokens/xds-token"),
+						cluster.clone(),
+					)
+				} else {
+					crate::control::AuthSource::None
+				}
+			},
+			Some(p) if Path::new(&p).exists() => {
+				// This is a file
+				crate::control::AuthSource::Token(PathBuf::from(p), cluster.clone())
+			},
+			Some(p) => {
+				anyhow::bail!("auth token {p} not found")
+			},
+		};
+		let xds_cert = parse_default(
+			"XDS_ROOT_CA",
+			"./var/run/secrets/xds/root-cert.pem".to_string(),
+		)?;
+		let xds_root_cert = if Path::new(&xds_cert).exists() {
+			crate::control::RootCert::File(xds_cert.into())
+		} else if xds_cert.eq("SYSTEM") {
+			// handle SYSTEM special case for ca
+			crate::control::RootCert::Default
+		} else {
+			crate::control::RootCert::Default
 		};
 		XDSConfig {
 			address,
+			auth,
+			ca_cert: xds_root_cert,
 			namespace,
 			gateway,
 			local_config,
@@ -91,10 +129,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		let sa = parse("SERVICE_ACCOUNT")?
 			.or(raw.service_account)
 			.context("SERVICE_ACCOUNT is required")?;
-		let cluster: String = parse("CLUSTER_ID")?
-			.or(raw.cluster_id)
-			.unwrap_or("Kubernetes".to_string());
-		let tok = parse("AUTH_TOKEN")?.or(raw.auth_token);
+		let tok = parse("CA_AUTH_TOKEN")?.or(raw.ca_auth_token);
 		let auth = match tok {
 			None => {
 				// If nothing is set, conditionally use the default if it exists
@@ -200,6 +235,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		num_worker_threads: parse_worker_threads(raw.worker_threads)?,
 		termination_min_deadline,
 		threading_mode,
+		backend: raw.backend,
 		termination_max_deadline: match termination_max_deadline {
 			Some(period) => period,
 			None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
@@ -225,24 +261,24 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 			headers: otlp_headers,
 			protocol: otlp_protocol,
 
-			fields: Arc::new(
-				raw
-					.tracing
-					.as_ref()
-					.and_then(|f| f.fields.clone())
-					.map(|fields| {
-						Ok::<_, anyhow::Error>(LoggingFields {
-							remove: fields.remove.into_iter().collect(),
-							add: fields
+			fields: raw
+				.tracing
+				.as_ref()
+				.and_then(|f| f.fields.clone())
+				.map(|fields| {
+					Ok::<_, anyhow::Error>(LoggingFields {
+						remove: Arc::new(fields.remove.into_iter().collect()),
+						add: Arc::new(
+							fields
 								.add
 								.iter()
 								.map(|(k, v)| cel::Expression::new(v).map(|v| (k.clone(), Arc::new(v))))
 								.collect::<Result<_, _>>()?,
-						})
+						),
 					})
-					.transpose()?
-					.unwrap_or_default(),
-			),
+				})
+				.transpose()?
+				.unwrap_or_default(),
 			random_sampling: raw
 				.tracing
 				.as_ref()
@@ -266,23 +302,43 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 				.map(cel::Expression::new)
 				.transpose()?
 				.map(Arc::new),
-			fields: Arc::new(
-				raw
-					.logging
-					.and_then(|f| f.fields)
-					.map(|fields| {
-						Ok::<_, anyhow::Error>(LoggingFields {
-							remove: fields.remove.into_iter().collect(),
-							add: fields
+			level: match raw.logging.as_ref().and_then(|l| l.level.as_ref()) {
+				None => "".to_string(),
+				Some(RawLoggingLevel::Single(level)) => level.to_string(),
+				Some(RawLoggingLevel::List(levels)) => levels.join(","),
+			},
+			format: raw
+				.logging
+				.as_ref()
+				.and_then(|l| l.format.clone())
+				.unwrap_or_default(),
+			fields: raw
+				.logging
+				.and_then(|f| f.fields)
+				.map(|fields| {
+					Ok::<_, anyhow::Error>(LoggingFields {
+						remove: Arc::new(fields.remove.into_iter().collect()),
+						add: Arc::new(
+							fields
 								.add
 								.iter()
 								.map(|(k, v)| cel::Expression::new(v).map(|v| (k.clone(), Arc::new(v))))
 								.collect::<Result<_, _>>()?,
-						})
+						),
 					})
-					.transpose()?
-					.unwrap_or_default(),
-			),
+				})
+				.transpose()?
+				.unwrap_or_default(),
+			excluded_metrics: raw
+				.metrics
+				.as_ref()
+				.map(|f| {
+					f.remove
+						.clone()
+						.into_iter()
+						.collect::<frozen_collections::FzHashSet<String>>()
+				})
+				.unwrap_or_default(),
 			metric_fields: Arc::new(
 				raw
 					.metrics
@@ -325,7 +381,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		hbone: Arc::new(agent_hbone::Config {
 			// window size: per-stream limit
 			window_size: parse("HTTP2_STREAM_WINDOW_SIZE")?
-				.or(raw.http2.as_ref().and_then(|h| h.window_size))
+				.or(raw.hbone.as_ref().and_then(|h| h.window_size))
 				.unwrap_or(4u32 * 1024 * 1024),
 			// connection window size: per connection.
 			// Setting this to the same value as window_size can introduce deadlocks in some applications
@@ -333,20 +389,20 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 			// If streamA consumes the entire connection window, we enter a deadlock.
 			// A 4x limit should be appropriate without introducing too much potential buffering.
 			connection_window_size: parse("HTTP2_CONNECTION_WINDOW_SIZE")?
-				.or(raw.http2.as_ref().and_then(|h| h.connection_window_size))
+				.or(raw.hbone.as_ref().and_then(|h| h.connection_window_size))
 				.unwrap_or(16u32 * 1024 * 1024),
 			frame_size: parse("HTTP2_FRAME_SIZE")?
-				.or(raw.http2.as_ref().and_then(|h| h.frame_size))
+				.or(raw.hbone.as_ref().and_then(|h| h.frame_size))
 				.unwrap_or(1024u32 * 1024),
 
 			pool_max_streams_per_conn: parse("POOL_MAX_STREAMS_PER_CONNECTION")?
-				.or(raw.http2.as_ref().and_then(|h| h.pool_max_streams_per_conn))
+				.or(raw.hbone.as_ref().and_then(|h| h.pool_max_streams_per_conn))
 				.unwrap_or(100u16),
 
 			pool_unused_release_timeout: parse_duration("POOL_UNUSED_RELEASE_TIMEOUT")?
 				.or(
 					raw
-						.http2
+						.hbone
 						.as_ref()
 						.and_then(|h| h.pool_unused_release_timeout),
 				)
@@ -374,7 +430,7 @@ fn parse_serde<T: DeserializeOwned>(env: &str) -> anyhow::Result<Option<T>> {
 	match env::var(env) {
 		Ok(val) => serde_json::from_str(&val)
 			.map(|v| Some(v))
-			.map_err(|e| anyhow::anyhow!("invalid env var {}={} ({})", env, val, e.to_string())),
+			.map_err(|e| anyhow::anyhow!("invalid env var {}={} ({})", env, val, e)),
 		Err(_) => Ok(None),
 	}
 }

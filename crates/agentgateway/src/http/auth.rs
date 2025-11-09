@@ -5,6 +5,7 @@ use crate::http::Request;
 use crate::http::jwt::Claims;
 use crate::proxy::ProxyError;
 use crate::serdes::deser_key_from_file;
+use crate::types::agent::BackendName;
 use crate::*;
 
 #[apply(schema!)]
@@ -27,6 +28,46 @@ pub enum AwsAuth {
 	},
 	/// Use implicit AWS authentication (environment variables, IAM roles, etc.)
 	Implicit {},
+}
+
+// The Rust sdk for Azure is the only one that requires users to manually specify their auth method
+// for all non-developer use-cases. Therefore, we have to carry these different options in our API....
+// More context here: https://github.com/Azure/azure-sdk-for-rust/issues/2283
+#[apply(schema!)]
+pub enum AzureAuthCredentialSource {
+	ClientSecret {
+		#[cfg_attr(feature = "schema", schemars(with = "String"))]
+		tenant_id: String,
+		#[cfg_attr(feature = "schema", schemars(with = "String"))]
+		client_id: String,
+		#[serde(serialize_with = "ser_redact")]
+		#[cfg_attr(feature = "schema", schemars(with = "String"))]
+		client_secret: SecretString,
+	},
+	#[serde(rename_all = "camelCase")]
+	ManagedIdentity {
+		user_assigned_identity: Option<AzureUserAssignedIdentity>,
+	},
+	WorkloadIdentity {},
+}
+
+#[apply(schema!)]
+pub enum AzureUserAssignedIdentity {
+	ClientId(String),
+	ObjectId(String),
+	ResourceId(String),
+}
+
+#[apply(schema!)]
+pub enum AzureAuth {
+	/// Use explicit Azure credentials
+	#[serde(rename_all = "camelCase")]
+	ExplicitConfig {
+		#[serde(flatten)]
+		credential_source: AzureAuthCredentialSource,
+	},
+	/// Use implicit Azure auth. Note that this is for developer use-cases only!
+	DeveloperImplicit {},
 }
 
 #[apply(schema!)]
@@ -66,15 +107,21 @@ pub enum BackendAuth {
 	Gcp {},
 	#[serde(rename = "aws")]
 	Aws(AwsAuth),
+	#[serde(rename = "azure")]
+	Azure(AzureAuth),
+}
+
+#[derive(Clone)]
+pub struct BackendInfo {
+	pub name: BackendName,
+	pub inputs: Arc<ProxyInputs>,
 }
 
 pub async fn apply_backend_auth(
-	auth: Option<&BackendAuth>,
+	backend_info: &BackendInfo,
+	auth: &BackendAuth,
 	req: &mut Request,
 ) -> Result<(), ProxyError> {
-	let Some(auth) = auth else {
-		return Ok(());
-	};
 	match auth {
 		BackendAuth::Passthrough {} => {
 			// They should have a JWT policy defined. That will strip the token. Here we add it back
@@ -100,7 +147,13 @@ pub async fn apply_backend_auth(
 			req.headers_mut().insert(http::header::AUTHORIZATION, token);
 		},
 		BackendAuth::Aws(_) => {
-			// We handle this in 'apply_late_backend_auth' since it must come at the end!
+			// We handle this in 'apply_late_backend_auth' since it must come at the end (due to request signing)!
+		},
+		BackendAuth::Azure(azure_auth) => {
+			let token = azure::get_token(&backend_info.inputs.upstream, azure_auth)
+				.await
+				.map_err(ProxyError::BackendAuthenticationFailed)?;
+			req.headers_mut().insert(http::header::AUTHORIZATION, token);
 		},
 	}
 	Ok(())
@@ -122,9 +175,14 @@ pub async fn apply_late_backend_auth(
 				.await
 				.map_err(ProxyError::BackendAuthenticationFailed)?;
 		},
+		BackendAuth::Azure(_) => {},
 	};
 	Ok(())
 }
+
+#[cfg(test)]
+#[path = "auth_tests.rs"]
+mod tests;
 
 mod gcp {
 	use anyhow::anyhow;
@@ -290,5 +348,92 @@ mod aws {
 				)
 			},
 		}
+	}
+}
+
+mod azure {
+	use std::sync::Arc;
+
+	use azure_core::credentials::TokenCredential;
+	use azure_identity::UserAssignedId;
+	use secrecy::ExposeSecret;
+	use tracing::trace;
+
+	use crate::client;
+	use crate::http::auth::{AzureAuth, AzureAuthCredentialSource, AzureUserAssignedIdentity};
+
+	const SCOPES: &[&str] = &["https://cognitiveservices.azure.com/.default"];
+	fn token_credential_from_auth(
+		client: &client::Client,
+		auth: &AzureAuth,
+	) -> anyhow::Result<Arc<dyn TokenCredential>> {
+		let client_options = azure_core::http::ClientOptions {
+			transport: Some(azure_core::http::TransportOptions::new(Arc::new(
+				client.clone(),
+			))),
+			..Default::default()
+		};
+		match auth {
+			AzureAuth::ExplicitConfig { credential_source } => match credential_source {
+				AzureAuthCredentialSource::ClientSecret {
+					tenant_id,
+					client_id,
+					client_secret,
+				} => Ok(azure_identity::ClientSecretCredential::new(
+					tenant_id,
+					client_id.to_string(),
+					azure_core::credentials::Secret::new(client_secret.expose_secret().to_string()),
+					Some(azure_identity::ClientSecretCredentialOptions {
+						client_options,
+						..Default::default()
+					}),
+				)?),
+				AzureAuthCredentialSource::ManagedIdentity {
+					user_assigned_identity,
+				} => {
+					let options: Option<azure_identity::ManagedIdentityCredentialOptions> =
+						user_assigned_identity.as_ref().map(|uami| {
+							azure_identity::ManagedIdentityCredentialOptions {
+								user_assigned_id: match uami {
+									AzureUserAssignedIdentity::ClientId(cid) => {
+										Some(UserAssignedId::ClientId(cid.to_string()))
+									},
+									AzureUserAssignedIdentity::ObjectId(oid) => {
+										Some(UserAssignedId::ObjectId(oid.to_string()))
+									},
+									AzureUserAssignedIdentity::ResourceId(rid) => {
+										Some(UserAssignedId::ResourceId(rid.to_string()))
+									},
+								},
+								client_options,
+							}
+						});
+					Ok(azure_identity::ManagedIdentityCredential::new(options)?)
+				},
+				AzureAuthCredentialSource::WorkloadIdentity {} => {
+					Ok(azure_identity::WorkloadIdentityCredential::new(Some(
+						azure_identity::WorkloadIdentityCredentialOptions {
+							credential_options: azure_identity::ClientAssertionCredentialOptions {
+								client_options,
+								..Default::default()
+							},
+							..Default::default()
+						},
+					))?)
+				},
+			},
+			AzureAuth::DeveloperImplicit {} => Ok(azure_identity::DeveloperToolsCredential::new(None)?),
+		}
+	}
+	pub async fn get_token(
+		client: &client::Client,
+		auth: &AzureAuth,
+	) -> anyhow::Result<http::HeaderValue> {
+		let cred = token_credential_from_auth(client, auth)?;
+		let token = cred.get_token(SCOPES, None).await?;
+		let mut hv = http::HeaderValue::from_str(&format!("Bearer {}", token.token.secret()))?;
+		hv.set_sensitive(true);
+		trace!("attached Azure token");
+		Ok(hv)
 	}
 }

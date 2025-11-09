@@ -13,7 +13,7 @@ use crate::telemetry::trc::Tracer;
 use crate::{Config, ProxyInputs, client, mcp, proxy, state_manager};
 
 pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
-	let data_plane_pool = new_data_plane_pool(config.num_worker_threads);
+	let (data_plane_handle, data_plane_pool) = new_data_plane_pool(config.num_worker_threads);
 
 	// TODO consolidate this
 	trcng::init_tracer(trcng::Config {
@@ -53,10 +53,10 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	let mut registry = Registry::default();
 	let sub_registry = metrics::sub_registry(&mut registry);
 	let xds_metrics = agent_xds::Metrics::new(sub_registry);
-	// TODO: metric for version
+	agent_core::metrics::TokioCollector::register(sub_registry, &data_plane_handle);
 
 	// TODO: use for XDS
-	let control_client = client::Client::new(&config.dns, None);
+	let control_client = client::Client::new(&config.dns, None, config.backend.clone(), None);
 	let ca = if let Some(cfg) = &config.ca {
 		Some(Arc::new(caclient::CaClient::new(
 			control_client.clone(),
@@ -68,11 +68,24 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	let pool = ca
 		.clone()
 		.map(|ca| agent_hbone::pool::WorkloadHBONEPool::new(config.hbone.clone(), ca));
-	let client = client::Client::new(&config.dns, pool);
+	// Build metrics and then the upstream client with metrics wired in
+	let sub_registry = metrics::sub_registry(&mut registry);
+	let tracer = trc::Tracer::new(&config.tracing)?;
+	let metrics_handle = Arc::new(crate::metrics::Metrics::new(
+		sub_registry,
+		config.logging.excluded_metrics.clone(),
+	));
+	let client = client::Client::new(
+		&config.dns,
+		pool,
+		config.backend.clone(),
+		Some(metrics_handle.clone()),
+	);
 
 	let (xds_tx, xds_rx) = tokio::sync::watch::channel(());
 	let state_mgr =
-		state_manager::StateManager::new(&config.xds, client.clone(), xds_metrics, xds_tx).await?;
+		state_manager::StateManager::new(&config.xds, control_client.clone(), xds_metrics, xds_tx)
+			.await?;
 	let mut xds_rx_for_task = xds_rx.clone();
 	tokio::spawn(async move {
 		// When we get the initial XDS state, unblock readiness
@@ -89,6 +102,7 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 		stores.clone(),
 		shutdown.trigger(),
 		drain_rx.clone(),
+		data_plane_handle.clone(),
 	)
 	.await
 	.context("admin server starts")?;
@@ -97,24 +111,15 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	#[cfg(feature = "ui")]
 	info!("serving UI at http://{}/ui", config.admin_addr);
 
-	let sub_registry = metrics::sub_registry(&mut registry);
-	let tracer = trc::Tracer::new(&config.tracing)?;
 	let pi = ProxyInputs {
 		cfg: config.clone(),
 		stores: stores.clone(),
 		tracer: tracer.clone(),
-		metrics: Arc::new(crate::metrics::Metrics::new(sub_registry)),
+		metrics: metrics_handle.clone(),
 		upstream: client.clone(),
 		ca,
 
-		mcp_state: mcp::sse::App::new(
-			stores.clone(),
-			Arc::new(crate::mcp::relay::metrics::Metrics::new(
-				&mut registry,
-				None, // TODO custom tags
-			)),
-			drain_rx.clone(),
-		),
+		mcp_state: mcp::App::new(stores.clone()),
 	};
 
 	let gw = proxy::Gateway::new(Arc::new(pi), drain_rx.clone());
@@ -182,8 +187,11 @@ struct DataPlaneTask {
 	fut: Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + Sync + 'static>>,
 }
 
-fn new_data_plane_pool(num_worker_threads: usize) -> mpsc::Sender<DataPlaneTask> {
+fn new_data_plane_pool(
+	num_worker_threads: usize,
+) -> (tokio::runtime::Handle, mpsc::Sender<DataPlaneTask>) {
 	let (tx, rx) = mpsc::channel();
+	let (tx_handle, rx_handle) = mpsc::channel();
 
 	let span = tracing::span::Span::current();
 	thread::spawn(move || {
@@ -198,6 +206,7 @@ fn new_data_plane_pool(num_worker_threads: usize) -> mpsc::Sender<DataPlaneTask>
 			.enable_all()
 			.build()
 			.unwrap();
+		tx_handle.send(runtime.handle().clone()).unwrap();
 		runtime.block_on(
 			async move {
 				let mut join_set = JoinSet::new();
@@ -229,5 +238,6 @@ fn new_data_plane_pool(num_worker_threads: usize) -> mpsc::Sender<DataPlaneTask>
 		);
 	});
 
-	tx
+	let handle = rx_handle.recv().unwrap();
+	(handle, tx)
 }

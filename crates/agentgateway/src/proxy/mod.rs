@@ -7,8 +7,11 @@ pub mod tcpproxy;
 pub use gateway::Gateway;
 use hyper_util_fork::client::legacy::Error as HyperError;
 
-use crate::http::{HeaderValue, Response, StatusCode};
-use crate::types::agent::{Backend, BackendReference, SimpleBackend, SimpleBackendReference};
+use crate::http::{HeaderValue, Response, StatusCode, ext_proc};
+use crate::types::agent::{
+	Backend, BackendPolicy, BackendReference, BackendWithPolicies, SimpleBackend,
+	SimpleBackendReference,
+};
 use crate::*;
 
 #[derive(thiserror::Error, Debug)]
@@ -20,6 +23,44 @@ pub enum ProxyResponse {
 }
 
 impl ProxyResponse {
+	pub fn as_reason(&self) -> ProxyResponseReason {
+		let ProxyResponse::Error(e) = self else {
+			return ProxyResponseReason::DirectResponse;
+		};
+		match e {
+			ProxyError::BindNotFound
+			| ProxyError::ListenerNotFound
+			| ProxyError::RouteNotFound
+			| ProxyError::ServiceNotFound => ProxyResponseReason::NotFound,
+			ProxyError::NoHealthyEndpoints
+			| ProxyError::InvalidBackendType
+			| ProxyError::DnsResolution
+			| ProxyError::NoValidBackends
+			| ProxyError::BackendDoesNotExist => ProxyResponseReason::NoHealthyBackend,
+			ProxyError::UpgradeFailed(_, _)
+			| ProxyError::InvalidRequest
+			| ProxyError::ProcessingString(_)
+			| ProxyError::Processing(_)
+			| ProxyError::BackendUnsupportedMirror
+			| ProxyError::FilterError(_) => ProxyResponseReason::Internal,
+			ProxyError::JwtAuthenticationFailure(_) => ProxyResponseReason::JwtAuth,
+			ProxyError::BasicAuthenticationFailure(_) => ProxyResponseReason::BasicAuth,
+			ProxyError::APIKeyAuthenticationFailure(_) => ProxyResponseReason::APIKeyAuth,
+			ProxyError::ExternalAuthorizationFailed(_) => ProxyResponseReason::ExtAuth,
+			ProxyError::AuthorizationFailed | ProxyError::CsrfValidationFailed => {
+				ProxyResponseReason::Authorization
+			},
+			ProxyError::UpstreamCallFailed(_)
+			| ProxyError::UpstreamTCPCallFailed(_)
+			| ProxyError::BackendAuthenticationFailed(_)
+			| ProxyError::UpstreamTCPProxy(_) => ProxyResponseReason::UpstreamFailure,
+			ProxyError::RequestTimeout => ProxyResponseReason::Timeout,
+			ProxyError::ExtProc(_) => ProxyResponseReason::ExtProc,
+			ProxyError::RateLimitFailed | ProxyError::RateLimitExceeded { .. } => {
+				ProxyResponseReason::RateLimit
+			},
+		}
+	}
 	pub fn downcast(self) -> ProxyError {
 		match self {
 			ProxyResponse::Error(e) => e,
@@ -27,6 +68,44 @@ impl ProxyResponse {
 				"attempted to return a direct response in an invalid context".to_string(),
 			),
 		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum ProxyResponseReason {
+	/// A response from the upstream
+	Upstream,
+	/// A response was directly recorded
+	DirectResponse,
+	/// The requested resource couldn't be found
+	NotFound,
+	/// There was not an endpoint eligible to send traffic to
+	NoHealthyBackend,
+	/// Some internal error in processing occurred
+	Internal,
+	/// JWT authentication failed
+	JwtAuth,
+	/// Basic authentication failed
+	BasicAuth,
+	/// API Key authentication failed
+	APIKeyAuth,
+	/// External Authorization failed
+	ExtAuth,
+	/// Authorization failed
+	Authorization,
+	/// Request timed out
+	Timeout,
+	/// External processing failed
+	ExtProc,
+	/// Rate limit exceeded
+	RateLimit,
+	/// The upstream request failed
+	UpstreamFailure,
+}
+
+impl Display for ProxyResponseReason {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{:?}", self)
 	}
 }
 
@@ -50,24 +129,36 @@ pub enum ProxyError {
 	BackendUnsupportedMirror,
 	#[error("authentication failure: {0}")]
 	JwtAuthenticationFailure(http::jwt::TokenError),
-	#[error("transformation failed")]
-	TransformationFailure,
+	#[error("basic authentication failure: {0}")]
+	BasicAuthenticationFailure(http::basicauth::Error),
+	#[error("api key authentication failure: {0}")]
+	APIKeyAuthenticationFailure(http::apikey::Error),
+	#[error("CSRF validation failed")]
+	CsrfValidationFailed,
 	#[error("service not found")]
 	ServiceNotFound,
 	#[error("invalid backend type")]
 	InvalidBackendType,
 	#[error("no healthy backends")]
 	NoHealthyEndpoints,
+	#[error("external authorization failed")]
+	ExternalAuthorizationFailed(Option<StatusCode>),
 	#[error("authorization failed")]
-	AuthorizationFailed(Option<StatusCode>),
+	AuthorizationFailed,
 	#[error("backend authentication failed: {0}")]
 	BackendAuthenticationFailed(anyhow::Error),
-	#[error("upstream call failed: {0:?}")]
+	#[error("upstream call failed: {0}")]
 	UpstreamCallFailed(HyperError),
+	#[error("upstream tcp call failed: {0}")]
+	UpstreamTCPCallFailed(http::Error),
+	#[error("upstream tcp proxy failed: {0}")]
+	UpstreamTCPProxy(agent_core::copy::CopyError),
 	#[error("request timeout")]
 	RequestTimeout,
 	#[error("processing failed: {0}")]
 	Processing(anyhow::Error),
+	#[error("ext_proc failed: {0}")]
+	ExtProc(#[from] ext_proc::Error),
 	#[error("processing failed: {0}")]
 	ProcessingString(String),
 	#[error("rate limit exceeded")]
@@ -105,7 +196,8 @@ impl ProxyError {
 			ProxyError::ServiceNotFound => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::BackendAuthenticationFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::InvalidBackendType => StatusCode::INTERNAL_SERVER_ERROR,
-			ProxyError::TransformationFailure => StatusCode::INTERNAL_SERVER_ERROR,
+			ProxyError::ExtProc(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			ProxyError::CsrfValidationFailed => StatusCode::FORBIDDEN,
 
 			ProxyError::UpgradeFailed(_, _) => StatusCode::BAD_GATEWAY,
 
@@ -113,8 +205,11 @@ impl ProxyError {
 			ProxyError::FilterError(_) => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::InvalidRequest => StatusCode::BAD_REQUEST,
 
-			ProxyError::JwtAuthenticationFailure(_) => StatusCode::FORBIDDEN,
-			ProxyError::AuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
+			ProxyError::JwtAuthenticationFailure(_) => StatusCode::UNAUTHORIZED,
+			ProxyError::BasicAuthenticationFailure(_) => StatusCode::UNAUTHORIZED,
+			ProxyError::APIKeyAuthenticationFailure(_) => StatusCode::UNAUTHORIZED,
+			ProxyError::AuthorizationFailed => StatusCode::FORBIDDEN,
+			ProxyError::ExternalAuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
 
 			ProxyError::DnsResolution => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::NoHealthyEndpoints => StatusCode::SERVICE_UNAVAILABLE,
@@ -125,6 +220,10 @@ impl ProxyError {
 			ProxyError::ProcessingString(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 			ProxyError::RateLimitFailed => StatusCode::TOO_MANY_REQUESTS,
+
+			// Shouldn't happen on this path
+			ProxyError::UpstreamTCPCallFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			ProxyError::UpstreamTCPProxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
 		};
 		let msg = self.to_string();
 		let mut rb = ::http::Response::builder()
@@ -148,11 +247,27 @@ impl ProxyError {
 				rb = rb.header(http::x_headers::X_RATELIMIT_RESET, hv)
 			}
 		}
+
+		// Add WWW-Authenticate header for basic auth failures
+		if let ProxyError::BasicAuthenticationFailure(err) = &self {
+			let realm = match err {
+				http::basicauth::Error::Missing { realm } => realm,
+				http::basicauth::Error::InvalidCredentials { realm } => realm,
+			};
+			let auth_header = format!("Basic realm=\"{}\"", realm);
+			if let Ok(hv) = HeaderValue::try_from(auth_header) {
+				rb = rb.header(hyper::header::WWW_AUTHENTICATE, hv);
+			}
+		}
+
 		rb.body(http::Body::from(msg)).unwrap()
 	}
 }
 
-pub fn resolve_backend(b: &BackendReference, pi: &ProxyInputs) -> Result<Backend, ProxyError> {
+pub fn resolve_backend(
+	b: &BackendReference,
+	pi: &ProxyInputs,
+) -> Result<BackendWithPolicies, ProxyError> {
 	let backend = match b {
 		BackendReference::Service { name, port } => {
 			let svc = pi
@@ -161,7 +276,7 @@ pub fn resolve_backend(b: &BackendReference, pi: &ProxyInputs) -> Result<Backend
 				.services
 				.get_by_namespaced_host(name)
 				.ok_or(ProxyError::ServiceNotFound)?;
-			Backend::Service(svc, *port)
+			Backend::Service(svc, *port).into()
 		},
 		BackendReference::Backend(_) => {
 			let be = pi
@@ -171,7 +286,7 @@ pub fn resolve_backend(b: &BackendReference, pi: &ProxyInputs) -> Result<Backend
 				.ok_or(ProxyError::ServiceNotFound)?;
 			Arc::unwrap_or_clone(be)
 		},
-		BackendReference::Invalid => Backend::Invalid,
+		BackendReference::Invalid => Backend::Invalid.into(),
 	};
 	Ok(backend)
 }
@@ -180,6 +295,13 @@ pub fn resolve_simple_backend(
 	b: &SimpleBackendReference,
 	pi: &ProxyInputs,
 ) -> Result<SimpleBackend, ProxyError> {
+	resolve_simple_backend_with_policies(b, pi).map(|b| b.0)
+}
+
+pub fn resolve_simple_backend_with_policies(
+	b: &SimpleBackendReference,
+	pi: &ProxyInputs,
+) -> Result<(SimpleBackend, Vec<BackendPolicy>), ProxyError> {
 	let backend = match b {
 		SimpleBackendReference::Service { name, port } => {
 			let svc = pi
@@ -188,7 +310,7 @@ pub fn resolve_simple_backend(
 				.services
 				.get_by_namespaced_host(name)
 				.ok_or(ProxyError::ServiceNotFound)?;
-			SimpleBackend::Service(svc, *port)
+			(SimpleBackend::Service(svc, *port), Vec::default())
 		},
 		SimpleBackendReference::Backend(_) => {
 			let be = pi
@@ -196,10 +318,12 @@ pub fn resolve_simple_backend(
 				.read_binds()
 				.backend(&b.name())
 				.ok_or(ProxyError::ServiceNotFound)?;
-			SimpleBackend::try_from(Arc::unwrap_or_clone(be))
-				.map_err(|_| ProxyError::InvalidBackendType)?
+			(
+				SimpleBackend::try_from(be.backend.clone()).map_err(|_| ProxyError::InvalidBackendType)?,
+				be.inline_policies.clone(),
+			)
 		},
-		SimpleBackendReference::Invalid => SimpleBackend::Invalid,
+		SimpleBackendReference::Invalid => (SimpleBackend::Invalid, Vec::default()),
 	};
 	Ok(backend)
 }

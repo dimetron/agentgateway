@@ -18,16 +18,23 @@ pub fn insert_all(ctx: &mut Context<'_>) {
 	// Custom to agentgateway
 	ctx.add_function("json", json_parse);
 	ctx.add_function("to_json", to_json);
+	// Keep old and new name for compatibility
+	ctx.add_function("toJson", to_json);
 	ctx.add_function("with", with);
 	ctx.add_function("flatten", flatten);
 	ctx.add_function("flatten_recursive", flatten_recursive);
-	ctx.add_function("map_values", map_values);
+	// Keep old and new name for compatibility
+	ctx.add_function("flattenRecursive", flatten_recursive);
+	ctx.add_function("mapValues", map_values);
+	ctx.add_function("merge", map_merge);
 	ctx.add_function("variables", variables);
 	ctx.add_function("random", || random_range(0.0..=1.0));
+	ctx.add_function("default", default);
+	ctx.add_function("regexReplace", regex_replace);
 
 	// Using the go name, base64.encode is blocked by https://github.com/cel-rust/cel-rust/issues/103 (namespacing)
-	ctx.add_function("base64_encode", base64_encode);
-	ctx.add_function("base64_decode", base64_decode);
+	ctx.add_function("base64Encode", base64_encode);
+	ctx.add_function("base64Decode", base64_decode);
 
 	// "Strings" extension
 	// https://pkg.go.dev/github.com/google/cel-go/ext#Strings
@@ -133,6 +140,7 @@ fn variables(ftx: &FunctionContext) -> ResolveResult {
 	})
 	.into()
 }
+
 pub fn map_values(
 	ftx: &FunctionContext,
 	This(this): This<Value>,
@@ -155,6 +163,21 @@ pub fn map_values(
 	.into()
 }
 
+pub fn map_merge(This(this): This<Value>, other: Value) -> ResolveResult {
+	let this = must_map(this)?;
+	let other = must_map(other)?;
+	let mut nv = Arc::unwrap_or_clone(this.map);
+	nv.extend(Arc::unwrap_or_clone(other.map));
+	Value::Map(Map { map: Arc::new(nv) }).into()
+}
+
+fn must_map(v: Value) -> Result<Map, cel::ExecutionError> {
+	match v {
+		Value::Map(map) => Ok(map),
+		_ => Err(v.error_expected_type(ValueType::Map)),
+	}
+}
+
 fn json_parse(ftx: &FunctionContext, v: Value) -> ResolveResult {
 	let sv = match v {
 		Value::String(b) => serde_json::from_str(b.as_str()),
@@ -170,6 +193,37 @@ fn to_json(ftx: &FunctionContext, v: Value) -> ResolveResult {
 	Ok(Value::String(Arc::new(
 		serde_json::to_string(&pj).map_err(|e| ftx.error(e))?,
 	)))
+}
+
+pub fn regex_replace(
+	ftx: &FunctionContext,
+	This(this): This<Arc<String>>,
+	regex: Arc<String>,
+	replacement: Arc<String>,
+) -> Result<Arc<String>, cel::ExecutionError> {
+	match regex::Regex::new(&regex) {
+		Ok(re) => Ok(Arc::new(
+			re.replace(&this, replacement.as_str()).to_string(),
+		)),
+		Err(err) => Err(ftx.error(format!("'{regex}' not a valid regex:\n{err}"))),
+	}
+}
+
+fn default(ftx: &FunctionContext, exp: Expression, d: Value) -> ResolveResult {
+	fn has(ftx: &FunctionContext, exp: Expression) -> Result<Option<Value>, cel::ExecutionError> {
+		// We determine if a type has a property by attempting to resolve it.
+		// If we get a NoSuchKey error, then we know the property does not exist
+		Ok(match ftx.resolve(exp) {
+			Ok(Value::Null) => None,
+			Ok(v) => Some(v),
+			Err(err) => match err {
+				cel::ExecutionError::NoSuchKey(_) => None,
+				cel::ExecutionError::UndeclaredReference(_) => None,
+				_ => return Err(err),
+			},
+		})
+	}
+	Ok(has(ftx, exp)?.unwrap_or(d))
 }
 
 #[cfg(any(test, feature = "internal_benches"))]

@@ -1,4 +1,4 @@
-import { Backend, Route, Listener, Bind, McpStatefulMode } from "@/lib/types";
+import { Backend, Route, Listener, Bind, McpStatefulMode, StreamHttpTarget } from "@/lib/types";
 import { DEFAULT_BACKEND_FORM, BACKEND_TYPE_COLORS } from "./backend-constants";
 import { POLICY_TYPES, BACKEND_POLICY_KEYS } from "./policy-constants";
 
@@ -35,6 +35,7 @@ export const AI_PROVIDERS = [
   { value: "vertex", label: "Vertex" },
   { value: "anthropic", label: "Anthropic" },
   { value: "bedrock", label: "Bedrock" },
+  { value: "azureOpenAI", label: "Azure OpenAI" },
 ] as const;
 
 /**
@@ -72,7 +73,69 @@ export function ensurePortInAddress(
   return `${address}:${defaultPort}`;
 }
 
-// New utility functions extracted from backend-config.tsx
+// Build a full URL from legacy host/port/path triples. Handles cases where
+// `host` was actually used to store the scheme ("http" or "https") and `path`
+// contains the hostname, as seen in older configs.
+export function buildFullUrlFromLegacy(
+  host: string,
+  port?: string | number,
+  path?: string
+): string {
+  const trimmedHost = (host || "").trim();
+  const trimmedPath = (path || "").trim();
+  const portNum =
+    typeof port === "string" ? parseInt(port || "", 10) : (port as number | undefined);
+
+  const isScheme = trimmedHost === "http" || trimmedHost === "https";
+  let scheme = "http";
+  let hostname = "";
+  let urlPath = "";
+
+  if (isScheme) {
+    scheme = trimmedHost as "http" | "https";
+    // If path looks like a hostname (contains a dot and no leading '/'), treat it as the hostname
+    if (trimmedPath && !trimmedPath.startsWith("/") && trimmedPath.includes(".")) {
+      hostname = trimmedPath;
+      urlPath = "";
+    } else {
+      // Otherwise, we don't know the hostname; treat path as path
+      hostname = "";
+      urlPath = trimmedPath.startsWith("/") ? trimmedPath : trimmedPath ? `/${trimmedPath}` : "";
+    }
+  } else {
+    // Normal legacy triple
+    hostname = trimmedHost;
+    urlPath = trimmedPath ? (trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`) : "";
+    // Guess scheme based on port if provided
+    if (portNum === 443) scheme = "https";
+    else scheme = "http";
+  }
+
+  // Compose authority
+  const authority = hostname;
+  // If hostname is empty (malformed), just return path as-is to avoid making it worse
+  if (!authority) {
+    return `${scheme}://${trimmedPath || ""}`;
+  }
+
+  // Only include port if it's non-default for the scheme
+  const defaultPortForScheme = scheme === "https" ? 443 : 80;
+  const includePort =
+    typeof portNum === "number" && portNum > 0 && portNum !== defaultPortForScheme;
+  const portPart = includePort ? `:${portNum}` : "";
+
+  return `${scheme}://${authority}${portPart}${urlPath}`;
+}
+
+// Normalize a possibly legacy (host, port, path) triple or a host-only URL to a full URL string
+export function normalizeTargetUrl(host: unknown, port?: unknown, path?: unknown): string {
+  const h = String(host ?? "");
+  const p = typeof port === "undefined" ? undefined : String(port ?? "");
+  const pa = typeof path === "undefined" ? undefined : String(path ?? "");
+  const looksLegacy =
+    typeof port !== "undefined" || typeof path !== "undefined" || h === "http" || h === "https";
+  return looksLegacy ? buildFullUrlFromLegacy(h, p, pa) : h;
+}
 
 // Get backend name for display
 export const getBackendName = (backend: Backend): string => {
@@ -84,15 +147,7 @@ export const getBackendName = (backend: Backend): string => {
     return "MCP Backend";
   }
   if (backend.ai) {
-    if (backend.ai.provider) {
-      const provider = Object.keys(backend.ai.provider)[0];
-      const config = Object.values(backend.ai.provider)[0] as any;
-      if (config?.model) {
-        return `${provider.toUpperCase()}: ${config.model}`;
-      }
-      return `${provider.toUpperCase()} Backend`;
-    }
-    return "AI Backend";
+    return backend.ai.name;
   }
   if (backend.service) return backend.service.name?.hostname || "";
   if (backend.host) {
@@ -126,13 +181,15 @@ export const getBackendDetails = (backend: Backend): { primary: string; secondar
           secondary: fullCmd.length > 60 ? `${fullCmd.substring(0, 60)}...` : fullCmd,
         };
       } else if (firstTarget.sse) {
-        const url = `${firstTarget.sse.host}:${firstTarget.sse.port}${firstTarget.sse.path}`;
+        const s: StreamHttpTarget = firstTarget.sse as StreamHttpTarget;
+        const url = normalizeTargetUrl(s.host, s.port, s.path);
         return {
           primary: targetCount,
           secondary: url.length > 60 ? `${url.substring(0, 60)}...` : url,
         };
       } else if (firstTarget.mcp) {
-        const url = `${firstTarget.mcp.host}:${firstTarget.mcp.port}${firstTarget.mcp.path}`;
+        const m: StreamHttpTarget = firstTarget.mcp as StreamHttpTarget;
+        const url = normalizeTargetUrl(m.host, m.port, m.path);
         return {
           primary: targetCount,
           secondary: url.length > 60 ? `${url.substring(0, 60)}...` : url,
@@ -193,7 +250,7 @@ export const validateCommonFields = (
   editingBackend?: boolean,
   backendType?: string
 ): boolean => {
-  if (backendType !== "ai" && backendType !== "mcp" && !form.name.trim()) return false;
+  if (backendType !== "mcp" && !form.name.trim()) return false;
 
   // Only validate route selection when adding (not editing)
   if (!editingBackend && (!form.selectedBindPort || form.selectedRouteIndex === "")) return false;
@@ -224,8 +281,9 @@ export const validateMcpBackend = (form: typeof DEFAULT_BACKEND_FORM): boolean =
     if (target.type === "stdio") {
       return !!target.cmd.trim();
     } else {
-      // For SSE/MCP/OpenAPI, check if URL is provided and parsed correctly
-      return !!(target.fullUrl.trim() && target.host.trim() && target.port.trim());
+      // For MCP/SSE/OpenAPI, accept a single full URL (preferred),
+      // otherwise fall back to parsed host/port
+      return !!(target.fullUrl.trim() || (target.host.trim() && target.port.trim()));
     }
   });
 };
@@ -302,24 +360,34 @@ export const createMcpTarget = (target: any) => {
   };
 
   switch (target.type) {
-    case "sse":
+    case "sse": {
+      const fullUrl =
+        target.fullUrl && target.fullUrl.trim()
+          ? target.fullUrl.trim()
+          : target.host
+            ? normalizeTargetUrl(target.host, target.port, target.path)
+            : "";
       return {
         ...baseTarget,
         sse: {
-          host: target.host,
-          port: parseInt(target.port),
-          path: target.path,
+          host: fullUrl,
         },
       };
-    case "mcp":
+    }
+    case "mcp": {
+      const fullUrl =
+        target.fullUrl && target.fullUrl.trim()
+          ? target.fullUrl.trim()
+          : target.host
+            ? normalizeTargetUrl(target.host, target.port, target.path)
+            : "";
       return {
         ...baseTarget,
         mcp: {
-          host: target.host,
-          port: parseInt(target.port),
-          path: target.path,
+          host: fullUrl,
         },
       };
+    }
     case "stdio":
       return {
         ...baseTarget,
@@ -389,6 +457,13 @@ export const createAiProviderConfig = (form: typeof DEFAULT_BACKEND_FORM) => {
         region: form.aiRegion,
       };
       break;
+    case "azureOpenAI":
+      provider.azureOpenAI = {
+        host: form.aiHost,
+        ...(form.aiModel && { model: form.aiModel }),
+        ...(form.aiApiVersion && { apiVersion: form.aiApiVersion }),
+      };
+      break;
   }
 
   return provider;
@@ -397,15 +472,18 @@ export const createAiProviderConfig = (form: typeof DEFAULT_BACKEND_FORM) => {
 export const createAiBackend = (form: typeof DEFAULT_BACKEND_FORM, weight: number): Backend => {
   const aiConfig: any = {
     provider: createAiProviderConfig(form),
+    name: form.name,
   };
 
   // Add host override if specified
-  if (form.aiHostOverrideType === "address") {
-    aiConfig.hostOverride = { Address: ensurePortInAddress(form.aiHostAddress) };
-  } else if (form.aiHostOverrideType === "hostname") {
-    aiConfig.hostOverride = {
-      Hostname: [form.aiHostHostname, parseInt(form.aiHostPort || "80")],
-    };
+  if (form.aiHostOverride && form.aiHostOverride.trim()) {
+    // add default port if there isn't one specified
+    aiConfig.hostOverride = ensurePortInAddress(form.aiHostOverride.trim(), DEFAULT_PORTS.https);
+  }
+
+  // Add path override if specified
+  if (form.aiPathOverride && form.aiPathOverride.trim()) {
+    aiConfig.pathOverride = form.aiPathOverride.trim();
   }
 
   return addWeightIfNeeded({ ai: aiConfig }, weight);
@@ -457,7 +535,7 @@ export const getAvailableRoutes = (binds: Bind[]) => {
 
         routes.push({
           bindPort: bind.port,
-          listenerName: listener.name || "unnamed listener",
+          listenerName: listener.name || "unnamed",
           routeIndex,
           routeName,
           path,
@@ -494,7 +572,7 @@ export const populateFormFromBackend = (
   const backendType = getBackendType(backend);
 
   return {
-    name: backendType === "ai" || backendType === "mcp" ? "" : getBackendName(backend) || "",
+    name: backendType === "mcp" ? "" : getBackendName(backend) || "",
     weight: String(backend.weight || 1),
     selectedBindPort: String(bind.port),
     selectedListenerName: listener.name || "",
@@ -534,24 +612,28 @@ export const populateFormFromBackend = (
         };
 
         if (target.sse) {
-          const fullUrl = `http://${target.sse.host}:${target.sse.port}${target.sse.path}`;
+          const s: StreamHttpTarget = target.sse as StreamHttpTarget;
+          const url = normalizeTargetUrl(s.host, s.port, s.path);
+          const parsed = parseUrl(url);
           return {
             ...baseTarget,
             type: "sse" as const,
-            host: target.sse.host,
-            port: String(target.sse.port),
-            path: target.sse.path,
-            fullUrl,
+            host: parsed.host,
+            port: parsed.port,
+            path: parsed.path,
+            fullUrl: url,
           };
         } else if (target.mcp) {
-          const fullUrl = `http://${target.mcp.host}:${target.mcp.port}${target.mcp.path}`;
+          const m = target.mcp as StreamHttpTarget;
+          const url = normalizeTargetUrl(m.host, m.port, m.path);
+          const parsed = parseUrl(url);
           return {
             ...baseTarget,
             type: "mcp" as const,
-            host: target.mcp.host,
-            port: String(target.mcp.port),
-            path: target.mcp.path,
-            fullUrl,
+            host: parsed.host,
+            port: parsed.port,
+            path: parsed.path,
+            fullUrl: url,
           };
         } else if (target.stdio) {
           return {
@@ -584,14 +666,12 @@ export const populateFormFromBackend = (
     aiModel: backend.ai?.provider ? Object.values(backend.ai.provider)[0]?.model || "" : "",
     aiRegion: backend.ai?.provider ? Object.values(backend.ai.provider)[0]?.region || "" : "",
     aiProjectId: backend.ai?.provider ? Object.values(backend.ai.provider)[0]?.projectId || "" : "",
-    aiHostOverrideType: backend.ai?.hostOverride?.Address
-      ? "address"
-      : backend.ai?.hostOverride?.Hostname
-        ? "hostname"
-        : "none",
-    aiHostAddress: backend.ai?.hostOverride?.Address || "",
-    aiHostHostname: backend.ai?.hostOverride?.Hostname?.[0] || "",
-    aiHostPort: String(backend.ai?.hostOverride?.Hostname?.[1] || ""),
+    aiHostOverride: backend.ai?.hostOverride || "",
+    aiPathOverride: backend.ai?.pathOverride || "",
+    aiHost: backend.ai?.provider ? Object.values(backend.ai.provider)[0]?.host || "" : "",
+    aiApiVersion: backend.ai?.provider
+      ? Object.values(backend.ai.provider)[0]?.apiVersion || ""
+      : "",
   };
 };
 

@@ -2,6 +2,7 @@
 
 // We build our own Date cacher, as formatting the date string is ~50% of the cost of the log
 mod date;
+pub use date::build as render_current_time;
 
 // We have a force of tracing_appender to support batching writes, which leads to massive throughput benefits
 mod msg;
@@ -17,8 +18,8 @@ use std::{env, fmt, io};
 use itertools::Itertools;
 use nonblocking::NonBlocking;
 use once_cell::sync::{Lazy, OnceCell};
-use serde::Serializer;
 use serde::ser::SerializeMap;
+use serde::{Serialize, Serializer};
 use thiserror::Error;
 use tracing::{Event, Subscriber, error, field, info, warn};
 use tracing_core::Field;
@@ -36,6 +37,7 @@ pub use value_bag::ValueBag;
 
 pub static APPLICATION_START_TIME: Lazy<Instant> = Lazy::new(Instant::now);
 static LOG_HANDLE: OnceCell<LogHandle> = OnceCell::new();
+static DEFAULT_LEVEL: OnceCell<String> = OnceCell::new();
 static NON_BLOCKING: OnceCell<(NonBlocking, bool)> = OnceCell::new();
 
 pub trait OptionExt<T>: Sized {
@@ -45,6 +47,9 @@ pub trait OptionExt<T>: Sized {
 	fn debug(&self) -> Option<ValueBag>
 	where
 		T: Debug;
+	fn quoted(&self) -> Option<ValueBag>
+	where
+		T: Serialize;
 }
 
 impl<T: 'static> OptionExt<T> for Option<T> {
@@ -60,6 +65,12 @@ impl<T: 'static> OptionExt<T> for Option<T> {
 	{
 		self.as_ref().map(debug)
 	}
+	fn quoted(&self) -> Option<ValueBag>
+	where
+		T: Serialize,
+	{
+		self.as_ref().map(quoted)
+	}
 }
 
 pub fn display<T: Display + 'static>(value: &T) -> ValueBag {
@@ -68,6 +79,10 @@ pub fn display<T: Display + 'static>(value: &T) -> ValueBag {
 
 pub fn debug<T: Debug + 'static>(value: &T) -> ValueBag {
 	ValueBag::capture_debug(value)
+}
+
+pub fn quoted<T: Serialize + 'static>(value: &T) -> ValueBag {
+	ValueBag::from_serde1(value)
 }
 
 /// A safe function to determine if a target is enabled.
@@ -143,16 +158,18 @@ pub fn log(level: &str, target: &str, kv: &[(&str, Option<ValueBag>)]) {
 	});
 }
 
-pub fn setup_logging() -> nonblocking::WorkerGuard {
+pub fn setup_logging(default_level: &str, json: bool) -> nonblocking::WorkerGuard {
 	Lazy::force(&APPLICATION_START_TIME);
+	// To handle the 'reset', we store the default level in a global. Not great but gets the job done.
+	DEFAULT_LEVEL.get_or_init(|| default_level.to_string());
 	let (non_blocking, _guard) = nonblocking::NonBlockingBuilder::default()
 		.lossy(false)
-		.buffered_lines_limit(10000) // Buffer up to 10l lines to avoid blocking on logs
+		.buffered_lines_limit(10000) // Buffer up to 10k lines to avoid blocking on logs
 		.finish(std::io::stdout());
-	let use_json = env::var("LOG_FORMAT").unwrap_or("plain".to_string()) == "json";
+	let use_json = env::var("LOG_FORMAT").map(|f| f == "json").unwrap_or(json);
 	let _ = NON_BLOCKING.set((non_blocking.clone(), use_json));
 	tracing_subscriber::registry()
-		.with(fmt_layer(non_blocking, use_json))
+		.with(fmt_layer(non_blocking, default_level, use_json))
 		.init();
 	_guard
 }
@@ -175,6 +192,7 @@ fn plain_fmt(writer: NonBlocking) -> Box<dyn Layer<Registry> + Send + Sync + 'st
 
 fn fmt_layer(
 	writer: NonBlocking,
+	default_level: &str,
 	use_json: bool,
 ) -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
 	let format = if use_json {
@@ -182,7 +200,7 @@ fn fmt_layer(
 	} else {
 		plain_fmt(writer)
 	};
-	let filter = default_filter();
+	let filter = default_filter(default_level);
 	let (layer, reload) = reload::Layer::new(format.with_filter(filter));
 	LOG_HANDLE
 		.set(reload)
@@ -190,13 +208,17 @@ fn fmt_layer(
 	Box::new(layer)
 }
 
-fn default_filter() -> filter::Targets {
+fn default_filter(default_level: &str) -> filter::Targets {
+	let levels = if default_level.is_empty() {
+		"info"
+	} else {
+		default_level
+	};
+	const CUSTOM_TARGETS: &str = "rmcp=warn,hickory_server::server::server_future=off,typespec_client_core::http::policies::logging=warn";
 	// Read from env var, but prefix with setting DNS logs to warn as they are noisy; they can be explicitly overriden
-	let var: String = env::var("RUST_LOG")
-		.map_err(|_| ())
-		.map(|v| "rmcp=warn,hickory_server::server::server_future=off,".to_string() + v.as_str())
-		.unwrap_or("rmcp=warn,hickory_server::server::server_future=off,info".to_string());
-	filter::Targets::from_str(&var).expect("static filter should build")
+	let base: String = env::var("RUST_LOG").unwrap_or_else(|_| levels.to_string());
+	let v = CUSTOM_TARGETS.to_string() + "," + base.as_str();
+	filter::Targets::from_str(&v).expect("static filter should build")
 }
 
 // a handle to get and set the log level
@@ -212,10 +234,11 @@ pub fn set_level(reset: bool, level: &str) -> Result<(), Error> {
 		// it can be duplicate, but the Target's parse() will properly handle it
 		let new_directive = if let Ok(current) = handle.with_current(|f| f.filter().to_string()) {
 			if reset {
+				let def = DEFAULT_LEVEL.get().cloned().unwrap_or("info".to_string());
 				if level.is_empty() {
-					default_filter().to_string()
+					default_filter(&def).to_string()
 				} else {
-					format!("{},{}", default_filter(), level)
+					format!("{},{}", default_filter(&def), level)
 				}
 			} else {
 				format!("{current},{level}")
@@ -538,6 +561,7 @@ pub mod testing {
 	use std::collections::HashMap;
 	use std::fmt::{Display, Formatter};
 	use std::io;
+	use std::io::IoSlice;
 	use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 	use once_cell::sync::Lazy;
@@ -650,6 +674,15 @@ pub mod testing {
 		fn flush(&mut self) -> io::Result<()> {
 			self.buf()?.flush()
 		}
+
+		fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+			let mut target = self.buf()?;
+			let mut n = 0;
+			for b in bufs {
+				n += target.write(b.as_ref())?;
+			}
+			Ok(n)
+		}
 	}
 
 	impl fmt::MakeWriter<'_> for MockWriter {
@@ -673,7 +706,7 @@ pub mod testing {
 		Lazy::force(&TRACING);
 	}
 
-	pub fn setup_test_logging_internal() {
+	fn setup_test_logging_internal() {
 		Lazy::force(&APPLICATION_START_TIME);
 		let mock_writer = MockWriter::new(global_buf());
 		let (non_blocking, _guard) = nonblocking::NonBlockingBuilder::default()
@@ -688,7 +721,7 @@ pub mod testing {
 			.fmt_fields(IstioJsonFormat())
 			.with_writer(mock_writer);
 		tracing_subscriber::registry()
-			.with(fmt_layer(non_blocking, true))
+			.with(fmt_layer(non_blocking, "", true))
 			.with(layer)
 			.init();
 	}

@@ -6,6 +6,13 @@ use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use crate::http::{apikey, basicauth, jwt};
+use crate::llm;
+use crate::llm::{LLMInfo, LLMRequest};
+use crate::serdes::*;
+use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
+use crate::types::agent::BackendInfo;
+use crate::types::discovery::Identity;
 use agent_core::strng::Strng;
 use bytes::Bytes;
 pub use cel::Value;
@@ -13,14 +20,8 @@ use cel::objects::Key;
 use cel::{Context, ExecutionError, ParseError, ParseErrors, Program};
 pub use functions::{FLATTEN_LIST, FLATTEN_LIST_RECURSIVE, FLATTEN_MAP, FLATTEN_MAP_RECURSIVE};
 use once_cell::sync::Lazy;
-use serde::{Serialize, Serializer};
-
-use crate::http::jwt::Claims;
-use crate::llm;
-use crate::llm::{LLMRequest, LLMResponse};
-use crate::serdes::*;
-use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
-use crate::types::discovery::Identity;
+use prometheus_client::encoding::EncodeLabelValue;
+use serde::{Deserialize, Serialize, Serializer};
 
 mod functions;
 mod strings;
@@ -35,6 +36,8 @@ pub enum Error {
 	Parses(#[from] ParseErrors),
 	#[error("variable: {0}")]
 	Variable(String),
+	#[error("failed to convert to json")]
+	JsonConvert,
 }
 
 impl From<Box<dyn std::error::Error>> for Error {
@@ -49,8 +52,12 @@ pub const REQUEST_BODY_ATTRIBUTE: &str = "request.body";
 pub const LLM_ATTRIBUTE: &str = "llm";
 pub const LLM_PROMPT_ATTRIBUTE: &str = "llm.prompt";
 pub const LLM_COMPLETION_ATTRIBUTE: &str = "llm.completion";
+pub const BACKEND_ATTRIBUTE: &str = "backend";
 pub const RESPONSE_ATTRIBUTE: &str = "response";
+pub const RESPONSE_BODY_ATTRIBUTE: &str = "response.body";
 pub const JWT_ATTRIBUTE: &str = "jwt";
+pub const API_KEY_ATTRIBUTE: &str = "apiKey";
+pub const BASIC_AUTH_ATTRIBUTE: &str = "basicAuth";
 pub const MCP_ATTRIBUTE: &str = "mcp";
 pub const EXTAUTHZ_ATTRIBUTE: &str = "extauthz";
 pub const ALL_ATTRIBUTES: &[&str] = &[
@@ -60,8 +67,12 @@ pub const ALL_ATTRIBUTES: &[&str] = &[
 	LLM_ATTRIBUTE,
 	LLM_PROMPT_ATTRIBUTE,
 	LLM_COMPLETION_ATTRIBUTE,
+	BACKEND_ATTRIBUTE,
 	RESPONSE_ATTRIBUTE,
+	RESPONSE_BODY_ATTRIBUTE,
 	JWT_ATTRIBUTE,
+	API_KEY_ATTRIBUTE,
+	BASIC_AUTH_ATTRIBUTE,
 	MCP_ATTRIBUTE,
 	EXTAUTHZ_ATTRIBUTE,
 ];
@@ -78,6 +89,27 @@ impl Serialize for Expression {
 		S: Serializer,
 	{
 		serializer.serialize_str(&self.original_expression)
+	}
+}
+
+impl<'de> Deserialize<'de> for Expression {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		let e = String::deserialize(deserializer)?;
+		crate::cel::Expression::new(&e).map_err(|e| serde::de::Error::custom(e.to_string()))
+	}
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Expression {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"Expression".into()
+	}
+
+	fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({ "type": "string" })
 	}
 }
 
@@ -101,6 +133,7 @@ static ROOT_CONTEXT: Lazy<Arc<Context<'static>>> = Lazy::new(root_context);
 pub struct ContextBuilder {
 	pub attributes: HashSet<String>,
 	pub context: ExpressionContext,
+	pub log_format: Option<crate::LoggingFormat>,
 }
 
 impl Default for ContextBuilder {
@@ -114,6 +147,7 @@ impl ContextBuilder {
 		Self {
 			attributes: Default::default(),
 			context: Default::default(),
+			log_format: None,
 		}
 	}
 	/// register_expression registers the given expressions attributes as required attributes.
@@ -129,34 +163,64 @@ impl ContextBuilder {
 		};
 		r.body = Some(body);
 	}
-	pub fn with_request(&mut self, req: &crate::http::Request) -> bool {
+	pub fn with_response_body(&mut self, body: Bytes) {
+		let Some(r) = &mut self.context.response else {
+			return;
+		};
+		r.body = Some(body);
+	}
+	pub fn with_request(&mut self, req: &crate::http::Request, start_time: String) -> bool {
 		if !self.attributes.contains(REQUEST_ATTRIBUTE) {
 			return false;
+		}
+		if let Some(r) = self.context.request.as_ref() {
+			return r.body.is_none() && self.attributes.contains(REQUEST_BODY_ATTRIBUTE);
 		}
 		self.context.request = Some(RequestContext {
 			method: req.method().clone(),
 			// TODO: split headers and the rest?
 			headers: req.headers().clone(),
 			uri: req.uri().clone(),
+			host: req.uri().authority().cloned(),
+			scheme: req.uri().scheme().cloned(),
 			path: req.uri().path().to_string(),
 			body: None,
+			end_time: None,
+			start_time,
 		});
 		self.attributes.contains(REQUEST_BODY_ATTRIBUTE)
 	}
-	pub fn with_response(&mut self, resp: &crate::http::Response) {
+
+	pub fn with_response(&mut self, resp: &crate::http::Response) -> bool {
 		if !self.attributes.contains(RESPONSE_ATTRIBUTE) {
-			return;
+			return false;
 		}
 		self.context.response = Some(ResponseContext {
 			code: resp.status(),
-		})
+			body: None,
+		});
+		self.attributes.contains(RESPONSE_BODY_ATTRIBUTE)
 	}
 
-	pub fn with_jwt(&mut self, info: &Claims) {
+	pub fn with_jwt(&mut self, info: &jwt::Claims) {
 		if !self.attributes.contains(JWT_ATTRIBUTE) {
 			return;
 		}
 		self.context.jwt = Some(info.clone())
+	}
+
+	pub fn with_api_key(&mut self, info: &apikey::Claims) {
+		if !self.attributes.contains(API_KEY_ATTRIBUTE) {
+			return;
+		}
+		self.context.api_key = Some(info.clone())
+	}
+
+	pub fn with_basic_auth(&mut self, info: &basicauth::Claims) {
+		if !self.attributes.contains(BASIC_AUTH_ATTRIBUTE) {
+			return;
+		}
+		self.context.basic_auth = Some(info.clone())
 	}
 
 	pub fn with_extauthz(&mut self, req: &crate::http::Request) {
@@ -171,13 +235,22 @@ impl ContextBuilder {
 		{
 			// Direct access to extauthz.field - metadata is already stored flat
 			if !ext_authz_metadata.metadata.is_empty() {
-				self.context.extauthz = Some(ext_authz_metadata.metadata.clone());
+				if let Some(existing) = &mut self.context.extauthz {
+					for (k, v) in ext_authz_metadata.metadata.iter() {
+						existing.insert(k.clone(), v.clone());
+					}
+				} else {
+					self.context.extauthz = Some(ext_authz_metadata.metadata.clone());
+				}
 			}
 		}
 	}
 
 	pub fn with_source(&mut self, tcp: &TCPConnectionInfo, tls: Option<&TLSConnectionInfo>) {
 		if !self.attributes.contains(SOURCE_ATTRIBUTE) {
+			return;
+		}
+		if self.context.source.is_some() {
 			return;
 		}
 		self.context.source = Some(SourceContext {
@@ -225,20 +298,38 @@ impl ContextBuilder {
 		r.prompt = Some(msg);
 	}
 
-	pub fn with_llm_response(&mut self, info: &LLMResponse) {
+	pub fn with_backend(&mut self, backend_info: &BackendInfo, backend_protocol: BackendProtocol) {
+		if !self.attributes.contains(BACKEND_ATTRIBUTE) {
+			return;
+		}
+		self.context.backend = Some(BackendContext {
+			name: backend_info.backend_name.clone(),
+			backend_type: backend_info.backend_type,
+			protocol: backend_protocol,
+		});
+	}
+
+	pub fn with_llm_response(&mut self, info: &LLMInfo) {
 		if !self.attributes.contains(LLM_ATTRIBUTE) {
 			return;
 		}
+		let resp = &info.response;
 		if let Some(o) = self.context.llm.as_mut() {
-			o.output_tokens = info.output_tokens;
-			o.total_tokens = info.total_tokens;
-			if let Some(pt) = info.input_tokens_from_response {
+			o.output_tokens = resp.output_tokens;
+			o.total_tokens = resp.total_tokens;
+			if let Some(pt) = resp.input_tokens {
 				// Better info, override
 				o.input_tokens = Some(pt);
 			}
-			o.response_model = info.provider_model.clone();
+			o.response_model = resp.provider_model.clone();
 			// Not always set
-			o.completion = info.completion.clone();
+			o.completion = resp.completion.clone();
+		}
+	}
+
+	pub fn with_request_completion(&mut self, end_time: String) {
+		if let Some(r) = self.context.request.as_mut() {
+			r.end_time = Some(end_time);
 		}
 	}
 
@@ -248,7 +339,7 @@ impl ContextBuilder {
 
 	pub fn build_with_mcp(
 		&self,
-		mcp: Option<&crate::mcp::rbac::ResourceType>,
+		mcp: Option<&crate::mcp::ResourceType>,
 	) -> Result<Executor<'static>, Error> {
 		let mut ctx: Context<'static> = ROOT_CONTEXT.new_inner_scope();
 
@@ -256,16 +347,22 @@ impl ContextBuilder {
 			request,
 			response,
 			jwt,
+			api_key,
+			basic_auth,
 			llm,
 			source,
 			mcp: _,
+			backend,
 			extauthz,
 		} = &self.context;
 
 		ctx.add_variable_from_value(REQUEST_ATTRIBUTE, opt_to_value(request)?);
 		ctx.add_variable_from_value(RESPONSE_ATTRIBUTE, opt_to_value(response)?);
 		ctx.add_variable_from_value(JWT_ATTRIBUTE, opt_to_value(jwt)?);
+		ctx.add_variable_from_value(BASIC_AUTH_ATTRIBUTE, opt_to_value(basic_auth)?);
+		ctx.add_variable_from_value(API_KEY_ATTRIBUTE, opt_to_value(api_key)?);
 		ctx.add_variable_from_value(MCP_ATTRIBUTE, opt_to_value(&mcp)?);
+		ctx.add_variable_from_value(BACKEND_ATTRIBUTE, opt_to_value(backend)?);
 		ctx.add_variable_from_value(LLM_ATTRIBUTE, opt_to_value(llm)?);
 		ctx.add_variable_from_value(SOURCE_ATTRIBUTE, opt_to_value(source)?);
 		ctx.add_variable_from_value(EXTAUTHZ_ATTRIBUTE, opt_to_value(extauthz)?);
@@ -280,13 +377,49 @@ impl ContextBuilder {
 
 impl Executor<'_> {
 	pub fn eval(&self, expr: &Expression) -> Result<Value, Error> {
-		Ok(expr.expression.execute(&self.ctx)?)
+		match expr.expression.execute(&self.ctx) {
+			Ok(v) => Ok(v),
+			Err(e) => {
+				tracing::trace!("failed to evaluate expression: {}", e);
+				Err(e.into())
+			},
+		}
 	}
 	pub fn eval_bool(&self, expr: &Expression) -> bool {
 		match self.eval(expr) {
 			Ok(Value::Bool(b)) => b,
 			_ => false,
 		}
+	}
+}
+
+pub fn value_as_bytes(v: &Value) -> Option<&[u8]> {
+	match v {
+		Value::String(b) => Some(b.as_bytes()),
+		Value::Bytes(b) => Some(b.as_slice()),
+		_ => None,
+	}
+}
+
+pub fn value_as_int(v: &Value) -> Option<i64> {
+	match v {
+		Value::Int(b) => Some(*b),
+		Value::UInt(b) => Some(i64::try_from(*b).ok()?),
+		_ => None,
+	}
+}
+
+pub fn value_as_string(v: &Value) -> Option<String> {
+	match v {
+		Value::String(v) => Some(v.to_string()),
+		Value::Bool(v) => Some(v.to_string()),
+		Value::Int(v) => Some(v.to_string()),
+		Value::UInt(v) => Some(v.to_string()),
+		Value::Bytes(v) => {
+			use base64::Engine;
+			Some(base64::prelude::BASE64_STANDARD.encode(v.as_ref()))
+		},
+		_ => None,
 	}
 }
 
@@ -313,6 +446,10 @@ impl Expression {
 				["request", "body", ..] => vec![
 					REQUEST_ATTRIBUTE.to_string(),
 					REQUEST_BODY_ATTRIBUTE.to_string(),
+				],
+				["response", "body", ..] => vec![
+					RESPONSE_ATTRIBUTE.to_string(),
+					RESPONSE_BODY_ATTRIBUTE.to_string(),
 				],
 				["llm", "prompt", ..] => vec![LLM_ATTRIBUTE.to_string(), LLM_PROMPT_ATTRIBUTE.to_string()],
 				["llm", "completion", ..] => vec![
@@ -346,14 +483,20 @@ pub struct ExpressionContext {
 	/// `response` contains attributes about the HTTP response
 	pub response: Option<ResponseContext>,
 	/// `jwt` contains the claims from a verified JWT token. This is only present if the JWT policy is enabled.
-	pub jwt: Option<Claims>,
+	pub jwt: Option<jwt::Claims>,
+	/// `apiKey` contains the claims from a verified API Key. This is only present if the API Key policy is enabled.
+	pub api_key: Option<apikey::Claims>,
+	/// `basicAuth` contains the claims from a verified basic authentication Key. This is only present if the Basic authentication policy is enabled.
+	pub basic_auth: Option<basicauth::Claims>,
 	/// `llm` contains attributes about an LLM request or response. This is only present when using an `ai` backend.
 	pub llm: Option<LLMContext>,
 	/// `source` contains attributes about the source of the request.
 	pub source: Option<SourceContext>,
 	/// `mcp` contains attributes about the MCP request.
 	// This is only included for schema generation; see build_with_mcp.
-	pub mcp: Option<crate::mcp::rbac::ResourceType>,
+	pub mcp: Option<crate::mcp::ResourceType>,
+	/// `backend` contains information about the backend being used.
+	pub backend: Option<BackendContext>,
 	/// `extauthz` contains dynamic metadata from ext_authz filters
 	pub extauthz: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
@@ -362,15 +505,23 @@ pub struct ExpressionContext {
 pub struct RequestContext {
 	#[serde(with = "http_serde::method")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
-	/// The HTTP method of the request.
+	/// The HTTP method of the request. For example, `GET`
 	pub method: ::http::Method,
 
 	#[serde(with = "http_serde::uri")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
-	/// The URI of the request.
+	/// The complete URI of the request. For example, `http://example.com/path`.
 	pub uri: ::http::Uri,
 
-	/// The path of the request URI.
+	#[serde(with = "http_serde::option::authority")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub host: Option<::http::uri::Authority>,
+
+	#[serde(with = "http_serde::option::scheme")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub scheme: Option<::http::uri::Scheme>,
+
+	/// The path of the request URI. For example, `/path`.
 	pub path: String,
 
 	#[serde(with = "http_serde::header_map")]
@@ -383,6 +534,12 @@ pub struct RequestContext {
 
 	/// The body of the request. Warning: accessing the body will cause the body to be buffered.
 	pub body: Option<Bytes>,
+
+	/// The (pre-rendered) time the request started
+	pub start_time: String,
+
+	/// The (pre-rendered) time the request completed
+	pub end_time: Option<String>,
 }
 
 #[apply(schema_ser!)]
@@ -391,6 +548,9 @@ pub struct ResponseContext {
 	#[cfg_attr(feature = "schema", schemars(with = "u16"))]
 	/// The HTTP status code of the response.
 	pub code: ::http::StatusCode,
+
+	/// The body of the response. Warning: accessing the body will cause the body to be buffered.
+	pub body: Option<Bytes>,
 }
 
 #[apply(schema_ser!)]
@@ -411,6 +571,40 @@ pub struct IdentityContext {
 	namespace: Strng,
 	/// The service account of the identity.
 	service_account: Strng,
+}
+
+#[apply(schema_ser!)]
+pub struct BackendContext {
+	/// The name of the backend being used. For example, `my-service` or `service/my-namespace/my-service:8080`.
+	pub name: Strng,
+	/// The type of backend. For example, `ai`, `mcp`, `static`, `dynamic`, or `service`.
+	#[serde(rename = "type")]
+	pub backend_type: BackendType,
+	/// The protocol of backend. For example, `http`, `tcp`, `a2a`, `mcp`, or `llm`.
+	pub protocol: BackendProtocol,
+}
+
+#[derive(Copy, PartialEq, Eq, Hash, Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub enum BackendType {
+	AI,
+	MCP,
+	Static,
+	Dynamic,
+	Service,
+	Unknown,
+}
+
+#[derive(Copy, PartialEq, Eq, Hash, EncodeLabelValue, Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[allow(non_camel_case_types)]
+pub enum BackendProtocol {
+	http,
+	tcp,
+	a2a,
+	mcp,
+	llm,
 }
 
 #[apply(schema_ser!)]

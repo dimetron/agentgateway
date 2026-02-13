@@ -5,14 +5,16 @@ use agent_core::{metrics, strng};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use prometheus_client::registry::Registry;
 use rmcp::model::Tool;
+use rstest::rstest;
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 use super::*;
 use crate::client::Client;
-use crate::store::Stores;
-use crate::types::agent::Target;
+use crate::proxy::httpproxy::PolicyClient;
+use crate::store::{BackendPolicies, Stores};
+use crate::types::agent::{ResourceName, SimpleBackend, Target};
 use crate::{BackendConfig, ProxyInputs, client, mcp};
 
 // Helper to create a handler and mock server for tests
@@ -21,7 +23,8 @@ async fn setup() -> (MockServer, Handler) {
 	let host = server.uri();
 	let parsed = reqwest::Url::parse(&host).unwrap();
 	let config = crate::config::parse_config("{}".to_string(), None).unwrap();
-	let stores = Stores::new();
+	let encoder = config.session_encoder.clone();
+	let stores = Stores::with_ipv6_enabled(config.ipv6_enabled);
 	let client = Client::new(
 		&client::Config {
 			resolver_cfg: ResolverConfig::default(),
@@ -42,16 +45,17 @@ async fn setup() -> (MockServer, Handler) {
 		upstream: client.clone(),
 		ca: None,
 
-		mcp_state: mcp::router::App::new(stores.clone()),
+		mcp_state: mcp::router::App::new(stores.clone(), encoder),
 	});
 
-	let client = PolicyClient { inputs: pi };
+	let client = PolicyClient { inputs: pi.clone() };
 	// Define a sample tool for testing
 	let test_tool_get = Tool {
 		name: Cow::Borrowed("get_user"),
 		description: Some(Cow::Borrowed("Get user details")), // Added description
 		icons: None,
 		title: None,
+		meta: None,
 		input_schema: Arc::new(
 			json!({ // Define a simple schema for testing
 					"type": "object",
@@ -88,6 +92,7 @@ async fn setup() -> (MockServer, Handler) {
 	let upstream_call_get = UpstreamOpenAPICall {
 		method: "GET".to_string(),
 		path: "/users/{user_id}".to_string(),
+		allowed_headers: HashSet::from(["X-Request-ID".to_string()]),
 	};
 
 	let test_tool_post = Tool {
@@ -95,6 +100,7 @@ async fn setup() -> (MockServer, Handler) {
 		description: Some(Cow::Borrowed("Create a new user")),
 		icons: None,
 		title: None,
+		meta: None,
 		input_schema: Arc::new(
 			json!({
 				"type": "object",
@@ -132,24 +138,31 @@ async fn setup() -> (MockServer, Handler) {
 	let upstream_call_post = UpstreamOpenAPICall {
 		method: "POST".to_string(),
 		path: "/users".to_string(),
+		allowed_headers: HashSet::from(["X-API-Key".to_string()]),
 	};
 
-	let handler = Handler {
-		prefix: "".to_string(),
+	let backend = SimpleBackend::Opaque(
+		ResourceName::new(strng::literal!("dummy"), "".into()),
+		Target::Hostname(
+			parsed.host().unwrap().to_string().into(),
+			parsed.port().unwrap_or(8080),
+		),
+	);
+	let upstream_client = super::super::McpHttpClient::new(
 		client,
-		tools: vec![
+		backend,
+		BackendPolicies::default(),
+		false,
+		"test-target".to_string(),
+	);
+	let handler = Handler::new(
+		upstream_client,
+		vec![
 			(test_tool_get, upstream_call_get),
 			(test_tool_post, upstream_call_post),
 		],
-		default_policies: BackendPolicies::default(),
-		backend: SimpleBackend::Opaque(
-			strng::literal!("dummy"),
-			Target::Hostname(
-				parsed.host().unwrap().to_string().into(),
-				parsed.port().unwrap_or(8080),
-			),
-		),
-	};
+		"".to_string(),
+	);
 
 	(server, handler)
 }
@@ -354,7 +367,6 @@ async fn test_call_tool_invalid_header_value() {
 	let (server, handler) = setup().await;
 
 	let user_id = "header-issue";
-	// Mock is set up but won't be hit because header construction fails client-side
 	Mock::given(method("GET"))
 		.and(path(format!("/users/{user_id}")))
 		.respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": user_id })))
@@ -364,11 +376,9 @@ async fn test_call_tool_invalid_header_value() {
 	// Intentionally provide a non-string header value
 	let args = json!({
 			"path": { "user_id": user_id },
-			"header": { "X-Request-ID": 12345 } // Invalid header value (not a string)
+			"header": { "X-Request-ID": 12345 }
 	});
 
-	// We expect the call to succeed, but the invalid header should be skipped (and logged)
-	// The mock doesn't expect the header, so if the request goes through without it, it passes.
 	let result = handler
 		.call_tool(
 			"get_user",
@@ -376,9 +386,8 @@ async fn test_call_tool_invalid_header_value() {
 			&IncomingRequestContext::empty(),
 		)
 		.await;
-	assert!(result.is_ok()); // Check that the call still succeeds despite the bad header
+	assert!(result.is_ok());
 	assert_eq!(result.unwrap(), json!({ "id": user_id }));
-	// We can't easily assert the log message here, but manual inspection of logs would show the warning.
 }
 
 #[tokio::test]
@@ -460,6 +469,89 @@ async fn test_call_tool_invalid_path_param_value() {
 }
 
 #[tokio::test]
+async fn test_call_tool_with_compressed_response() {
+	let (server, handler) = setup().await;
+
+	let user_id = "compressed-user";
+	let expected_response = json!({ "id": user_id, "name": "Compressed User", "data": "This is a longer response that benefits from compression" });
+
+	// Encode the response body with gzip
+	let response_json = serde_json::to_vec(&expected_response).unwrap();
+	let compressed_body = crate::http::compression::encode_body(&response_json, "gzip")
+		.await
+		.unwrap();
+
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.respond_with(
+			ResponseTemplate::new(200)
+				.insert_header("Content-Encoding", "gzip")
+				.set_body_bytes(compressed_body),
+		)
+		.mount(&server)
+		.await;
+
+	let args = json!({ "path": { "user_id": user_id } });
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(result.is_ok());
+	assert_eq!(result.unwrap(), expected_response);
+}
+
+#[tokio::test]
+async fn test_call_tool_response_wrapping() {
+	let (server, handler) = setup().await;
+
+	let test_cases = [
+		(false, Value::Null),
+		(
+			false,
+			json!({ "id": "123", "name": "Test User", "email": "test@example.com" }),
+		),
+		(
+			true,
+			json!([ { "id": 1, "name": "1" }, { "id": 2, "name": "2" }, { "id": 3, "name": "3" }]),
+		),
+		(true, json!("plain text response")),
+		(true, json!(42)),
+		(true, json!(true)),
+	];
+
+	for (i, (wrapped, response)) in test_cases.iter().enumerate() {
+		let user_id = format!("{}", i);
+		Mock::given(method("GET"))
+			.and(path(format!("/users/{}", user_id)))
+			.respond_with(ResponseTemplate::new(200).set_body_json(response))
+			.expect(1)
+			.mount(&server)
+			.await;
+
+		let args = json!({ "path": { "user_id": user_id } });
+		let result = handler
+			.call_tool(
+				"get_user",
+				Some(args.as_object().unwrap().clone()),
+				&IncomingRequestContext::empty(),
+			)
+			.await;
+		assert!(result.is_ok());
+
+		// Spec requires an object https://modelcontextprotocol.io/specification/2025-06-18/schema#calltoolresult
+		let expected = if *wrapped {
+			json!({ "data": response })
+		} else {
+			response.clone()
+		};
+		assert_eq!(result.unwrap(), expected);
+	}
+}
+#[tokio::test]
 async fn test_normalize_url_path_empty_prefix() {
 	// Test the fix for double slash issue when prefix is empty (host/port config)
 	let result = super::normalize_url_path("", "/mqtt/healthcheck");
@@ -487,9 +579,354 @@ async fn test_normalize_url_path_path_without_leading_slash() {
 	assert_eq!(result, "/api/v3/pet");
 }
 
+#[rstest]
+#[case::empty_prefix("", "/mqtt/healthcheck", "/mqtt/healthcheck")]
+#[case::with_prefix("/api/v3/", "/pet", "/api/v3/pet")]
+#[case::prefix_no_trailing_slash("/api/v3", "/pet", "/api/v3/pet")]
+#[case::without_leading_slash("/api/v3", "pet", "/api/v3/pet")]
+#[case::empty_prefix_path_without_slash("", "pet", "/pet")]
+fn test_normalize_url_path(#[case] prefix: &str, #[case] path: &str, #[case] expected: &str) {
+	let result = super::normalize_url_path(prefix, path);
+	assert_eq!(result, expected);
+}
+
+#[rstest]
+#[case::empty_string(json!({"verbose": ""}), vec![("verbose", "")])]
+#[case::string_value(json!({"verbose": "true"}), vec![("verbose", "true")])]
+#[case::boolean_true(json!({"verbose": true}), vec![("verbose", "true")])]
+#[case::boolean_false(json!({"verbose": false}), vec![("verbose", "false")])]
+#[case::integer_value(json!({"verbose": "123"}), vec![("verbose", "123")])]
+#[case::special_chars(json!({"verbose": "hello world"}), vec![("verbose", "hello world")])]
+#[case::array_values(json!({"verbose": ["a", "b", "c"]}), vec![("verbose", "a"), ("verbose", "b"), ("verbose", "c")])]
+#[case::ampersand_in_value(json!({"verbose": "foo&admin=true"}), vec![("verbose", "foo&admin=true")])]
+#[case::equals_in_value(json!({"verbose": "foo=bar"}), vec![("verbose", "foo=bar")])]
+#[case::question_mark_in_value(json!({"verbose": "foo?bar"}), vec![("verbose", "foo?bar")])]
+#[case::combined_injection(json!({"verbose": "x&evil=1&admin=true"}), vec![("verbose", "x&evil=1&admin=true")])]
 #[tokio::test]
-async fn test_normalize_url_path_empty_prefix_path_without_slash() {
-	// Test edge case: empty prefix and path without leading slash
-	let result = super::normalize_url_path("", "pet");
-	assert_eq!(result, "/pet");
+async fn test_query_param_types(
+	#[case] query_args: serde_json::Value,
+	#[case] expected_params: Vec<(&str, &str)>,
+) {
+	let (server, handler) = setup().await;
+
+	let user_id = "test-user";
+
+	let mut mock = Mock::given(method("GET")).and(path(format!("/users/{user_id}")));
+	for (key, value) in &expected_params {
+		mock = mock.and(query_param(*key, *value));
+	}
+	mock
+		.respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": user_id })))
+		.expect(1)
+		.mount(&server)
+		.await;
+
+	let args = json!({
+		"path": { "user_id": user_id },
+		"query": query_args
+	});
+
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(result.is_ok(), "Expected success, got: {:?}", result.err());
+	assert_eq!(result.unwrap(), json!({ "id": user_id }));
+}
+
+#[rstest]
+#[case::simple_id("123", "/users/123")]
+#[case::numeric_id("456", "/users/456")]
+#[case::spaces("user name", "/users/user%20name")]
+#[case::unicode("user\u{00e9}", "/users/user%C3%A9")]
+#[case::path_traversal("../admin", "/users/..%2Fadmin")]
+#[case::embedded_slashes("user-1/o/er-1001", "/users/user-1%2Fo%2Fer-1001")]
+#[case::query_injection("123?admin=true", "/users/123%3Fadmin%3Dtrue")]
+#[case::query_with_ampersand("123?a=1&b=2", "/users/123%3Fa%3D1%26b%3D2")]
+#[case::hash_fragment("user#section", "/users/user%23section")]
+#[case::ampersand_in_path("user&admin=true", "/users/user%26admin%3Dtrue")]
+#[tokio::test]
+async fn test_path_param_encoding(#[case] user_id: &str, #[case] expected_path: &str) {
+	let (server, handler) = setup().await;
+
+	Mock::given(method("GET"))
+		.and(path(expected_path))
+		.respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": user_id })))
+		.expect(1)
+		.mount(&server)
+		.await;
+
+	let args = json!({ "path": { "user_id": user_id } });
+
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(result.is_ok(), "Expected success, got: {:?}", result.err());
+	assert_eq!(result.unwrap(), json!({ "id": user_id }));
+}
+
+#[tokio::test]
+async fn test_schema_defined_headers_work() {
+	let (server, handler) = setup().await;
+
+	let user_id = "custom-header-test";
+	let expected_response = json!({ "id": user_id });
+
+	// Only X-Request-ID is defined in the schema for get_user tool
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.and(header("X-Request-ID", "my-request-123"))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+		.expect(1)
+		.mount(&server)
+		.await;
+
+	let args = json!({
+		"path": { "user_id": user_id },
+		"header": {
+			"X-Request-ID": "my-request-123"
+		}
+	});
+
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(
+		result.is_ok(),
+		"Schema-defined headers should work: {:?}",
+		result.err()
+	);
+	assert_eq!(result.unwrap(), expected_response);
+}
+
+// Custom matcher to verify a header is NOT present
+struct HeaderNotPresent {
+	header_name: String,
+}
+
+impl HeaderNotPresent {
+	fn new(header_name: impl Into<String>) -> Self {
+		Self {
+			header_name: header_name.into(),
+		}
+	}
+}
+
+impl Match for HeaderNotPresent {
+	fn matches(&self, request: &Request) -> bool {
+		!request.headers.contains_key(self.header_name.as_str())
+	}
+}
+
+#[tokio::test]
+async fn test_blocked_headers_are_ignored() {
+	let (server, handler) = setup().await;
+
+	let request_body = json!({ "name": "Test User", "email": "test@example.com" });
+	let expected_response = json!({ "id": "new-user", "name": "Test User" });
+
+	Mock::given(method("POST"))
+		.and(path("/users"))
+		.and(header("content-length", "47")) // length of request_body
+		.and(header("content-type", "application/json"))
+		.and(HeaderNotPresent::new("transfer-encoding"))
+		.and(body_json(&request_body))
+		.respond_with(ResponseTemplate::new(201).set_body_json(&expected_response))
+		.expect(1)
+		.mount(&server)
+		.await;
+
+	let args = json!({
+		"body": request_body,
+		"header": {
+			"content-length": "999999999",
+			"content-type": "text/plain",
+			"transfer-encoding": "chunked",
+			"host": "evil.com"
+		}
+	});
+
+	let result = handler
+		.call_tool(
+			"create_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	// The request should succeed with the correct headers (blocked headers ignored)
+	assert!(result.is_ok(), "Request should succeed: {:?}", result.err());
+	assert_eq!(result.unwrap(), expected_response);
+}
+
+#[tokio::test]
+async fn test_headers_not_in_schema_are_ignored() {
+	let (server, handler) = setup().await;
+
+	let user_id = "schema-header-test";
+	let expected_response = json!({ "id": user_id });
+
+	// Only expect X-Request-ID (defined in schema), NOT X-Malicious-Header
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.and(header("X-Request-ID", "valid-request"))
+		.and(HeaderNotPresent::new("X-Malicious-Header"))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+		.expect(1)
+		.mount(&server)
+		.await;
+
+	let args = json!({
+		"path": { "user_id": user_id },
+		"header": {
+			"X-Request-ID": "valid-request",
+			"X-Malicious-Header": "should-be-ignored"
+		}
+	});
+
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(
+		result.is_ok(),
+		"Request should succeed with schema-defined headers: {:?}",
+		result.err()
+	);
+	assert_eq!(result.unwrap(), expected_response);
+}
+
+#[tokio::test]
+async fn test_call_tool_structured_content_fallback() {
+	// Test that CallToolResult has both content and structured_content populated
+	// This verifies our backwards compatibility fix for langchain-mcp-adapter
+	let (server, handler) = setup().await;
+
+	let user_id = "test123";
+	let expected_response = json!({ "id": user_id, "name": "Test User", "status": "active" });
+
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+		.mount(&server)
+		.await;
+
+	// Test the MCP message handling directly
+	use rmcp::model::*;
+
+	let request = JsonRpcRequest {
+		jsonrpc: JsonRpcVersion2_0,
+		id: RequestId::String("test-123".into()),
+		request: ClientRequest::CallToolRequest(CallToolRequest {
+			method: CallToolRequestMethod,
+			params: CallToolRequestParams {
+				meta: None,
+				task: None,
+				name: "get_user".into(),
+				arguments: Some(
+					json!({ "path": { "user_id": user_id } })
+						.as_object()
+						.unwrap()
+						.clone(),
+				),
+			},
+			extensions: Extensions::default(),
+		}),
+	};
+
+	let result = handler
+		.send_message(request, &IncomingRequestContext::empty())
+		.await;
+	assert!(result.is_ok(), "send_message should succeed");
+
+	let messages = result.unwrap();
+
+	// Convert Messages to Vec to inspect CallToolResult
+	use futures_util::StreamExt;
+	let mut message_stream = messages;
+	let message_result = message_stream
+		.next()
+		.await
+		.expect("Should receive at least one message");
+
+	// Handle the Result<JsonRpcMessage, ClientError> wrapper
+	let server_msg = message_result.expect("Message processing should succeed");
+
+	let JsonRpcMessage::Response(response) = server_msg else {
+		panic!("Should receive a Response message, got: {:?}", server_msg);
+	};
+
+	let ServerResult::CallToolResult(call_result) = &response.result else {
+		panic!(
+			"Response should contain CallToolResult, got: {:?}",
+			response.result
+		);
+	};
+
+	// Test 1: content field should NOT be empty (our backwards compatibility fix)
+	assert!(
+		!call_result.content.is_empty(),
+		"content field should not be empty after our fix"
+	);
+	assert_eq!(
+		call_result.content.len(),
+		1,
+		"content should have exactly one item"
+	);
+
+	// Test 2: structured_content should contain the original JSON
+	assert!(
+		call_result.structured_content.is_some(),
+		"structured_content should be populated"
+	);
+	let structured_content = call_result.structured_content.as_ref().unwrap();
+	assert_eq!(
+		*structured_content, expected_response,
+		"structured_content should contain original API response"
+	);
+
+	// Test 3: content[0] should contain serialized JSON as text
+	let content_item = call_result
+		.content
+		.first()
+		.expect("content should have at least one item");
+
+	let RawContent::Text(text_content) = &content_item.raw else {
+		panic!(
+			"content[0] should be Text content type, got: {:?}",
+			content_item.raw
+		);
+	};
+
+	let serialized_json = &text_content.text;
+	let parsed_from_content: serde_json::Value =
+		serde_json::from_str(serialized_json).expect("content should contain valid JSON string");
+	assert_eq!(
+		parsed_from_content, expected_response,
+		"content should contain serialized version of API response"
+	);
+
+	// Test 4: Both fields should represent the same data
+	assert_eq!(
+		parsed_from_content, *structured_content,
+		"content and structured_content should represent the same data"
+	);
 }

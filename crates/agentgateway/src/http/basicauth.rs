@@ -2,12 +2,11 @@ use axum_core::RequestExt;
 use axum_extra::TypedHeader;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Basic;
-use htpasswd_verify::Htpasswd;
+use htpasswd_verify_fork::Htpasswd;
 use macro_rules_attribute::apply;
 
 use crate::http::Request;
 use crate::proxy::ProxyError;
-use crate::telemetry::log::RequestLog;
 use crate::*;
 
 #[cfg(test)]
@@ -36,7 +35,8 @@ pub enum Mode {
 	Optional,
 }
 
-#[apply(schema_ser!)]
+#[apply(schema!)]
+#[derive(::cel::DynamicType)]
 pub struct Claims {
 	pub username: Strng,
 }
@@ -65,7 +65,7 @@ fn default_realm() -> String {
 impl BasicAuthentication {
 	/// Create a new BasicAuthentication from a file path
 	pub fn new(htpasswd: &str, realm: Option<String>, mode: Mode) -> Self {
-		let htpasswd = Htpasswd::new_owned(htpasswd);
+		let htpasswd = Htpasswd::new(htpasswd);
 
 		Self {
 			htpasswd: Arc::new(htpasswd),
@@ -75,10 +75,9 @@ impl BasicAuthentication {
 	}
 
 	/// Apply basic authentication to a request
-	pub async fn apply(&self, log: &mut RequestLog, req: &mut Request) -> Result<(), ProxyError> {
+	pub async fn apply(&self, req: &mut Request) -> Result<(), ProxyError> {
 		let res = self.verify(req).await?;
 		if let Some(claims) = res {
-			log.cel.ctx().with_basic_auth(&claims);
 			req.headers_mut().remove(http::header::AUTHORIZATION);
 			// Insert the claims into extensions so we can reference it later
 			req.extensions_mut().insert(claims);

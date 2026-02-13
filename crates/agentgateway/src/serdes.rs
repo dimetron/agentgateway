@@ -48,9 +48,9 @@ pub mod yamlviajson {
 pub use macro_rules_attribute::{apply, attribute_alias};
 
 attribute_alias! {
-		#[apply(schema_de!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
-		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
-		#[apply(schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(JsonSchema))];
+		#[apply(schema_de!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+		#[apply(schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
 pub fn is_default<T: Default + PartialEq>(t: &T) -> bool {
@@ -135,6 +135,26 @@ pub fn ser_display_option<S: Serializer, T: Display>(
 	match t {
 		None => serializer.serialize_none(),
 		Some(t) => serializer.serialize_str(&t.to_string()),
+	}
+}
+
+pub fn serde_scheme_opt<S: Serializer>(
+	t: &Option<&http::uri::Scheme>,
+	serializer: S,
+) -> Result<S::Ok, S::Error> {
+	match t {
+		None => serializer.serialize_none(),
+		Some(t) => serializer.serialize_str(t.as_str()),
+	}
+}
+
+pub fn serde_authority_opt<S: Serializer>(
+	t: &Option<&http::uri::Authority>,
+	serializer: S,
+) -> Result<S::Ok, S::Error> {
+	match t {
+		None => serializer.serialize_none(),
+		Some(t) => serializer.serialize_str(t.as_str()),
 	}
 }
 
@@ -324,9 +344,87 @@ impl FileInlineOrRemote {
 					)
 					.await
 					.context(format!("fetch {url}"))?;
-				return crate::json::from_response_body::<T>(resp).await;
+				return crate::json::from_response_body::<T>(resp)
+					.await
+					.map_err(Into::into);
 			},
 		};
 		serde_json::from_str(&s).map_err(Into::into)
 	}
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct RenamedField;
+
+pub fn renamed_field<'de, D>(old: &'static str, new: &'static str, _: D) -> Result<(), D::Error>
+where
+	D: Deserializer<'de>,
+{
+	Err(serde::de::Error::custom(format!(
+		"`{}` has been removed; move to `{}`",
+		old, new
+	)))
+}
+
+pub trait ConstString: Default {
+	const VALUE: &str;
+	fn as_str(&self) -> &'static str {
+		Self::VALUE
+	}
+}
+#[macro_export]
+macro_rules! const_string {
+	($name:ident = $value:literal) => {
+		#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+		pub struct $name;
+
+		impl ConstString for $name {
+			const VALUE: &str = $value;
+		}
+
+		impl serde::Serialize for $name {
+			fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+			where
+				S: serde::Serializer,
+			{
+				$value.serialize(serializer)
+			}
+		}
+
+		impl<'de> serde::Deserialize<'de> for $name {
+			fn deserialize<D>(deserializer: D) -> Result<$name, D::Error>
+			where
+				D: serde::Deserializer<'de>,
+			{
+				let s: String = serde::Deserialize::deserialize(deserializer)?;
+				if s == $value {
+					Ok($name)
+				} else {
+					Err(serde::de::Error::custom(format!(concat!(
+						"expect const string value \"",
+						$value,
+						"\""
+					))))
+				}
+			}
+		}
+
+		#[cfg(feature = "schemars")]
+		impl schemars::JsonSchema for $name {
+			fn schema_name() -> std::borrow::Cow<'static, str> {
+				std::borrow::Cow::Borrowed(stringify!($name))
+			}
+
+			fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+				use serde_json::{Map, json};
+
+				let mut schema_map = Map::new();
+				schema_map.insert("type".to_string(), json!("string"));
+				schema_map.insert("format".to_string(), json!("const"));
+				schema_map.insert("const".to_string(), json!($value));
+
+				schemars::Schema::from(schema_map)
+			}
+		}
+	};
 }

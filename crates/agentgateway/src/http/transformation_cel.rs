@@ -1,11 +1,12 @@
-use crate::cel::{Executor, Expression};
-use crate::http::HeaderOrPseudo;
-use crate::{cel, *};
-use ::http::StatusCode;
-use ::http::{HeaderName, HeaderValue, header};
+use std::str::FromStr;
+
+use ::http::{HeaderName, header};
 use agent_core::prelude::Strng;
-use cel::Value;
-use serde_with::{SerializeAs, serde_as};
+use serde_with::{DeserializeAs, SerializeAs, serde_as};
+
+use crate::cel::{Expression, RequestSnapshot};
+use crate::http::{HeaderOrPseudo, HeaderOrPseudoValue, RequestOrResponse};
+use crate::{cel, *};
 
 #[derive(Default)]
 #[apply(schema_de!)]
@@ -31,16 +32,21 @@ pub struct LocalTransform {
 	pub body: Option<Strng>,
 }
 
-impl TryFrom<LocalTransform> for TransformerConfig {
-	type Error = anyhow::Error;
-
-	fn try_from(req: LocalTransform) -> Result<Self, Self::Error> {
+impl TransformerConfig {
+	fn try_from_local_config(req: LocalTransform, strict: bool) -> anyhow::Result<Self> {
+		let compile = |s: &str| {
+			if strict {
+				cel::Expression::new_strict(s)
+			} else {
+				Ok(cel::Expression::new_permissive(s))
+			}
+		};
 		let set = req
 			.set
 			.into_iter()
 			.map(|(k, v)| {
 				let tk = HeaderOrPseudo::try_from(k.as_str())?;
-				let tv = cel::Expression::new(v.as_str())?;
+				let tv = compile(v.as_str())?;
 				Ok::<_, anyhow::Error>((tk, tv))
 			})
 			.collect::<Result<_, _>>()?;
@@ -49,7 +55,7 @@ impl TryFrom<LocalTransform> for TransformerConfig {
 			.into_iter()
 			.map(|(k, v)| {
 				let tk = HeaderOrPseudo::try_from(k.as_str())?;
-				let tv = cel::Expression::new(v.as_str())?;
+				let tv = compile(v.as_str())?;
 				Ok::<_, anyhow::Error>((tk, tv))
 			})
 			.collect::<Result<_, _>>()?;
@@ -58,10 +64,7 @@ impl TryFrom<LocalTransform> for TransformerConfig {
 			.into_iter()
 			.map(|k| HeaderName::try_from(k.as_str()))
 			.collect::<Result<_, _>>()?;
-		let body = req
-			.body
-			.map(|b| cel::Expression::new(b.as_str()))
-			.transpose()?;
+		let body = req.body.map(|b| compile(b.as_str())).transpose()?;
 		Ok(TransformerConfig {
 			set,
 			add,
@@ -70,18 +73,20 @@ impl TryFrom<LocalTransform> for TransformerConfig {
 		})
 	}
 }
-impl TryFrom<LocalTransformationConfig> for Transformation {
-	type Error = anyhow::Error;
 
-	fn try_from(value: LocalTransformationConfig) -> Result<Self, Self::Error> {
+impl Transformation {
+	pub fn try_from_local_config(
+		value: LocalTransformationConfig,
+		strict: bool,
+	) -> anyhow::Result<Self> {
 		let LocalTransformationConfig { request, response } = value;
 		let request = if let Some(req) = request {
-			req.try_into()?
+			TransformerConfig::try_from_local_config(req, strict)?
 		} else {
 			Default::default()
 		};
 		let response = if let Some(resp) = response {
-			resp.try_into()?
+			TransformerConfig::try_from_local_config(resp, strict)?
 		} else {
 			Default::default()
 		};
@@ -135,115 +140,91 @@ where
 		source.as_ref().serialize(serializer)
 	}
 }
-
-fn eval_body(exec: &Executor, expr: &Expression) -> anyhow::Result<Bytes> {
-	let v = exec.eval(expr)?;
-	match &v {
-		Value::String(s) => return Ok(Bytes::copy_from_slice(s.as_bytes())),
-		Value::Bytes(b) => return Ok(Bytes::copy_from_slice(b)),
-		_ => {},
-	}
-	let j = match v.json() {
-		Ok(val) => val,
-		Err(e) => return Err(anyhow::anyhow!("JSON conversion failed: {}", e)),
-	};
-	let v = serde_json::to_vec(&j)?;
-	Ok(Bytes::copy_from_slice(&v))
-}
-
-#[derive(Debug)]
-enum RequestOrResponse<'a> {
-	Request(&'a mut http::Request),
-	Response(&'a mut http::Response),
-}
-
-impl<'a> From<&'a mut http::Request> for RequestOrResponse<'a> {
-	fn from(req: &'a mut http::Request) -> Self {
-		RequestOrResponse::Request(req)
+impl<'de, T> DeserializeAs<'de, T> for SerAsStr
+where
+	T: FromStr,
+	<T as FromStr>::Err: std::fmt::Display,
+{
+	fn deserialize_as<D>(deserializer: D) -> Result<T, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		let s = <&str>::deserialize(deserializer)?;
+		s.parse().map_err(serde::de::Error::custom)
 	}
 }
 
-impl<'a> From<&'a mut http::Response> for RequestOrResponse<'a> {
-	fn from(req: &'a mut http::Response) -> RequestOrResponse<'a> {
-		RequestOrResponse::Response(req)
-	}
-}
-
-impl<'a> RequestOrResponse<'a> {
-	pub fn headers(&mut self) -> &mut http::HeaderMap {
-		match self {
-			RequestOrResponse::Request(r) => r.headers_mut(),
-			RequestOrResponse::Response(r) => r.headers_mut(),
-		}
-	}
-	fn body(&mut self) -> &mut http::Body {
-		match self {
-			RequestOrResponse::Request(r) => r.body_mut(),
-			RequestOrResponse::Response(r) => r.body_mut(),
-		}
-	}
-	fn add_header(&mut self, k: &HeaderOrPseudo, res: Option<Value>, append: bool) {
-		match (res, k) {
-			(res, HeaderOrPseudo::Header(h)) => {
-				if let Some(v) = res
-					.as_ref()
-					.and_then(cel::value_as_bytes)
-					.and_then(|b| HeaderValue::from_bytes(b).ok())
-				{
-					if append {
-						self.headers().append(h.clone(), v);
-					} else {
-						self.headers().insert(h.clone(), v);
-					}
-				} else {
-					// Need to sanitize it, so a failed execution cannot mean the user can set arbitrary headers.
-					self.headers().remove(h);
-				}
-			},
-			(Some(v), HeaderOrPseudo::Status) => {
-				if let RequestOrResponse::Response(r) = self
-					&& let Some(b) = cel::value_as_int(&v)
-					&& let Ok(b) = u16::try_from(b)
-					&& let Ok(s) = StatusCode::from_u16(b)
-				{
-					*r.status_mut() = s
-				}
-			},
-			(Some(v), _) => {
-				if let RequestOrResponse::Request(r) = self
-					&& let Some(b) = cel::value_as_bytes(&v)
-				{
-					let mut rr = crate::http::RequestOrResponse::Request(r);
-					let _ = crate::http::apply_pseudo(&mut rr, k, b);
-				}
-			},
-			_ => {},
-		}
+fn eval_body(
+	r: &RequestOrResponse,
+	expr: &Expression,
+	request: Option<&cel::RequestSnapshot>,
+) -> anyhow::Result<Bytes> {
+	match r {
+		RequestOrResponse::Request(r) => {
+			let exec = cel::Executor::new_request(r);
+			let v = exec.eval(expr)?;
+			cel::value_as_byte_or_json(v)
+		},
+		RequestOrResponse::Response(r) => {
+			let exec = cel::Executor::new_response(request, r);
+			let v = exec.eval(expr)?;
+			cel::value_as_byte_or_json(v)
+		},
 	}
 }
 
 impl Transformation {
-	pub fn apply_request(&self, req: &mut crate::http::Request, exec: &cel::Executor<'_>) {
-		Self::apply(req.into(), self.request.as_ref(), exec)
+	pub fn apply_request(&self, req: &mut crate::http::Request) {
+		Self::apply(req.into(), self.request.as_ref(), None)
 	}
 
-	pub fn apply_response(&self, resp: &mut crate::http::Response, exec: &cel::Executor<'_>) {
-		Self::apply(resp.into(), self.response.as_ref(), exec)
+	pub fn apply_response(
+		&self,
+		resp: &mut crate::http::Response,
+		request: Option<&RequestSnapshot>,
+	) {
+		Self::apply(resp.into(), self.response.as_ref(), request)
 	}
 
-	fn apply<'a>(mut r: RequestOrResponse<'a>, cfg: &TransformerConfig, exec: &cel::Executor<'_>) {
+	fn exec_header<'a>(
+		r: &RequestOrResponse<'a>,
+		expr: &'a cel::Expression,
+		k: &HeaderOrPseudo,
+		request: Option<&'a RequestSnapshot>,
+	) -> Option<HeaderOrPseudoValue> {
+		match r {
+			RequestOrResponse::Request(r) => {
+				let exec = cel::Executor::new_request(r);
+				let v = exec.eval(expr).ok();
+				HeaderOrPseudoValue::from_cel_result(k, v)
+			},
+			RequestOrResponse::Response(r) => {
+				let exec = cel::Executor::new_response(request, r);
+				let v = exec.eval(expr).ok();
+				HeaderOrPseudoValue::from_cel_result(k, v)
+			},
+		}
+	}
+
+	fn apply<'a>(
+		mut r: RequestOrResponse<'a>,
+		cfg: &TransformerConfig,
+		request: Option<&'a RequestSnapshot>,
+	) {
 		for (k, v) in &cfg.add {
-			r.add_header(k, exec.eval(v).ok(), true);
+			let val = Self::exec_header(&r, v, k, request);
+			r.apply_header(k, val, true);
 		}
 		for (k, v) in &cfg.set {
-			r.add_header(k, exec.eval(v).ok(), false);
+			let val = Self::exec_header(&r, v, k, request);
+			r.apply_header(k, val, false);
 		}
 		for k in &cfg.remove {
 			r.headers().remove(k);
 		}
 		if let Some(b) = &cfg.body {
 			// If it fails, set an empty body
-			let b = eval_body(exec, b).unwrap_or_default();
+			let b = eval_body(&r, b, request).unwrap_or_default();
 			*r.body() = http::Body::from(b);
 			r.headers().remove(&header::CONTENT_LENGTH);
 		}

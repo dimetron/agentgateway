@@ -6,23 +6,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 
-use crate::cel::{ContextBuilder, Expression};
-use crate::llm::LLMInfo;
-use crate::proxy::ProxyResponseReason;
-use crate::telemetry::metrics::{
-	GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
-};
-use crate::telemetry::trc;
-use crate::telemetry::trc::TraceParent;
-use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
-use crate::types::agent::{
-	BackendInfo, BindName, GatewayName, ListenerName, RouteName, RouteRuleName, Target,
-};
-use crate::types::loadbalancer::ActiveHandle;
-use crate::{cel, llm, mcp};
 use agent_core::metrics::CustomField;
 use agent_core::strng;
-use agent_core::strng::RichStrng;
+use agent_core::strng::{RichStrng, Strng};
 use agent_core::telemetry::{OptionExt, ValueBag, debug, display};
 use bytes::Buf;
 use crossbeam::atomic::AtomicCell;
@@ -31,9 +17,25 @@ use http_body::{Body, Frame, SizeHint};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use tracing::{Level, trace};
+
+use crate::cel::{ContextBuilder, Expression, LLMContext};
+use crate::http::Request;
+use crate::llm::InputFormat;
+use crate::mcp::{MCPOperation, ResourceId, ResourceType};
+use crate::proxy::ProxyResponseReason;
+use crate::telemetry::metrics::{
+	GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
+};
+use crate::telemetry::trc;
+use crate::telemetry::trc::TraceParent;
+use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
+use crate::types::agent::{BackendInfo, BindKey, ListenerName, RouteName, Target};
+use crate::types::loadbalancer::ActiveHandle;
+use crate::{cel, llm, mcp};
 
 /// AsyncLog is a wrapper around an item that can be atomically set.
 /// The intent is to provide additional info to the log after we have lost the RequestLog reference,
@@ -146,7 +148,11 @@ impl<V: Serialize> Serialize for OrderedStringMap<V> {
 	where
 		S: Serializer,
 	{
-		self.map.serialize(serializer)
+		let mut m = serializer.serialize_map(Some(self.len()))?;
+		for (k, v) in self.iter() {
+			m.serialize_entry(k.as_ref(), v)?;
+		}
+		m.end()
 	}
 }
 
@@ -157,6 +163,17 @@ impl<'de, V: DeserializeOwned> Deserialize<'de> for OrderedStringMap<V> {
 	{
 		let im = IndexMap::<String, V>::deserialize(deserializer)?;
 		Ok(OrderedStringMap::from_iter(im))
+	}
+}
+
+#[cfg(feature = "schema")]
+impl<V: schemars::JsonSchema> schemars::JsonSchema for OrderedStringMap<V> {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		format!("OrderedStringMap_{}", V::schema_name()).into()
+	}
+
+	fn json_schema(schema_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		<std::collections::BTreeMap<String, V>>::json_schema(schema_gen)
 	}
 }
 
@@ -208,25 +225,6 @@ impl<'a> CelLoggingExecutor<'a> {
 		}
 	}
 
-	/// eval_rng evaluates a float (0.0-1.0) or a bool and evaluates to a bool. If a float is returned,
-	/// it represents the likelihood true is returned.
-	fn eval_rng(&self, x: &Expression) -> bool {
-		match self.executor.eval(x) {
-			Ok(cel::Value::Bool(b)) => b,
-			Ok(cel::Value::Float(f)) => {
-				// Clamp this down to 0-1 rang; random_bool can panic
-				let f = f.clamp(0.0, 1.0);
-				rand::random_bool(f)
-			},
-			Ok(cel::Value::Int(f)) => {
-				// Clamp this down to 0-1 rang; random_bool can panic
-				let f = f.clamp(0, 1);
-				rand::random_bool(f as f64)
-			},
-			_ => false,
-		}
-	}
-
 	pub fn eval(
 		&self,
 		fields: &'a OrderedStringMap<Arc<Expression>>,
@@ -267,33 +265,38 @@ impl<'a> CelLoggingExecutor<'a> {
 		celv: &cel::Value,
 		always_flatten: bool,
 	) {
-		if let cel::Value::Map(m) = celv {
-			if let Some(cel::Value::List(li)) = m.map.get(&cel::FLATTEN_LIST) {
+		match agent_celx::FlattenSignal::from_value(celv) {
+			Some(agent_celx::FlattenSignal::List(li)) => {
 				raws.reserve(li.len());
 				for (idx, v) in li.as_ref().iter().enumerate() {
 					Self::resolve_value(raws, Cow::Owned(format!("{k}.{idx}")), v, false);
 				}
 				return;
-			} else if let Some(cel::Value::List(li)) = m.map.get(&cel::FLATTEN_LIST_RECURSIVE) {
+			},
+			Some(agent_celx::FlattenSignal::ListRecursive(li)) => {
 				raws.reserve(li.len());
 				for (idx, v) in li.as_ref().iter().enumerate() {
 					Self::resolve_value(raws, Cow::Owned(format!("{k}.{idx}")), v, true);
 				}
 				return;
-			} else if let Some(cel::Value::Map(m)) = m.map.get(&cel::FLATTEN_MAP) {
-				raws.reserve(m.map.len());
-				for (mk, mv) in m.map.as_ref() {
+			},
+			Some(agent_celx::FlattenSignal::Map(m)) => {
+				raws.reserve(m.len());
+				for (mk, mv) in m.iter() {
 					Self::resolve_value(raws, Cow::Owned(format!("{k}.{mk}")), mv, false);
 				}
 				return;
-			} else if let Some(cel::Value::Map(m)) = m.map.get(&cel::FLATTEN_MAP_RECURSIVE) {
-				raws.reserve(m.map.len());
-				for (mk, mv) in m.map.as_ref() {
+			},
+			Some(agent_celx::FlattenSignal::MapRecursive(m)) => {
+				raws.reserve(m.len());
+				for (mk, mv) in m.iter() {
 					Self::resolve_value(raws, Cow::Owned(format!("{k}.{mk}")), mv, true);
 				}
 				return;
-			}
+			},
+			None => {},
 		}
+
 		if always_flatten {
 			match celv {
 				cel::Value::List(li) => {
@@ -304,8 +307,8 @@ impl<'a> CelLoggingExecutor<'a> {
 					}
 				},
 				cel::Value::Map(m) => {
-					raws.reserve(m.map.len());
-					for (mk, mv) in m.map.as_ref() {
+					raws.reserve(m.len());
+					for (mk, mv) in m.iter() {
 						let nk = Cow::Owned(format!("{k}.{mk}"));
 						Self::resolve_value(raws, nk, mv, true);
 					}
@@ -357,19 +360,29 @@ impl CelLogging {
 		&mut self.cel_context
 	}
 
-	pub fn ctx_borrow(&self) -> &ContextBuilder {
-		&self.cel_context
-	}
-
-	pub fn build(&self) -> Result<CelLoggingExecutor, cel::Error> {
+	pub fn build<'a>(
+		&'a self,
+		req: Option<&'a cel::RequestSnapshot>,
+		resp: Option<&'a cel::ResponseSnapshot>,
+		llm_response: Option<&'a LLMContext>,
+		mcp: Option<&'a ResourceType>,
+		end_time: Option<&'a str>,
+		source_context: Option<&'a cel::SourceContext>,
+	) -> Result<CelLoggingExecutor<'a>, cel::Error> {
 		let CelLogging {
-			cel_context,
+			cel_context: _,
 			filter,
 			fields,
 			metric_fields,
 			tracing_sampler: _,
 		} = self;
-		let executor = cel_context.build()?;
+		let executor = if req.is_none() && source_context.is_some() {
+			// TCP case: use new_tcp_logger
+			cel::Executor::new_tcp_logger(source_context, end_time)
+		} else {
+			// HTTP case: use new_logger
+			cel::Executor::new_logger(req, resp, llm_response, mcp, end_time)
+		};
 		Ok(CelLoggingExecutor {
 			executor,
 			filter,
@@ -388,6 +401,9 @@ impl DropOnLog {
 	pub fn as_mut(&mut self) -> Option<&mut RequestLog> {
 		self.log.as_mut()
 	}
+	pub fn as_ref(&self) -> Option<&RequestLog> {
+		self.log.as_ref()
+	}
 	pub fn with(&mut self, f: impl FnOnce(&mut RequestLog)) {
 		if let Some(l) = self.log.as_mut() {
 			f(l)
@@ -399,19 +415,19 @@ impl DropOnLog {
 		route_identifier: &RouteIdentifier,
 		end_time: Instant,
 		duration: Duration,
-		llm_response: &Option<LLMInfo>,
+		llm_response: Option<&LLMContext>,
 		custom_metric_fields: &CustomField,
 	) {
-		if let Some(llm_response) = &llm_response {
+		if let Some(llm_response) = llm_response {
 			let gen_ai_labels = Arc::new(GenAILabels {
 				gen_ai_operation_name: strng::literal!("chat").into(),
-				gen_ai_system: llm_response.request.provider.clone().into(),
-				gen_ai_request_model: llm_response.request.request_model.clone().into(),
-				gen_ai_response_model: llm_response.response.provider_model.clone().into(),
+				gen_ai_system: llm_response.provider.clone().into(),
+				gen_ai_request_model: llm_response.request_model.clone().into(),
+				gen_ai_response_model: llm_response.response_model.clone().into(),
 				custom: custom_metric_fields.clone(),
 				route: route_identifier.clone(),
 			});
-			if let Some(it) = llm_response.input_tokens() {
+			if let Some(it) = llm_response.input_tokens {
 				log
 					.metrics
 					.gen_ai_token_usage
@@ -421,7 +437,7 @@ impl DropOnLog {
 					})
 					.observe(it as f64)
 			}
-			if let Some(ot) = llm_response.response.output_tokens {
+			if let Some(ot) = llm_response.output_tokens {
 				log
 					.metrics
 					.gen_ai_token_usage
@@ -436,7 +452,7 @@ impl DropOnLog {
 				.gen_ai_request_duration
 				.get_or_create(&gen_ai_labels)
 				.observe(duration.as_secs_f64());
-			if let Some(ft) = llm_response.response.first_token {
+			if let Some(ft) = llm_response.first_token {
 				let ttft = ft - log.start;
 				// Duration from start of request to first token
 				// This is the start of when WE got the request, but it should probably be when we SENT the upstream.
@@ -446,7 +462,7 @@ impl DropOnLog {
 					.get_or_create(&gen_ai_labels)
 					.observe(ttft.as_secs_f64());
 
-				if let Some(ot) = llm_response.response.output_tokens {
+				if let Some(ot) = llm_response.output_tokens {
 					let first_to_last = end_time - ft;
 					let throughput = first_to_last.as_secs_f64() / (ot as f64);
 					log
@@ -471,22 +487,18 @@ impl RequestLog {
 		cel: CelLogging,
 		metrics: Arc<Metrics>,
 		start: Instant,
-		start_time: String,
 		tcp_info: TCPConnectionInfo,
 	) -> Self {
 		RequestLog {
 			cel,
 			metrics,
 			start,
-			start_time,
 			tcp_info,
 			tls_info: None,
 			tracer: None,
 			endpoint: None,
 			bind_name: None,
-			gateway_name: None,
 			listener_name: None,
-			route_rule_name: None,
 			route_name: None,
 			backend_info: None,
 			backend_protocol: None,
@@ -510,30 +522,31 @@ impl RequestLog {
 			a2a_method: None,
 			inference_pool: None,
 			request_handle: None,
+			request_snapshot: None,
+			response_snapshot: None,
+			source_context: None,
 			response_bytes: 0,
 		}
 	}
 }
+
 #[derive(Debug)]
 pub struct RequestLog {
 	pub cel: CelLogging,
 	pub metrics: Arc<Metrics>,
 	pub start: Instant,
-	pub start_time: String,
 	pub tcp_info: TCPConnectionInfo,
 
 	// Set only for TLS traffic
 	pub tls_info: Option<TLSConnectionInfo>,
 
 	// Set only if the trace is sampled
-	pub tracer: Option<trc::Tracer>,
+	pub tracer: Option<std::sync::Arc<trc::Tracer>>,
 
 	pub endpoint: Option<Target>,
 
-	pub bind_name: Option<BindName>,
-	pub gateway_name: Option<GatewayName>,
+	pub bind_name: Option<BindKey>,
 	pub listener_name: Option<ListenerName>,
-	pub route_rule_name: Option<RouteRuleName>,
 	pub route_name: Option<RouteName>,
 	pub backend_info: Option<BackendInfo>,
 	pub backend_protocol: Option<cel::BackendProtocol>,
@@ -541,7 +554,7 @@ pub struct RequestLog {
 	pub host: Option<String>,
 	pub method: Option<::http::Method>,
 	pub path: Option<String>,
-	pub path_match: Option<String>,
+	pub path_match: Option<Strng>,
 	pub version: Option<::http::Version>,
 	pub status: Option<crate::http::StatusCode>,
 	pub reason: Option<ProxyResponseReason>,
@@ -566,12 +579,16 @@ pub struct RequestLog {
 	pub inference_pool: Option<SocketAddr>,
 
 	pub request_handle: Option<ActiveHandle>,
+	pub request_snapshot: Option<cel::RequestSnapshot>,
+	pub response_snapshot: Option<cel::ResponseSnapshot>,
+	/// Source context for TCP connections (where we don't have an HTTP request)
+	pub source_context: Option<cel::SourceContext>,
 
 	pub response_bytes: u64,
 }
 
 impl RequestLog {
-	pub fn trace_sampled(&self, tp: Option<&TraceParent>) -> bool {
+	pub fn trace_sampled(&self, req: &Request, tp: Option<&TraceParent>) -> bool {
 		let TraceSampler {
 			random_sampling,
 			client_sampling,
@@ -589,9 +606,7 @@ impl RequestLog {
 			};
 			rs
 		};
-		let Ok(exec) = self.cel.build() else {
-			return false;
-		};
+		let exec = cel::Executor::new_request(req);
 		exec.eval_rng(expr.as_ref())
 	}
 }
@@ -604,10 +619,18 @@ impl Drop for DropOnLog {
 
 		let route_identifier = RouteIdentifier {
 			bind: (&log.bind_name).into(),
-			gateway: (&log.gateway_name).into(),
-			listener: (&log.listener_name).into(),
-			route: (&log.route_name).into(),
-			route_rule: (&log.route_rule_name).into(),
+			gateway: log
+				.listener_name
+				.as_ref()
+				.map(|l| l.as_gateway_name())
+				.into(),
+			listener: log.listener_name.as_ref().map(|l| &l.listener_name).into(),
+			route: log.route_name.as_ref().map(|l| l.as_route_name()).into(),
+			route_rule: log
+				.route_name
+				.as_ref()
+				.and_then(|l| l.rule_name.as_ref())
+				.into(),
 		};
 
 		let is_tcp = matches!(&log.backend_protocol, &Some(cel::BackendProtocol::tcp));
@@ -640,10 +663,11 @@ impl Drop for DropOnLog {
 		}
 
 		let end_time = Instant::now();
-		log
-			.cel
-			.cel_context
-			.with_request_completion(agent_core::telemetry::render_current_time());
+		// TODO!
+		// log
+		// 	.cel
+		// 	.cel_context
+		// 	.with_request_completion(agent_core::telemetry::render_current_time());
 		let duration = end_time - log.start;
 		if let Some(rh) = log.request_handle.take() {
 			let status = log
@@ -653,13 +677,30 @@ impl Drop for DropOnLog {
 			rh.finish_request(health, duration, log.retry_after);
 		}
 
-		let llm_response = log.llm_response.take();
-		if let Some(llm_response) = &llm_response {
-			// Since this is async, we add it to the context here. A bit awkward but gets the job done.
-			log.cel.cel_context.with_llm_response(llm_response);
-		}
+		let llm_response = log.llm_response.take().map(Into::into);
 
-		let Ok(cel_exec) = log.cel.build() else {
+		let mcp = log.mcp_status.take();
+		let mcp_cel = mcp.as_ref().and_then(|m| {
+			let resource = ResourceId::new(
+				m.target_name.as_deref()?.to_string(),
+				m.resource_name.as_deref()?.to_string(),
+			);
+			match m.resource {
+				Some(MCPOperation::Prompt) => Some(ResourceType::Prompt(resource)),
+				Some(MCPOperation::Tool) => Some(ResourceType::Tool(resource)),
+				Some(MCPOperation::Resource) => Some(ResourceType::Resource(resource)),
+				_ => None,
+			}
+		});
+		let end_time_str = agent_core::telemetry::render_current_time();
+		let Ok(cel_exec) = log.cel.build(
+			log.request_snapshot.as_ref(),
+			log.response_snapshot.as_ref(),
+			llm_response.as_ref(),
+			mcp_cel.as_ref(),
+			Some(&end_time_str),
+			log.source_context.as_ref(),
+		) else {
 			tracing::warn!("failed to build CEL context");
 			return;
 		};
@@ -702,10 +743,9 @@ impl Drop for DropOnLog {
 			&route_identifier,
 			end_time,
 			duration,
-			&llm_response,
+			llm_response.as_ref(),
 			&custom_metric_fields,
 		);
-		let mcp = log.mcp_status.take();
 		if let Some(mcp) = &mcp
 			&& mcp.method_name.is_some()
 		{
@@ -733,18 +773,28 @@ impl Drop for DropOnLog {
 		let dur = format!("{}ms", duration.as_millis());
 		let grpc = log.grpc_status.load();
 
-		let input_tokens = llm_response.as_ref().and_then(|l| l.input_tokens());
+		let input_tokens = llm_response.as_ref().and_then(|l| l.input_tokens);
 
 		let trace_id = log.outgoing_span.as_ref().map(|id| id.trace_id());
 		let span_id = log.outgoing_span.as_ref().map(|id| id.span_id());
 
 		let fields = cel_exec.fields;
+		let reason = log.reason.and_then(|r| match r {
+			ProxyResponseReason::Upstream => None,
+			_ => Some(r),
+		});
 
 		let mut kv = vec![
-			("gateway", log.gateway_name.display()),
-			("listener", log.listener_name.display()),
-			("route_rule", log.route_rule_name.display()),
-			("route", log.route_name.display()),
+			("gateway", route_identifier.gateway.as_deref().map(display)),
+			(
+				"listener",
+				route_identifier.listener.as_deref().map(display),
+			),
+			(
+				"route_rule",
+				route_identifier.route_rule.as_deref().map(display),
+			),
+			("route", route_identifier.route.as_deref().map(display)),
 			("endpoint", log.endpoint.display()),
 			("src.addr", Some(display(&log.tcp_info.peer_addr))),
 			("http.method", log.method.display()),
@@ -796,13 +846,26 @@ impl Drop for DropOnLog {
 					.map(display),
 			),
 			(
+				"mcp.session.id",
+				mcp
+					.as_ref()
+					.and_then(|m| m.session_id.as_ref())
+					.map(display),
+			),
+			(
 				"inferencepool.selected_endpoint",
 				log.inference_pool.display(),
 			),
 			// OpenTelemetry Gen AI Semantic Conventions v1.37.0
 			(
 				"gen_ai.operation.name",
-				log.llm_request.as_ref().map(|_| "chat".into()),
+				log.llm_request.as_ref().map(|r| {
+					if r.input_format == InputFormat::Embeddings {
+						"embeddings".into()
+					} else {
+						"chat".into()
+					}
+				}),
 			),
 			(
 				"gen_ai.provider.name",
@@ -816,14 +879,14 @@ impl Drop for DropOnLog {
 				"gen_ai.response.model",
 				llm_response
 					.as_ref()
-					.and_then(|l| l.response.provider_model.display()),
+					.and_then(|l| l.response_model.display()),
 			),
 			("gen_ai.usage.input_tokens", input_tokens.map(Into::into)),
 			(
 				"gen_ai.usage.output_tokens",
 				llm_response
 					.as_ref()
-					.and_then(|l| l.response.output_tokens)
+					.and_then(|l| l.output_tokens)
 					.map(Into::into),
 			),
 			(
@@ -833,6 +896,21 @@ impl Drop for DropOnLog {
 					.as_ref()
 					.and_then(|l| l.params.temperature)
 					.map(Into::into),
+			),
+			(
+				"gen_ai.embeddings.dimension.count",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.dimensions)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.encoding_formats",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.encoding_format.display()),
 			),
 			(
 				"gen_ai.request.top_p",
@@ -876,6 +954,7 @@ impl Drop for DropOnLog {
 			),
 			("retry.attempt", log.retry_attempt.display()),
 			("error", log.error.quoted()),
+			("reason", reason.display()),
 			("duration", Some(dur.as_str().into())),
 		];
 		if enable_trace && let Some(t) = &log.tracer {

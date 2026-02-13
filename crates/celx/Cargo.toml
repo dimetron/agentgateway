@@ -1,0 +1,27 @@
+[package]
+name = "agent-celx"
+version = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+publish = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cel.workspace = true
+once_cell.workspace = true
+rand.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
+hashbrown.workspace = true
+serde_regex.workspace = true
+vector-map.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+assert_matches.workspace = true

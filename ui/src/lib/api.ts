@@ -9,7 +9,7 @@ import {
   subscribeXdsMode,
 } from "@/hooks/use-xds-mode";
 
-const API_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:15000";
+export const API_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:15000";
 
 let currentXdsMode = isXdsMode();
 subscribeXdsMode((xdsMode) => {
@@ -74,7 +74,6 @@ function cleanupConfig(config: LocalConfig): LocalConfig {
 
       // Only include fields that have values
       if (listener.name) cleanedListener.name = listener.name;
-      if (listener.gatewayName) cleanedListener.gatewayName = listener.gatewayName;
       if (listener.hostname) cleanedListener.hostname = listener.hostname;
       if (listener.tls) cleanedListener.tls = listener.tls;
 
@@ -295,7 +294,6 @@ export async function createMcpTarget(
     if (!mcpBackend) {
       const newMcpBackend: Backend = {
         mcp: {
-          name: "mcp-backend",
           targets: [],
           statefulMode: McpStatefulMode.STATEFUL, // Default to stateful
         },

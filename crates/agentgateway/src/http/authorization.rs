@@ -1,4 +1,3 @@
-use agent_core::bow::OwnedOrBorrowed;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -12,11 +11,10 @@ impl HTTPAuthorizationSet {
 	pub fn new(rs: RuleSets) -> Self {
 		Self(rs)
 	}
-	pub fn apply(&self, exec: &cel::Executor<'_>) -> anyhow::Result<()> {
-		tracing::debug!("Checking HTTP request");
-		let allowed = self
-			.0
-			.validate(|| Ok(agent_core::bow::OwnedOrBorrowed::Borrowed(exec)));
+	pub fn apply(&self, req: &http::Request) -> anyhow::Result<()> {
+		tracing::debug!(info=?http::DebugExtensions(req), "Checking HTTP request");
+		let exec = cel::Executor::new_request(req);
+		let allowed = self.0.validate(&exec);
 		if !allowed {
 			anyhow::bail!("HTTP authorization denied");
 		}
@@ -78,11 +76,6 @@ impl PolicySet {
 	pub fn new(allow: Vec<Arc<cel::Expression>>, deny: Vec<Arc<cel::Expression>>) -> Self {
 		Self { allow, deny }
 	}
-
-	pub fn add(&mut self, p: impl Into<String>) -> Result<(), cel::Error> {
-		self.allow.push(Arc::new(cel::Expression::new(p)?));
-		Ok(())
-	}
 }
 
 pub fn se_policies<S: Serializer>(t: &PolicySet, serializer: S) -> Result<S::Ok, S::Error> {
@@ -107,14 +100,14 @@ where
 				rule: RuleTypeSerde::Allow(allow),
 			}
 			| RuleSerde::PlainString(allow) => res.allow.push(
-				cel::Expression::new(&allow)
+				cel::Expression::new_strict(&allow)
 					.map(Arc::new)
 					.map_err(|e| serde::de::Error::custom(e.to_string()))?,
 			),
 			RuleSerde::Object {
 				rule: RuleTypeSerde::Deny(deny),
 			} => res.deny.push(
-				cel::Expression::new(deny)
+				cel::Expression::new_strict(deny)
 					.map(Arc::new)
 					.map_err(|e| serde::de::Error::custom(e.to_string()))?,
 			),
@@ -140,21 +133,13 @@ impl RuleSets {
 			rule_set.register(ctx);
 		}
 	}
-	pub fn validate<'a>(
-		&self,
-		exec: impl FnOnce() -> anyhow::Result<OwnedOrBorrowed<'a, Executor<'a>>>,
-	) -> bool {
+	pub fn validate(&self, exec: &Executor) -> bool {
 		let rule_sets = &self.0;
 		let has_rules = rule_sets.iter().any(|r| r.has_rules());
 		// If there are no rule sets, everyone has access
 		if !has_rules {
 			return true;
 		}
-		// Build executor only when we have rules
-		let Ok(exec) = exec() else {
-			return false;
-		};
-		let exec = exec.as_ref();
 		// If there are any DENY, deny
 		if rule_sets.iter().any(|r| r.denies(exec)) {
 			return false;

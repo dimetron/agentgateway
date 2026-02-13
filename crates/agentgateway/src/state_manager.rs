@@ -7,7 +7,7 @@ use tokio::fs;
 
 use crate::client::Client;
 use crate::store::Stores;
-use crate::types::agent::GatewayName;
+use crate::types::agent::ListenerTarget;
 use crate::types::proto::agent::Resource as ADPResource;
 use crate::types::proto::workload::Address as XdsAddress;
 use crate::{ConfigSource, client, control, store};
@@ -21,8 +21,7 @@ pub struct StateManager {
 	xds_client: Option<agent_xds::AdsClient>,
 }
 
-pub const ADDRESS_TYPE: Strng =
-	strng::literal!("type.googleapis.com/agentgateway.dev.workload.Address");
+pub const ADDRESS_TYPE: Strng = strng::literal!("type.googleapis.com/istio.workload.Address");
 pub const AUTHORIZATION_TYPE: Strng =
 	strng::literal!("type.googleapis.com/istio.security.Authorization");
 pub const ADP_TYPE: Strng =
@@ -30,26 +29,26 @@ pub const ADP_TYPE: Strng =
 
 impl StateManager {
 	pub async fn new(
-		config: &crate::XDSConfig,
+		config: Arc<crate::Config>,
 		client: client::Client,
 		xds_metrics: agent_xds::Metrics,
 		awaiting_ready: tokio::sync::watch::Sender<()>,
 	) -> anyhow::Result<Self> {
-		let stores = Stores::new();
-
-		let xds_client = if config.address.is_some() {
+		let xds = &config.xds;
+		let stores = Stores::with_ipv6_enabled(config.ipv6_enabled);
+		let xds_client = if let Some(addr) = &xds.address {
 			let connector = control::grpc_connector(
 				client.clone(),
-				config.address.as_ref().unwrap().clone(),
-				config.auth.clone(),
-				config.ca_cert.clone(),
+				addr.clone(),
+				xds.auth.clone(),
+				xds.ca_cert.clone(),
 			)
 			.await?;
 			Some(
 				agent_xds::Config::new(
 					agent_xds::GrpcClient::new(connector),
-					config.gateway.clone(),
-					config.namespace.clone(),
+					xds.gateway.clone(),
+					xds.namespace.clone(),
 				)
 				.with_watched_handler::<XdsAddress>(ADDRESS_TYPE, stores.clone().discovery.clone())
 				.with_watched_handler::<ADPResource>(ADP_TYPE, stores.clone().binds.clone())
@@ -59,12 +58,17 @@ impl StateManager {
 		} else {
 			None
 		};
-		if let Some(cfg) = &config.local_config {
+		if let Some(cfg) = &xds.local_config {
 			let local_client = LocalClient {
+				config: config.clone(),
 				stores: stores.clone(),
 				cfg: cfg.clone(),
 				client,
-				gateway: strng::format!("{}/{}", config.namespace, config.gateway),
+				gateway: ListenerTarget {
+					gateway_name: xds.gateway.clone(),
+					gateway_namespace: xds.namespace.clone(),
+					listener_name: None,
+				},
 			};
 			local_client.run().await?;
 		}
@@ -86,10 +90,11 @@ impl StateManager {
 /// LocalClient serves as a local file reader alternative for XDS. This is intended for testing.
 #[derive(Debug, Clone)]
 pub struct LocalClient {
+	config: Arc<crate::Config>,
 	pub cfg: ConfigSource,
 	pub stores: Stores,
 	pub client: Client,
-	pub gateway: GatewayName,
+	pub gateway: ListenerTarget,
 }
 
 impl LocalClient {
@@ -182,6 +187,7 @@ impl LocalClient {
 	async fn reload_config(&self, prev: PreviousState) -> anyhow::Result<PreviousState> {
 		let config_content = self.cfg.read_to_string().await?;
 		let config = crate::types::local::NormalizedLocalConfig::from(
+			&self.config,
 			self.client.clone(),
 			self.gateway.clone(),
 			config_content.as_str(),

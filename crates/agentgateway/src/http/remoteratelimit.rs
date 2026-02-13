@@ -1,6 +1,6 @@
 use ::http::{HeaderMap, StatusCode};
 
-use crate::cel::{Executor, Expression};
+use crate::cel::Expression;
 use crate::http::ext_proc::GrpcReferenceChannel;
 use crate::http::localratelimit::RateLimitType;
 use crate::http::remoteratelimit::proto::rate_limit_descriptor::Entry;
@@ -18,12 +18,20 @@ pub mod proto {
 	tonic::include_proto!("envoy.service.ratelimit.v3");
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[apply(schema!)]
 pub struct RemoteRateLimit {
 	pub domain: String,
+	#[serde(flatten)]
 	pub target: Arc<SimpleBackendReference>,
 	pub descriptors: Arc<DescriptorSet>,
+	/// Timeout for the request
+	#[serde(
+		default,
+		skip_serializing_if = "Option::is_none",
+		with = "serde_dur_option"
+	)]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub timeout: Option<Duration>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -57,7 +65,7 @@ where
 	let raw = Vec::<KV>::deserialize(deserializer)?;
 	let parsed: Vec<_> = raw
 		.into_iter()
-		.map(|i| cel::Expression::new(i.value).map(|v| Descriptor(i.key, v)))
+		.map(|i| cel::Expression::new_strict(i.value).map(|v| Descriptor(i.key, v)))
 		.collect::<Result<_, _>>()
 		.map_err(|e| serde::de::Error::custom(e.to_string()))?;
 	Ok(Arc::new(parsed))
@@ -92,7 +100,7 @@ impl LLMResponseAmend {
 impl RemoteRateLimit {
 	fn build_request(
 		&self,
-		exec: &Executor<'_>,
+		req: &http::Request,
 		limit_type: RateLimitType,
 		cost: Option<u64>,
 	) -> RateLimitRequest {
@@ -113,7 +121,7 @@ impl RemoteRateLimit {
 			.iter()
 			.filter(|e| e.limit_type == limit_type)
 		{
-			if let Some(rl_entries) = Self::eval_descriptor(exec, &desc_entry.entries) {
+			if let Some(rl_entries) = Self::eval_descriptor(req, &desc_entry.entries) {
 				// Trace evaluated descriptor key/value pairs for visibility
 				let kv_pairs: Vec<String> = rl_entries
 					.iter()
@@ -170,7 +178,6 @@ impl RemoteRateLimit {
 		&self,
 		client: PolicyClient,
 		req: &mut Request,
-		exec: &Executor<'_>,
 		cost: u64,
 	) -> Result<(PolicyResponse, Option<LLMResponseAmend>), ProxyError> {
 		if !self
@@ -186,7 +193,7 @@ impl RemoteRateLimit {
 			);
 			return Ok((PolicyResponse::default(), None));
 		}
-		let request = self.build_request(exec, RateLimitType::Tokens, Some(cost));
+		let request = self.build_request(req, RateLimitType::Tokens, Some(cost));
 		let cr = self.check_internal(client.clone(), request.clone()).await;
 		let r = LLMResponseAmend {
 			base: self.clone(),
@@ -201,7 +208,6 @@ impl RemoteRateLimit {
 		&self,
 		client: PolicyClient,
 		req: &mut Request,
-		exec: &Executor<'_>,
 	) -> Result<PolicyResponse, ProxyError> {
 		// This is on the request path
 		if !self
@@ -217,7 +223,7 @@ impl RemoteRateLimit {
 			);
 			return Ok(PolicyResponse::default());
 		}
-		let request = self.build_request(exec, RateLimitType::Requests, None);
+		let request = self.build_request(req, RateLimitType::Requests, None);
 		let cr = self.check_internal(client, request).await?;
 		Self::apply(req, cr)
 	}
@@ -249,6 +255,7 @@ impl RemoteRateLimit {
 		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
 			client,
+			timeout: self.timeout,
 		};
 		let mut client = RateLimitServiceClient::new(chan);
 		let resp = client.should_rate_limit(request).await;
@@ -286,8 +293,9 @@ impl RemoteRateLimit {
 		Ok(res)
 	}
 
-	fn eval_descriptor(exec: &Executor, entries: &Vec<Descriptor>) -> Option<Vec<Entry>> {
+	fn eval_descriptor(req: &Request, entries: &Vec<Descriptor>) -> Option<Vec<Entry>> {
 		let mut rl_entries = Vec::with_capacity(entries.len());
+		let exec = cel::Executor::new_request(req);
 		for Descriptor(k, lookup) in entries {
 			// We drop the entire set if we cannot eval one; emit trace to aid debugging
 			match exec.eval(lookup) {
@@ -331,10 +339,12 @@ fn process_headers(hm: &mut HeaderMap, headers: Vec<proto::HeaderValue>) {
 		let Ok(hn) = HeaderName::from_bytes(h.key.as_bytes()) else {
 			continue;
 		};
-		let hv = if h.raw_value.is_empty() {
-			HeaderValue::from_bytes(h.key.as_bytes())
-		} else {
+		let hv = if !h.value.is_empty() {
+			HeaderValue::from_bytes(h.value.as_bytes())
+		} else if !h.raw_value.is_empty() {
 			HeaderValue::from_bytes(&h.raw_value)
+		} else {
+			continue;
 		};
 		let Ok(hv) = hv else {
 			continue;

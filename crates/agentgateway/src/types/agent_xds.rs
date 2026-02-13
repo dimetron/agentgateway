@@ -1,42 +1,122 @@
-use std::net::{IpAddr, SocketAddr};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
-use crate::http::Scheme;
-use ::http::StatusCode;
+use ::http::{HeaderName, StatusCode};
 use frozen_collections::FzHashSet;
-use rustls::ServerConfig;
+use itertools::Itertools;
+use llm::{AIBackend, AIProvider, NamedAIProvider};
 
 use super::agent::*;
-use crate::http::auth::{AwsAuth, BackendAuth, SimpleBackendAuth};
-use crate::http::authorization;
+use crate::http::auth::{AwsAuth, BackendAuth, GcpAuth};
 use crate::http::transformation_cel::{LocalTransform, LocalTransformationConfig, Transformation};
-use crate::llm::{AIBackend, AIProvider, NamedAIProvider};
+use crate::http::{HeaderOrPseudo, Scheme, auth, authorization};
 use crate::mcp::McpAuthorization;
 use crate::telemetry::log::OrderedStringMap;
 use crate::types::discovery::NamespacedHostname;
 use crate::types::proto::ProtoError;
+use crate::types::proto::agent::backend_policy_spec::ai::request_guard::Kind;
+use crate::types::proto::agent::backend_policy_spec::ai::{ActionKind, response_guard};
+use crate::types::proto::agent::backend_policy_spec::backend_http::HttpVersion;
 use crate::types::proto::agent::mcp_target::Protocol;
 use crate::types::proto::agent::traffic_policy_spec::host_rewrite::Mode;
-use crate::types::{agent, proto};
+use crate::types::{agent, backend, proto};
 use crate::*;
 
-impl TryFrom<&proto::agent::TlsConfig> for TLSConfig {
+impl TryFrom<proto::agent::tls_config::CipherSuite> for crate::transport::tls::CipherSuite {
 	type Error = anyhow::Error;
 
-	fn try_from(value: &proto::agent::TlsConfig) -> Result<Self, Self::Error> {
-		let cert_chain = parse_cert(&value.cert)?;
-		let private_key = parse_key(&value.private_key)?;
-		let mut sc = ServerConfig::builder_with_provider(transport::tls::provider())
-			.with_protocol_versions(transport::tls::ALL_TLS_VERSIONS)
-			.expect("server config must be valid")
-			.with_no_client_auth()
-			.with_single_cert(cert_chain, private_key)?;
-		// TODO: support h2
-		sc.alpn_protocols = vec![b"http/1.1".into()];
-		Ok(TLSConfig {
-			config: Arc::new(sc),
-		})
+	fn try_from(value: proto::agent::tls_config::CipherSuite) -> Result<Self, Self::Error> {
+		use crate::transport::tls::CipherSuite as Cs;
+		match value {
+			proto::agent::tls_config::CipherSuite::Unspecified => Err(anyhow::anyhow!(
+				"unsupported cipher suite: CIPHER_SUITE_UNSPECIFIED"
+			)),
+			proto::agent::tls_config::CipherSuite::TlsAes256GcmSha384 => Ok(Cs::TLS_AES_256_GCM_SHA384),
+			proto::agent::tls_config::CipherSuite::TlsAes128GcmSha256 => Ok(Cs::TLS_AES_128_GCM_SHA256),
+			proto::agent::tls_config::CipherSuite::TlsChacha20Poly1305Sha256 => {
+				Ok(Cs::TLS_CHACHA20_POLY1305_SHA256)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheEcdsaWithAes256GcmSha384 => {
+				Ok(Cs::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheEcdsaWithAes128GcmSha256 => {
+				Ok(Cs::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheEcdsaWithChacha20Poly1305Sha256 => {
+				Ok(Cs::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheRsaWithAes256GcmSha384 => {
+				Ok(Cs::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheRsaWithAes128GcmSha256 => {
+				Ok(Cs::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
+			},
+			proto::agent::tls_config::CipherSuite::TlsEcdheRsaWithChacha20Poly1305Sha256 => {
+				Ok(Cs::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256)
+			},
+		}
+	}
+}
+
+impl From<&proto::agent::TlsConfig> for ServerTLSConfig {
+	fn from(value: &proto::agent::TlsConfig) -> Self {
+		// Defaults set here. These can be overridden by Frontend policy
+		// TODO: this default only makes sense for HTTPS, distinguish from TLS
+		let default_alpns = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+		// These are optional, so treat unknown/unsupported values as "unset".
+		// rustls in this repo only supports TLS1.2/1.3.
+		let map_tls_version = |raw: Option<i32>| {
+			raw.and_then(
+				|raw| match proto::agent::tls_config::TlsVersion::try_from(raw).ok() {
+					Some(proto::agent::tls_config::TlsVersion::TlsV12) => Some(TLSVersion::TLS_V1_2),
+					Some(proto::agent::tls_config::TlsVersion::TlsV13) => Some(TLSVersion::TLS_V1_3),
+					_ => None,
+				},
+			)
+		};
+		let min_version = map_tls_version(value.min_version);
+		let max_version = map_tls_version(value.max_version);
+		// Convert proto enum values into the enums that our TLS provider expects.
+		let cipher_suites: Option<Vec<crate::transport::tls::CipherSuite>> = {
+			if value.cipher_suites.is_empty() {
+				None
+			} else {
+				let mut out = Vec::with_capacity(value.cipher_suites.len());
+				for &raw in &value.cipher_suites {
+					if raw == 0 {
+						// CIPHER_SUITE_UNSPECIFIED
+						continue;
+					}
+					match proto::agent::tls_config::CipherSuite::try_from(raw) {
+						Ok(suite) => match crate::transport::tls::CipherSuite::try_from(suite) {
+							Ok(suite) => out.push(suite),
+							Err(e) => warn!("unknown/unsupported TLS cipher suite {raw}: {e}"),
+						},
+						Err(e) => warn!("unknown TLS cipher suite enum value {raw}: {e}"),
+					}
+				}
+				if out.is_empty() { None } else { Some(out) }
+			}
+		};
+
+		match ServerTLSConfig::from_pem_with_profile(
+			value.cert.clone(),
+			value.private_key.clone(),
+			value.root.clone(),
+			default_alpns,
+			min_version,
+			max_version,
+			cipher_suites,
+		) {
+			Ok(sc) => sc,
+			Err(e) => {
+				warn!("TLS certificate is invalid: {}", e);
+				ServerTLSConfig::new_invalid()
+			},
+		}
 	}
 }
 
@@ -65,16 +145,15 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthorization> for McpAuthor
 		rbac: &proto::agent::backend_policy_spec::McpAuthorization,
 	) -> Result<Self, Self::Error> {
 		let mut allow_exprs = Vec::new();
+		// We do NOT want to NACK invalid CEL expressions. Instead, we ensure they always evaluate to errors.
 		for allow_rule in &rbac.allow {
-			let expr = cel::Expression::new(allow_rule)
-				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in allow rule: {e}")))?;
+			let expr = cel::Expression::new_permissive(allow_rule);
 			allow_exprs.push(Arc::new(expr));
 		}
 
 		let mut deny_exprs = Vec::new();
 		for deny_rule in &rbac.deny {
-			let expr = cel::Expression::new(deny_rule)
-				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in deny rule: {e}")))?;
+			let expr = cel::Expression::new_permissive(deny_rule);
 			deny_exprs.push(Arc::new(expr));
 		}
 
@@ -92,6 +171,11 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 		m: &proto::agent::backend_policy_spec::McpAuthentication,
 	) -> Result<Self, Self::Error> {
 		let provider = match m.provider {
+			x if x
+				== proto::agent::backend_policy_spec::mcp_authentication::McpIdp::Unspecified as i32 =>
+			{
+				None
+			},
 			x if x == proto::agent::backend_policy_spec::mcp_authentication::McpIdp::Auth0 as i32 => {
 				Some(McpIDP::Auth0 {})
 			},
@@ -101,87 +185,220 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 			_ => None,
 		};
 
+		if m.jwks_inline.is_empty() {
+			return Err(ProtoError::Generic(
+				"MCP Authentication requires jwks_inline to be set. \
+				The control plane must fetch the JWKS and provide it as inline JSON."
+					.to_string(),
+			));
+		}
+		let jwks_json = m.jwks_inline.clone();
+
+		let jwk_set: jsonwebtoken::jwk::JwkSet = serde_json::from_str(&jwks_json).map_err(|e| {
+			ProtoError::Generic(format!("failed to parse JWKS for MCP Authentication: {e}"))
+		})?;
+
+		let audiences = (!m.audiences.is_empty()).then(|| m.audiences.clone());
+		let jwt_provider = http::jwt::Provider::from_jwks(jwk_set, m.issuer.clone(), audiences)
+			.map_err(|e| {
+				ProtoError::Generic(format!(
+					"failed to create JWT provider for MCP Authentication: {e}"
+				))
+			})?;
+
+		let mode = match proto::agent::backend_policy_spec::mcp_authentication::Mode::try_from(m.mode)
+			.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
+		{
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Optional => {
+				http::jwt::Mode::Optional
+			},
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Strict => {
+				http::jwt::Mode::Strict
+			},
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Permissive => {
+				http::jwt::Mode::Permissive
+			},
+		};
+
+		let jwt_validator = http::jwt::Jwt::from_providers(vec![jwt_provider], mode);
 		Ok(McpAuthentication {
 			issuer: m.issuer.clone(),
-			audience: m.audience.clone(),
-			jwks_url: m.jwks_url.clone(),
+			audiences: m.audiences.clone(),
 			provider,
-			resource_metadata: ResourceMetadata {
-				extra: Default::default(),
+			resource_metadata: {
+				let extra = m
+					.resource_metadata
+					.as_ref()
+					.map(|rm| {
+						rm.extra
+							.iter()
+							.map(|(k, v)| {
+								let val = serde_json::to_value(v).unwrap_or(serde_json::Value::Null);
+								(k.clone(), val)
+							})
+							.collect::<std::collections::BTreeMap<_, _>>()
+					})
+					.unwrap_or_default();
+				ResourceMetadata { extra }
 			},
+			jwt_validator: std::sync::Arc::new(jwt_validator),
+			mode,
 		})
+	}
+}
+
+fn convert_route_type(proto_rt: i32) -> llm::RouteType {
+	use proto::agent::backend_policy_spec::ai::RouteType as ProtoRT;
+
+	match ProtoRT::try_from(proto_rt) {
+		Ok(ProtoRT::Completions) | Ok(ProtoRT::Unspecified) => llm::RouteType::Completions,
+		Ok(ProtoRT::Messages) => llm::RouteType::Messages,
+		Ok(ProtoRT::Models) => llm::RouteType::Models,
+		Ok(ProtoRT::Passthrough) => llm::RouteType::Passthrough,
+		Ok(ProtoRT::Responses) => llm::RouteType::Responses,
+		Ok(ProtoRT::AnthropicTokenCount) => llm::RouteType::AnthropicTokenCount,
+		Ok(ProtoRT::Embeddings) => llm::RouteType::Embeddings,
+		Ok(ProtoRT::Realtime) => llm::RouteType::Realtime,
+		Err(_) => {
+			warn!(
+				"Unknown proto RouteType value {}, defaulting to Completions",
+				proto_rt
+			);
+			llm::RouteType::Completions
+		},
 	}
 }
 
 fn convert_backend_ai_policy(
 	ai: &proto::agent::backend_policy_spec::Ai,
 ) -> Result<llm::Policy, ProtoError> {
-	let prompt_guard = ai.prompt_guard.as_ref().and_then(|pg| {
-		if pg.request.is_none() && pg.response.is_none() {
-			return None;
-		}
-		let request_guard = pg.request.as_ref().map(|reqp| {
+	let prompt_guard: Option<Result<_, ProtoError>> = ai.prompt_guard.as_ref().map(|pg| {
+		let request_guard = pg.request.iter().map(|reqp| {
 			let rejection = if let Some(resp) = &reqp.rejection {
 				let status = u16::try_from(resp.status)
 					.ok()
 					.and_then(|c| StatusCode::from_u16(c).ok())
 					.unwrap_or(StatusCode::FORBIDDEN);
-				crate::llm::policy::RequestRejection {
+				llm::policy::RequestRejection {
 					body: Bytes::from(resp.body.clone()),
 					status,
 					headers: None, // TODO: map from proto if headers are added there
 				}
 			} else {
 				//  use default response, since the response field is not optional on RequestGuard
-				crate::llm::policy::RequestRejection::default()
+				llm::policy::RequestRejection::default()
 			};
 
-			let regex = reqp
-				.regex
+			let kind = match reqp
+				.kind
 				.as_ref()
-				.map(|rr| convert_regex_rules(rr, Some(rejection.clone())));
-
-			let webhook = reqp.webhook.as_ref().and_then(convert_webhook);
-
-			let openai_moderation =
-				reqp
-					.openai_moderation
-					.as_ref()
-					.map(|m| crate::llm::policy::Moderation {
+				.ok_or_else(|| ProtoError::EnumParse("unknown kind".to_string()))?
+			{
+				Kind::Regex(rr) => llm::policy::RequestGuardKind::Regex(convert_regex_rules(rr)),
+				Kind::Webhook(wh) => llm::policy::RequestGuardKind::Webhook(convert_webhook(wh)?),
+				Kind::OpenaiModeration(m) => {
+					let pols = m
+						.inline_policies
+						.iter()
+						.map(BackendPolicy::try_from)
+						.collect::<Result<Vec<_>, _>>()?;
+					let md = llm::policy::Moderation {
 						model: m.model.as_deref().map(strng::new),
-						auth: match m.auth.as_ref().and_then(|a| a.kind.clone()) {
-							Some(crate::types::proto::agent::backend_auth_policy::Kind::Passthrough(_)) => {
-								SimpleBackendAuth::Passthrough {}
-							},
-							Some(crate::types::proto::agent::backend_auth_policy::Kind::Key(k)) => {
-								SimpleBackendAuth::Key(k.secret.into())
-							},
-							_ => SimpleBackendAuth::Passthrough {},
-						},
-					});
-
-			crate::llm::policy::RequestGuard {
-				rejection,
-				regex,
-				webhook,
-				openai_moderation,
-			}
+						policies: pols,
+					};
+					llm::policy::RequestGuardKind::OpenAIModeration(md)
+				},
+				Kind::GoogleModelArmor(gma) => {
+					let pols = gma
+						.inline_policies
+						.iter()
+						.map(BackendPolicy::try_from)
+						.collect::<Result<Vec<_>, _>>()?;
+					llm::policy::RequestGuardKind::GoogleModelArmor(llm::policy::GoogleModelArmor {
+						template_id: strng::new(&gma.template_id),
+						project_id: strng::new(&gma.project_id),
+						location: gma.location.as_ref().map(strng::new),
+						policies: pols,
+					})
+				},
+				Kind::BedrockGuardrails(bg) => {
+					let pols = bg
+						.inline_policies
+						.iter()
+						.map(BackendPolicy::try_from)
+						.collect::<Result<Vec<_>, _>>()?;
+					llm::policy::RequestGuardKind::BedrockGuardrails(llm::policy::BedrockGuardrails {
+						guardrail_identifier: strng::new(&bg.identifier),
+						guardrail_version: strng::new(&bg.version),
+						region: strng::new(&bg.region),
+						policies: pols,
+					})
+				},
+			};
+			Ok(llm::policy::RequestGuard { rejection, kind })
 		});
 
-		Some(crate::llm::policy::PromptGuard {
-			request: request_guard,
-			response: pg
-				.response
-				.as_ref()
-				.map(|resp| crate::llm::policy::ResponseGuard {
-					regex: resp.regex.as_ref().map(|rr| convert_regex_rules(rr, None)),
-					webhook: resp.webhook.as_ref().and_then(convert_webhook),
-				}),
+		let response_guard = pg.response.iter().flat_map(|reqp| {
+			let rejection = if let Some(resp) = &reqp.rejection {
+				let status = u16::try_from(resp.status)
+					.ok()
+					.and_then(|c| StatusCode::from_u16(c).ok())
+					.unwrap_or(StatusCode::FORBIDDEN);
+				llm::policy::RequestRejection {
+					body: Bytes::from(resp.body.clone()),
+					status,
+					headers: None, // TODO: map from proto if headers are added there
+				}
+			} else {
+				//  use default response, since the response field is not optional on RequestGuard
+				llm::policy::RequestRejection::default()
+			};
+
+			let kind = match reqp.kind.as_ref()? {
+				response_guard::Kind::Regex(rr) => {
+					llm::policy::ResponseGuardKind::Regex(convert_regex_rules(rr))
+				},
+				response_guard::Kind::Webhook(wh) => {
+					llm::policy::ResponseGuardKind::Webhook(convert_webhook(wh).ok()?)
+				},
+				response_guard::Kind::GoogleModelArmor(gma) => {
+					let pols = gma
+						.inline_policies
+						.iter()
+						.filter_map(|p| BackendPolicy::try_from(p).ok())
+						.collect::<Vec<_>>();
+					llm::policy::ResponseGuardKind::GoogleModelArmor(llm::policy::GoogleModelArmor {
+						template_id: strng::new(&gma.template_id),
+						project_id: strng::new(&gma.project_id),
+						location: gma.location.as_ref().map(strng::new),
+						policies: pols,
+					})
+				},
+				response_guard::Kind::BedrockGuardrails(bg) => {
+					let pols = bg
+						.inline_policies
+						.iter()
+						.filter_map(|p| BackendPolicy::try_from(p).ok())
+						.collect::<Vec<_>>();
+					llm::policy::ResponseGuardKind::BedrockGuardrails(llm::policy::BedrockGuardrails {
+						guardrail_identifier: strng::new(&bg.identifier),
+						guardrail_version: strng::new(&bg.version),
+						region: strng::new(&bg.region),
+						policies: pols,
+					})
+				},
+			};
+			Some(llm::policy::ResponseGuard { rejection, kind })
+		});
+
+		Ok(llm::policy::PromptGuard {
+			request: request_guard.collect::<Result<Vec<_>, ProtoError>>()?,
+			response: response_guard.collect_vec(),
 		})
 	});
 
-	Ok(llm::Policy {
-		prompt_guard,
+	let mut policy = llm::Policy {
+		prompt_guard: prompt_guard.transpose()?,
 		defaults: Some(
 			ai.defaults
 				.iter()
@@ -200,24 +417,50 @@ fn convert_backend_ai_policy(
 			.iter()
 			.map(|(k, v)| (strng::new(k), strng::new(v)))
 			.collect(),
+		wildcard_patterns: Arc::new(Vec::new()), // Will be populated by compile_model_alias_patterns()
 		prompt_caching: ai.prompt_caching.as_ref().map(convert_prompt_caching),
-	})
+		routes: ai
+			.routes
+			.iter()
+			.map(|(k, v)| (strng::new(k), convert_route_type(*v)))
+			.collect(),
+	};
+
+	// Compile wildcard patterns from model_aliases
+	policy.compile_model_alias_patterns();
+
+	Ok(policy)
 }
 
 impl TryFrom<proto::agent::BackendAuthPolicy> for BackendAuth {
 	type Error = ProtoError;
 
 	fn try_from(s: proto::agent::BackendAuthPolicy) -> Result<Self, Self::Error> {
+		use proto::agent::gcp;
 		Ok(match s.kind {
 			Some(proto::agent::backend_auth_policy::Kind::Passthrough(_)) => BackendAuth::Passthrough {},
 			Some(proto::agent::backend_auth_policy::Kind::Key(k)) => BackendAuth::Key(k.secret.into()),
-			Some(proto::agent::backend_auth_policy::Kind::Gcp(_)) => BackendAuth::Gcp {},
+			Some(proto::agent::backend_auth_policy::Kind::Gcp(g)) => {
+				BackendAuth::Gcp(match g.token_type {
+					None | Some(gcp::TokenType::AccessToken(gcp::AccessToken {})) => GcpAuth::AccessToken {
+						r#type: Some(auth::AccessToken),
+					},
+					Some(gcp::TokenType::IdToken(gcp::IdToken { audience })) => GcpAuth::IdToken {
+						r#type: auth::IdToken,
+						audience,
+					},
+				})
+			},
 			Some(proto::agent::backend_auth_policy::Kind::Aws(a)) => {
 				let aws_auth = match a.kind {
 					Some(proto::agent::aws::Kind::ExplicitConfig(config)) => AwsAuth::ExplicitConfig {
 						access_key_id: config.access_key_id.into(),
 						secret_access_key: config.secret_access_key.into(),
-						region: config.region,
+						region: if config.region.is_empty() {
+							None
+						} else {
+							Some(config.region.clone())
+						},
 						session_token: config.session_token.map(|token| token.into()),
 					},
 					Some(proto::agent::aws::Kind::Implicit(_)) => AwsAuth::Implicit {},
@@ -285,17 +528,9 @@ impl TryFrom<(proto::agent::Protocol, Option<&proto::agent::TlsConfig>)> for Lis
 		match (value.0, value.1) {
 			(Protocol::Unknown, _) => Err(ProtoError::EnumParse("unknown protocol".into())),
 			(Protocol::Http, None) => Ok(ListenerProtocol::HTTP),
-			(Protocol::Https, Some(tls)) => Ok(ListenerProtocol::HTTPS(
-				tls
-					.try_into()
-					.map_err(|e| ProtoError::Generic(format!("{e}")))?,
-			)),
+			(Protocol::Https, Some(tls)) => Ok(ListenerProtocol::HTTPS(tls.into())),
 			// TLS termination
-			(Protocol::Tls, Some(tls)) => Ok(ListenerProtocol::TLS(Some(
-				tls
-					.try_into()
-					.map_err(|e| ProtoError::Generic(format!("{e}")))?,
-			))),
+			(Protocol::Tls, Some(tls)) => Ok(ListenerProtocol::TLS(Some(tls.into()))),
 			// TLS passthrough
 			(Protocol::Tls, None) => Ok(ListenerProtocol::TLS(None)),
 			(Protocol::Tcp, None) => Ok(ListenerProtocol::TCP),
@@ -313,19 +548,33 @@ impl TryFrom<(proto::agent::Protocol, Option<&proto::agent::TlsConfig>)> for Lis
 	}
 }
 
-impl TryFrom<&proto::agent::Bind> for Bind {
-	type Error = ProtoError;
-
-	fn try_from(s: &proto::agent::Bind) -> Result<Self, Self::Error> {
+impl Bind {
+	pub fn try_from_xds(s: &proto::agent::Bind, ipv6_enabled: bool) -> Result<Self, ProtoError> {
+		let address = if cfg!(target_family = "unix") && ipv6_enabled {
+			SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), s.port as u16)
+		} else {
+			SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), s.port as u16)
+		};
 		Ok(Self {
 			key: s.key.clone().into(),
-			address: SocketAddr::from((IpAddr::from([0, 0, 0, 0]), s.port as u16)),
+			address,
 			listeners: Default::default(),
+			protocol: match proto::agent::bind::Protocol::try_from(s.protocol)? {
+				proto::agent::bind::Protocol::Http => BindProtocol::http,
+				proto::agent::bind::Protocol::Tcp => BindProtocol::tcp,
+				proto::agent::bind::Protocol::Tls => BindProtocol::tls,
+			},
+			tunnel_protocol: match proto::agent::bind::TunnelProtocol::try_from(s.tunnel_protocol)? {
+				proto::agent::bind::TunnelProtocol::Direct => TunnelProtocol::Direct,
+				proto::agent::bind::TunnelProtocol::HboneGateway => TunnelProtocol::HboneGateway,
+				proto::agent::bind::TunnelProtocol::HboneWaypoint => TunnelProtocol::HboneWaypoint,
+				proto::agent::bind::TunnelProtocol::Proxy => TunnelProtocol::Proxy,
+			},
 		})
 	}
 }
 
-impl TryFrom<&proto::agent::Listener> for (Listener, BindName) {
+impl TryFrom<&proto::agent::Listener> for (Listener, BindKey) {
 	type Error = ProtoError;
 
 	fn try_from(s: &proto::agent::Listener) -> Result<Self, Self::Error> {
@@ -334,10 +583,13 @@ impl TryFrom<&proto::agent::Listener> for (Listener, BindName) {
 			.map_err(|e| ProtoError::Generic(format!("{e}")))?;
 		let l = Listener {
 			key: strng::new(&s.key),
-			name: strng::new(&s.name),
+			name: s
+				.name
+				.as_ref()
+				.ok_or(ProtoError::MissingRequiredField)?
+				.into(),
 			hostname: s.hostname.clone().into(),
 			protocol,
-			gateway_name: strng::new(&s.gateway_name),
 			routes: Default::default(),
 			tcp_routes: Default::default(),
 		};
@@ -351,8 +603,11 @@ impl TryFrom<&proto::agent::TcpRoute> for (TCPRoute, ListenerKey) {
 	fn try_from(s: &proto::agent::TcpRoute) -> Result<Self, Self::Error> {
 		let r = TCPRoute {
 			key: strng::new(&s.key),
-			route_name: strng::new(&s.route_name),
-			rule_name: default_as_none(s.rule_name.as_str()).map(strng::new),
+			name: s
+				.name
+				.as_ref()
+				.ok_or(ProtoError::MissingRequiredField)?
+				.into(),
 			hostnames: s.hostnames.iter().map(strng::new).collect(),
 			backends: s
 				.backends
@@ -361,6 +616,7 @@ impl TryFrom<&proto::agent::TcpRoute> for (TCPRoute, ListenerKey) {
 					Ok(TCPRouteBackendReference {
 						weight: b.weight as usize,
 						backend: resolve_simple_reference(b.backend.as_ref())?,
+						inline_policies: Vec::new(),
 					})
 				})
 				.collect::<Result<Vec<_>, _>>()?,
@@ -373,10 +629,14 @@ impl TryFrom<&proto::agent::Route> for (Route, ListenerKey) {
 	type Error = ProtoError;
 
 	fn try_from(s: &proto::agent::Route) -> Result<Self, Self::Error> {
+		let name: RouteName = s
+			.name
+			.as_ref()
+			.ok_or(ProtoError::MissingRequiredField)?
+			.into();
 		let r = Route {
 			key: strng::new(&s.key),
-			route_name: strng::new(&s.route_name),
-			rule_name: default_as_none(s.rule_name.as_str()).map(strng::new),
+			name,
 			hostnames: s.hostnames.iter().map(strng::new).collect(),
 			matches: s
 				.matches
@@ -407,13 +667,14 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 			.iter()
 			.map(BackendPolicy::try_from)
 			.collect::<Result<Vec<_>, _>>()?;
-		let name = BackendName::from(&s.name);
+		let name = s.name.as_ref().ok_or(ProtoError::MissingRequiredField)?;
 		let backend = match &s.kind {
 			Some(proto::agent::backend::Kind::Static(s)) => Backend::Opaque(
-				name.clone(),
+				name.into(),
 				Target::try_from((s.host.as_str(), s.port as u16))
 					.map_err(|e| ProtoError::Generic(e.to_string()))?,
 			),
+			Some(proto::agent::backend::Kind::Dynamic(_)) => Backend::Dynamic(name.into(), ()),
 			Some(proto::agent::backend::Kind::Ai(a)) => {
 				if a.provider_groups.is_empty() {
 					return Err(ProtoError::Generic(
@@ -477,7 +738,7 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 						};
 
 						let provider_name = if provider_config.name.is_empty() {
-							strng::new(format!("{name}_{provider_idx}"))
+							strng::literal!("default")
 						} else {
 							strng::new(&provider_config.name)
 						};
@@ -496,31 +757,6 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 								})
 								.transpose()?,
 							inline_policies: pols,
-							routes: provider_config
-								.routes
-								.iter()
-								.map(|(path, proto_route_type)| {
-									use proto::agent::ai_backend::RouteType as ProtoRT;
-									let route_type = match ProtoRT::try_from(*proto_route_type) {
-										Ok(ProtoRT::Completions) | Ok(ProtoRT::Unspecified) => {
-											llm::RouteType::Completions
-										},
-										Ok(ProtoRT::Messages) => llm::RouteType::Messages,
-										Ok(ProtoRT::Models) => llm::RouteType::Models,
-										Ok(ProtoRT::Passthrough) => llm::RouteType::Passthrough,
-										Ok(ProtoRT::Responses) => llm::RouteType::Responses,
-										Ok(ProtoRT::AnthropicTokenCount) => llm::RouteType::AnthropicTokenCount,
-										Err(_) => {
-											warn!(
-												value = proto_route_type,
-												"Unknown proto RouteType value, defaulting to Completions"
-											);
-											llm::RouteType::Completions
-										},
-									};
-									(strng::new(path), route_type)
-								})
-								.collect(),
 						};
 						local_provider_group.push((provider_name, np));
 					}
@@ -537,10 +773,10 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 				}
 
 				let es = crate::types::loadbalancer::EndpointSet::new(provider_groups);
-				Backend::AI(name.clone(), AIBackend { providers: es })
+				Backend::AI(name.into(), AIBackend { providers: es })
 			},
 			Some(proto::agent::backend::Kind::Mcp(m)) => Backend::MCP(
-				name.clone(),
+				name.into(),
 				McpBackend {
 					targets: m
 						.targets
@@ -557,7 +793,7 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 					},
 				},
 			),
-			_ => {
+			None => {
 				return Err(ProtoError::Generic("unknown backend".to_string()));
 			},
 		};
@@ -668,15 +904,13 @@ impl TryFrom<&proto::agent::traffic_policy_spec::Rbac> for Authorization {
 		// Convert allow rules
 		let mut allow_exprs = Vec::new();
 		for allow_rule in &rbac.allow {
-			let expr = cel::Expression::new(allow_rule)
-				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in allow rule: {e}")))?;
+			let expr = cel::Expression::new_permissive(allow_rule);
 			allow_exprs.push(Arc::new(expr));
 		}
 		// Convert deny rules
 		let mut deny_exprs = Vec::new();
 		for deny_rule in &rbac.deny {
-			let expr = cel::Expression::new(deny_rule)
-				.map_err(|e| ProtoError::Generic(format!("invalid CEL expression in deny rule: {e}")))?;
+			let expr = cel::Expression::new_permissive(deny_rule);
 			deny_exprs.push(Arc::new(expr));
 		}
 
@@ -726,7 +960,8 @@ impl TryFrom<&proto::agent::traffic_policy_spec::TransformationPolicy> for Trans
 		let request = Some(convert_transform(&spec.request)?);
 		let response = Some(convert_transform(&spec.response)?);
 		let config = LocalTransformationConfig { request, response };
-		Transformation::try_from(config).map_err(|e| ProtoError::Generic(e.to_string()))
+		Transformation::try_from_local_config(config, false)
+			.map_err(|e| ProtoError::Generic(e.to_string()))
 	}
 }
 
@@ -748,15 +983,44 @@ impl TryFrom<&proto::agent::BackendPolicySpec> for BackendPolicy {
 					failure_mode,
 				})
 			},
+			Some(bps::Kind::BackendHttp(bhttp)) => {
+				let ver = bps::backend_http::HttpVersion::try_from(bhttp.version)?;
+				BackendPolicy::HTTP(backend::HTTP {
+					version: match ver {
+						HttpVersion::Unspecified => None,
+						HttpVersion::Http1 => Some(::http::Version::HTTP_11),
+						HttpVersion::Http2 => Some(::http::Version::HTTP_2),
+					},
+					request_timeout: bhttp.request_timeout.map(convert_duration),
+				})
+			},
+			Some(bps::Kind::BackendTcp(btcp)) => BackendPolicy::TCP(backend::TCP {
+				connect_timeout: btcp
+					.connect_timeout
+					.map(convert_duration)
+					.unwrap_or(backend::defaults::connect_timeout()),
+				keepalives: btcp
+					.keepalive
+					.as_ref()
+					.map(types::agent::KeepaliveConfig::try_from)
+					.transpose()?
+					.unwrap_or_default(),
+			}),
 			Some(bps::Kind::BackendTls(btls)) => {
+				let mode = bps::backend_tls::VerificationMode::try_from(btls.verification)?;
 				let tls = http::backendtls::ResolvedBackendTLS {
 					cert: btls.cert.clone(),
 					key: btls.key.clone(),
 					root: btls.root.clone(),
-					insecure: btls.insecure.unwrap_or_default(),
-					insecure_host: false,
+					insecure: mode == bps::backend_tls::VerificationMode::InsecureAll,
+					insecure_host: mode == bps::backend_tls::VerificationMode::InsecureHost,
 					hostname: btls.hostname.clone(),
-					alpn: None,
+					alpn: btls.alpn.as_ref().map(|a| a.protocols.clone()),
+					subject_alt_names: if btls.verify_subject_alt_names.is_empty() {
+						None
+					} else {
+						Some(btls.verify_subject_alt_names.clone())
+					},
 				}
 				.try_into()
 				.map_err(|e| ProtoError::Generic(e.to_string()))?;
@@ -911,23 +1175,17 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 				])
 			},
 			Some(tps::Kind::ExtAuthz(ea)) => {
+				use proto::agent::traffic_policy_spec::external_auth;
 				let target = resolve_simple_reference(ea.target.as_ref())?;
-				let failure_mode =
-					match proto::agent::traffic_policy_spec::external_auth::FailureMode::try_from(
-						ea.failure_mode,
-					) {
-						Ok(proto::agent::traffic_policy_spec::external_auth::FailureMode::Allow) => {
-							http::ext_authz::FailureMode::Allow
-						},
-						Ok(proto::agent::traffic_policy_spec::external_auth::FailureMode::Deny) => {
-							http::ext_authz::FailureMode::Deny
-						},
-						Ok(proto::agent::traffic_policy_spec::external_auth::FailureMode::DenyWithStatus) => {
-							let status = ea.status_on_error.unwrap_or(403) as u16;
-							http::ext_authz::FailureMode::DenyWithStatus(status)
-						},
-						_ => http::ext_authz::FailureMode::Deny, // Default fallback
-					};
+				let failure_mode = match external_auth::FailureMode::try_from(ea.failure_mode) {
+					Ok(external_auth::FailureMode::Allow) => http::ext_authz::FailureMode::Allow,
+					Ok(external_auth::FailureMode::Deny) => http::ext_authz::FailureMode::Deny,
+					Ok(external_auth::FailureMode::DenyWithStatus) => {
+						let status = ea.status_on_error.unwrap_or(403) as u16;
+						http::ext_authz::FailureMode::DenyWithStatus(status)
+					},
+					_ => http::ext_authz::FailureMode::Deny, // Default fallback
+				};
 				let include_request_body =
 					ea.include_request_body
 						.as_ref()
@@ -937,23 +1195,68 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 							pack_as_bytes: body_opts.pack_as_bytes,
 						});
 				let timeout = ea.timeout.map(convert_duration);
-				let metadata: HashMap<_, _> = ea
-					.metadata
-					.iter()
-					.map(|(k, v)| {
-						let ve = cel::Expression::new(v)
-							.map_err(|e| ProtoError::Generic(format!("invalid metadata expression: {e}")))?;
-						Ok::<_, ProtoError>((k.to_owned(), Arc::new(ve)))
-					})
-					.collect::<Result<_, _>>()?;
-				TrafficPolicy::ExtAuthz(http::ext_authz::ExtAuthz {
-					target: Arc::new(target),
-					context: Some(ea.context.clone()),
-					metadata: if metadata.is_empty() {
-						None
-					} else {
-						Some(metadata)
+				let protocol = match ea
+					.protocol
+					.as_ref()
+					.ok_or(ProtoError::MissingRequiredField)?
+				{
+					external_auth::Protocol::Grpc(g) => {
+						let metadata: HashMap<_, _> = g
+							.metadata
+							.iter()
+							.map(|(k, v)| {
+								let ve = cel::Expression::new_permissive(v);
+								Ok::<_, ProtoError>((k.to_owned(), Arc::new(ve)))
+							})
+							.collect::<Result<_, _>>()?;
+						http::ext_authz::Protocol::Grpc {
+							context: Some(g.context.clone()),
+							metadata: if metadata.is_empty() {
+								None
+							} else {
+								Some(metadata)
+							},
+						}
 					},
+					external_auth::Protocol::Http(h) => http::ext_authz::Protocol::Http {
+						path: h
+							.path
+							.as_ref()
+							.map(cel::Expression::new_permissive)
+							.map(Arc::new),
+						redirect: h
+							.redirect
+							.as_ref()
+							.map(cel::Expression::new_permissive)
+							.map(Arc::new),
+						include_response_headers: h
+							.include_response_headers
+							.iter()
+							.map(|k| HeaderName::try_from(k.as_str()))
+							.collect::<Result<_, _>>()?,
+						add_request_headers: h
+							.add_request_headers
+							.iter()
+							.map(|(k, v)| {
+								let tk = HeaderOrPseudo::try_from(k.as_str())?;
+								let tv = cel::Expression::new_permissive(v.as_str());
+								Ok::<_, anyhow::Error>((tk, Arc::new(tv)))
+							})
+							.collect::<Result<_, _>>()
+							.map_err(|e| ProtoError::Generic(e.to_string()))?,
+						metadata: h
+							.metadata
+							.iter()
+							.map(|(k, v)| {
+								let ve = cel::Expression::new_permissive(v);
+								Ok::<_, ProtoError>((k.to_owned(), Arc::new(ve)))
+							})
+							.collect::<Result<_, _>>()?,
+					},
+				};
+				TrafficPolicy::ExtAuthz(http::ext_authz::ExtAuthz {
+					protocol,
+					target: Arc::new(target),
 					failure_mode,
 					include_request_headers: ea
 						.include_request_headers
@@ -1018,17 +1321,18 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 					.iter()
 					.map(
 						|d| -> Result<http::remoteratelimit::DescriptorEntry, ProtoError> {
-							let entries: Result<Vec<_>, ProtoError> = d
+							let entries: Vec<_> = d
 								.entries
 								.iter()
 								.map(|e| {
-									cel::Expression::new(e.value.clone())
-										.map_err(|e| ProtoError::Generic(format!("invalid descriptor value: {e}")))
-										.map(|expr| http::remoteratelimit::Descriptor(e.key.clone(), expr))
+									http::remoteratelimit::Descriptor(
+										e.key.clone(),
+										cel::Expression::new_permissive(e.value.clone()),
+									)
 								})
 								.collect();
 							Ok(http::remoteratelimit::DescriptorEntry {
-								entries: Arc::new(entries?),
+								entries: Arc::new(entries),
 								limit_type: match tps::remote_rate_limit::Type::try_from(d.r#type)
 									.unwrap_or(tps::remote_rate_limit::Type::Requests)
 								{
@@ -1053,6 +1357,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 					domain: rrl.domain.clone(),
 					target: Arc::new(target),
 					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
+					// Not supported over XDS; use a timeout on the backend itself
+					timeout: None,
 				})
 			},
 			Some(tps::Kind::Csrf(csrf_spec)) => {
@@ -1066,9 +1372,44 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 					Ok(tps::ext_proc::FailureMode::FailOpen) => http::ext_proc::FailureMode::FailOpen,
 					_ => http::ext_proc::FailureMode::FailClosed,
 				};
+				fn to_cel_attrs(
+					attrs: &HashMap<String, String>,
+				) -> Option<HashMap<String, Arc<cel::Expression>>> {
+					if attrs.is_empty() {
+						None
+					} else {
+						Some(
+							attrs
+								.iter()
+								.map(|(k, v)| (k.clone(), Arc::new(cel::Expression::new_permissive(v))))
+								.collect(),
+						)
+					}
+				}
 				TrafficPolicy::ExtProc(http::ext_proc::ExtProc {
 					target: Arc::new(target),
 					failure_mode,
+					request_attributes: to_cel_attrs(&ep.request_attributes),
+					response_attributes: to_cel_attrs(&ep.response_attributes),
+					metadata_context: if ep.metadata_context.is_empty() {
+						None
+					} else {
+						Some(
+							ep.metadata_context
+								.iter()
+								.fold(HashMap::new(), |mut meta, (namespace, data)| {
+									meta.insert(
+										namespace.to_string(),
+										data
+											.context
+											.iter()
+											.map(|(k, v)| (k.clone(), Arc::new(cel::Expression::new_permissive(v))))
+											.collect(),
+									);
+									meta
+								}),
+						)
+					},
 				})
 			},
 			Some(tps::Kind::RequestHeaderModifier(rhm)) => {
@@ -1230,6 +1571,20 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 		use crate::types::frontend;
 		use crate::types::proto::agent::frontend_policy_spec as fps;
 
+		let map_tls_version = |raw: Option<i32>| {
+			raw.and_then(
+				|raw| match proto::agent::tls_config::TlsVersion::try_from(raw).ok() {
+					Some(proto::agent::tls_config::TlsVersion::TlsV12) => {
+						Some(frontend::TLSVersion::TLS_V1_2)
+					},
+					Some(proto::agent::tls_config::TlsVersion::TlsV13) => {
+						Some(frontend::TLSVersion::TLS_V1_3)
+					},
+					_ => None,
+				},
+			)
+		};
+
 		Ok(match &spec.kind {
 			Some(fps::Kind::Http(h)) => FrontendPolicy::HTTP(frontend::HTTP {
 				max_buffer_size: h
@@ -1248,10 +1603,37 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 				http2_keepalive_timeout: h.http2_keepalive_timeout.map(convert_duration),
 			}),
 			Some(fps::Kind::Tls(t)) => FrontendPolicy::TLS(frontend::TLS {
-				tls_handshake_timeout: t
-					.tls_handshake_timeout
+				handshake_timeout: t
+					.handshake_timeout
 					.map(convert_duration)
 					.unwrap_or_else(crate::defaults::tls_handshake_timeout),
+				alpn: t
+					.alpn
+					.as_ref()
+					.map(|t| t.protocols.iter().map(|s| s.as_bytes().to_vec()).collect()),
+				min_version: map_tls_version(t.min_version),
+				max_version: map_tls_version(t.max_version),
+				cipher_suites: {
+					if t.cipher_suites.is_empty() {
+						None
+					} else {
+						let mut out = Vec::with_capacity(t.cipher_suites.len());
+						for &raw in &t.cipher_suites {
+							if raw == 0 {
+								// CIPHER_SUITE_UNSPECIFIED
+								continue;
+							}
+							match proto::agent::tls_config::CipherSuite::try_from(raw) {
+								Ok(suite) => match crate::transport::tls::CipherSuite::try_from(suite) {
+									Ok(suite) => out.push(suite),
+									Err(e) => warn!("unknown/unsupported TLS cipher suite {raw}: {e}"),
+								},
+								Err(e) => warn!("unknown TLS cipher suite enum value {raw}: {e}"),
+							}
+						}
+						if out.is_empty() { None } else { Some(out) }
+					}
+				},
 			}),
 			Some(fps::Kind::Tcp(t)) => FrontendPolicy::TCP(frontend::TCP {
 				keepalives: t
@@ -1270,9 +1652,7 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 							.add
 							.iter()
 							.map(|f| {
-								let expr = cel::Expression::new(&f.expression).map_err(|e| {
-									ProtoError::Generic(format!("invalid CEL expression in add field: {e}"))
-								})?;
+								let expr = cel::Expression::new_permissive(&f.expression);
 								Ok::<_, ProtoError>((f.name.clone(), Arc::new(expr)))
 							})
 							.collect::<Result<Vec<_>, _>>()?;
@@ -1285,18 +1665,88 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 					filter: p
 						.filter
 						.as_ref()
-						.map(cel::Expression::new)
-						.transpose()
-						.map_err(|e| {
-							ProtoError::Generic(format!("invalid CEL expression in filter field: {e}"))
-						})?
+						.map(cel::Expression::new_permissive)
 						.map(Arc::new),
 					add: Arc::new(add),
 					remove: Arc::new(FzHashSet::new(rm)),
 				})
 			},
-			Some(fps::Kind::Tracing(_)) => FrontendPolicy::Tracing(()),
+			Some(fps::Kind::Tracing(t)) => {
+				// Convert protobuf to TracingConfig
+				let tracing_config = types::agent::TracingConfig::try_from(t)?;
+
+				// Prepare LoggingFields with the CEL attributes from TracingConfig
+				let logging_fields = Arc::new(crate::telemetry::log::LoggingFields {
+					remove: Arc::new(tracing_config.remove.iter().cloned().collect()),
+					add: Arc::new(tracing_config.attributes.clone()),
+				});
+
+				FrontendPolicy::Tracing(Arc::new(types::agent::TracingPolicy {
+					config: tracing_config,
+					fields: logging_fields,
+					tracer: once_cell::sync::OnceCell::new(),
+				}))
+			},
 			None => return Err(ProtoError::MissingRequiredField),
+		})
+	}
+}
+
+impl TryFrom<&proto::agent::frontend_policy_spec::Tracing> for types::agent::TracingConfig {
+	type Error = ProtoError;
+
+	fn try_from(t: &proto::agent::frontend_policy_spec::Tracing) -> Result<Self, Self::Error> {
+		let provider_backend = resolve_simple_reference(t.provider_backend.as_ref())?;
+
+		let attributes: OrderedStringMap<Arc<cel::Expression>> = t
+			.attributes
+			.iter()
+			.map(|a| {
+				let expr = cel::Expression::new_permissive(&a.value);
+				(a.name.clone(), Arc::new(expr))
+			})
+			.collect();
+
+		let resources: OrderedStringMap<Arc<cel::Expression>> = t
+			.resources
+			.iter()
+			.map(|a| {
+				let expr = cel::Expression::new_permissive(&a.value);
+				(a.name.clone(), Arc::new(expr))
+			})
+			.collect();
+
+		// Optional per-policy sampling overrides
+		let random_sampling = t
+			.random_sampling
+			.as_ref()
+			.map(|s| Arc::new(cel::Expression::new_permissive(s)));
+		let client_sampling = t
+			.client_sampling
+			.as_ref()
+			.map(|s| Arc::new(cel::Expression::new_permissive(s)));
+
+		let path = t.path.clone().unwrap_or_else(|| "/v1/traces".to_string());
+
+		let protocol =
+			match crate::types::proto::agent::frontend_policy_spec::tracing::Protocol::try_from(
+				t.protocol,
+			) {
+				Ok(crate::types::proto::agent::frontend_policy_spec::tracing::Protocol::Grpc) => {
+					types::agent::TracingProtocol::Grpc
+				},
+				_ => types::agent::TracingProtocol::Http,
+			};
+
+		Ok(types::agent::TracingConfig {
+			provider_backend,
+			attributes,
+			resources,
+			remove: t.remove.clone(),
+			random_sampling,
+			client_sampling,
+			path,
+			protocol,
 		})
 	}
 }
@@ -1328,13 +1778,27 @@ impl TryFrom<&proto::agent::PolicyTarget> for PolicyTarget {
 	fn try_from(t: &proto::agent::PolicyTarget) -> Result<Self, Self::Error> {
 		use crate::types::proto::agent::policy_target as tgt;
 		match t.kind.as_ref() {
-			Some(tgt::Kind::Gateway(g)) => Ok(PolicyTarget::Gateway(strng::new(g))),
-			Some(tgt::Kind::Listener(l)) => Ok(PolicyTarget::Listener(strng::new(l))),
-			Some(tgt::Kind::Route(r)) => Ok(PolicyTarget::Route(strng::new(r))),
-			Some(tgt::Kind::RouteRule(r)) => Ok(PolicyTarget::RouteRule(strng::new(r))),
-			Some(tgt::Kind::Backend(b)) => Ok(PolicyTarget::Backend(strng::new(b))),
-			Some(tgt::Kind::Service(s)) => Ok(PolicyTarget::Service(strng::new(s))),
-			Some(tgt::Kind::SubBackend(sb)) => Ok(PolicyTarget::SubBackend(strng::new(sb))),
+			Some(tgt::Kind::Gateway(g)) => Ok(PolicyTarget::Gateway(ListenerTarget {
+				gateway_name: strng::new(&g.name),
+				gateway_namespace: strng::new(&g.namespace),
+				listener_name: g.listener.as_ref().map(Into::into),
+			})),
+			Some(tgt::Kind::Route(r)) => Ok(PolicyTarget::Route(RouteTarget {
+				name: strng::new(&r.name),
+				namespace: strng::new(&r.namespace),
+				rule_name: r.route_rule.as_ref().map(Into::into),
+				kind: (!r.kind.is_empty()).then(|| strng::new(&r.kind)),
+			})),
+			Some(tgt::Kind::Backend(b)) => Ok(PolicyTarget::Backend(BackendTarget::Backend {
+				name: strng::new(&b.name),
+				namespace: strng::new(&b.namespace),
+				section: b.section.as_ref().map(Into::into),
+			})),
+			Some(tgt::Kind::Service(s)) => Ok(PolicyTarget::Backend(BackendTarget::Service {
+				hostname: strng::new(&s.hostname),
+				namespace: strng::new(&s.namespace),
+				port: s.port.map(|p| p as u16),
+			})),
 			None => Err(ProtoError::MissingRequiredField),
 		}
 	}
@@ -1346,7 +1810,6 @@ impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
 	fn try_from(p: &proto::agent::Policy) -> Result<Self, Self::Error> {
 		use crate::types::proto::agent::policy as pol;
 
-		let name = strng::new(&p.name);
 		let target = p
 			.target
 			.as_ref()
@@ -1356,16 +1819,57 @@ impl TryFrom<&proto::agent::Policy> for TargetedPolicy {
 		let policy = match &p.kind {
 			Some(pol::Kind::Traffic(spec)) => PolicyType::Traffic(PhasedTrafficPolicy::try_from(spec)?),
 			Some(pol::Kind::Backend(spec)) => PolicyType::Backend(BackendPolicy::try_from(spec)?),
-			// Frontend policies are not represented by TargetedPolicy; reject here.
 			Some(pol::Kind::Frontend(spec)) => PolicyType::Frontend(FrontendPolicy::try_from(spec)?),
 			None => return Err(ProtoError::MissingRequiredField),
 		};
 
 		Ok(TargetedPolicy {
-			name,
+			key: strng::new(&p.key),
+			name: p.name.as_ref().map(Into::into),
 			target,
 			policy,
 		})
+	}
+}
+
+impl From<&proto::agent::ResourceName> for ResourceName {
+	fn from(value: &proto::agent::ResourceName) -> Self {
+		ResourceName {
+			name: strng::new(&value.name),
+			namespace: strng::new(&value.namespace),
+		}
+	}
+}
+
+impl From<&proto::agent::TypedResourceName> for TypedResourceName {
+	fn from(value: &proto::agent::TypedResourceName) -> Self {
+		TypedResourceName {
+			name: strng::new(&value.name),
+			namespace: strng::new(&value.namespace),
+			kind: strng::new(&value.kind),
+		}
+	}
+}
+
+impl From<&proto::agent::RouteName> for RouteName {
+	fn from(value: &proto::agent::RouteName) -> Self {
+		RouteName {
+			name: strng::new(&value.name),
+			namespace: strng::new(&value.namespace),
+			rule_name: value.rule_name.as_ref().map(Into::into),
+			kind: (!value.kind.is_empty()).then(|| strng::new(&value.kind)),
+		}
+	}
+}
+
+impl From<&proto::agent::ListenerName> for ListenerName {
+	fn from(value: &proto::agent::ListenerName) -> Self {
+		ListenerName {
+			gateway_name: strng::new(&value.gateway_name),
+			gateway_namespace: strng::new(&value.gateway_namespace),
+			listener_name: strng::new(&value.listener_name),
+			listener_set: value.listener_set.as_ref().map(Into::into),
+		}
 	}
 }
 
@@ -1377,14 +1881,11 @@ fn resolve_simple_reference(
 	};
 	Ok(match target.kind.as_ref() {
 		None => SimpleBackendReference::Invalid,
-		Some(proto::agent::backend_reference::Kind::Service(svc_key)) => {
-			let ns = match svc_key.split_once('/') {
-				Some((namespace, hostname)) => Ok(NamespacedHostname {
-					namespace: namespace.into(),
-					hostname: hostname.into(),
-				}),
-				None => Err(ProtoError::NamespacedHostnameParse(svc_key.clone())),
-			}?;
+		Some(proto::agent::backend_reference::Kind::Service(svc)) => {
+			let ns = NamespacedHostname {
+				namespace: strng::new(&svc.namespace),
+				hostname: strng::new(&svc.hostname),
+			};
 			SimpleBackendReference::Service {
 				name: ns,
 				port: target.port as u16,
@@ -1398,7 +1899,7 @@ fn resolve_simple_reference(
 
 fn convert_message(
 	m: &proto::agent::backend_policy_spec::ai::Message,
-) -> crate::llm::SimpleChatCompletionMessage {
+) -> llm::SimpleChatCompletionMessage {
 	llm::SimpleChatCompletionMessage {
 		role: strng::new(&m.role),
 		content: strng::new(&m.content),
@@ -1407,8 +1908,8 @@ fn convert_message(
 
 fn convert_prompt_enrichment(
 	prompts: &proto::agent::backend_policy_spec::ai::PromptEnrichment,
-) -> crate::llm::policy::PromptEnrichment {
-	crate::llm::policy::PromptEnrichment {
+) -> llm::policy::PromptEnrichment {
+	llm::policy::PromptEnrichment {
 		append: prompts.append.iter().map(convert_message).collect(),
 		prepend: prompts.prepend.iter().map(convert_message).collect(),
 	}
@@ -1416,8 +1917,8 @@ fn convert_prompt_enrichment(
 
 fn convert_prompt_caching(
 	pc: &proto::agent::backend_policy_spec::ai::PromptCaching,
-) -> crate::llm::policy::PromptCachingConfig {
-	crate::llm::policy::PromptCachingConfig {
+) -> llm::policy::PromptCachingConfig {
+	llm::policy::PromptCachingConfig {
 		cache_system: pc.cache_system,
 		cache_messages: pc.cache_messages,
 		cache_tools: pc.cache_tools,
@@ -1427,44 +1928,26 @@ fn convert_prompt_caching(
 
 fn convert_webhook(
 	w: &proto::agent::backend_policy_spec::ai::Webhook,
-) -> Option<crate::llm::policy::Webhook> {
-	let port = match u16::try_from(w.port) {
-		Ok(port) => port,
-		Err(_) => {
-			warn!(port = w.port, host = %w.host, "Webhook port out of range, ignoring webhook");
-			return None;
-		},
-	};
+) -> Result<llm::policy::Webhook, ProtoError> {
+	let target = resolve_simple_reference(w.backend.as_ref())?;
 
-	let forward_header_matches = match convert_header_match(&w.forward_header_matches) {
-		Ok(h) => h,
-		Err(e) => {
-			warn!(error = %e, "Invalid webhook header matchers, ignoring webhook");
-			return None;
-		},
-	};
+	let forward_header_matches = convert_header_match(&w.forward_header_matches)?;
 
-	Some(crate::llm::policy::Webhook {
-		target: Target::Hostname(w.host.clone().into(), port),
+	Ok(llm::policy::Webhook {
+		target,
 		forward_header_matches,
 	})
 }
 
 fn convert_regex_rules(
 	rr: &proto::agent::backend_policy_spec::ai::RegexRules,
-	rejection: Option<crate::llm::policy::RequestRejection>,
-) -> crate::llm::policy::RegexRules {
-	let action = match rr
-		.action
-		.as_ref()
-		.and_then(|a| proto::agent::backend_policy_spec::ai::ActionKind::try_from(a.kind).ok())
-	{
-		Some(proto::agent::backend_policy_spec::ai::ActionKind::Reject) => {
-			crate::llm::policy::Action::Reject {
-				response: rejection.unwrap_or_default(),
-			}
+) -> llm::policy::RegexRules {
+	let action_kind = proto::agent::backend_policy_spec::ai::ActionKind::try_from(rr.action).ok();
+	let action = match action_kind {
+		Some(ActionKind::ActionUnspecified) | Some(ActionKind::Mask) | None => {
+			llm::policy::Action::Mask
 		},
-		_ => crate::llm::policy::Action::Mask,
+		Some(ActionKind::Reject) => llm::policy::Action::Reject,
 	};
 	let rules = rr
 		.rules
@@ -1475,23 +1958,26 @@ fn convert_regex_rules(
 					Ok(builtin) => {
 						let builtin = match builtin {
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::Ssn => {
-								crate::llm::policy::Builtin::Ssn
+								llm::policy::Builtin::Ssn
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::CreditCard => {
-								crate::llm::policy::Builtin::CreditCard
+								llm::policy::Builtin::CreditCard
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::PhoneNumber => {
-								crate::llm::policy::Builtin::PhoneNumber
+								llm::policy::Builtin::PhoneNumber
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::Email => {
-								crate::llm::policy::Builtin::Email
+								llm::policy::Builtin::Email
+							},
+							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::CaSin => {
+								llm::policy::Builtin::CaSin
 							},
 							_ => {
 								warn!(value = *b, "Unknown builtin regex rule, skipping");
 								return None;
 							},
 						};
-						Some(crate::llm::policy::RegexRule::Builtin { builtin })
+						Some(llm::policy::RegexRule::Builtin { builtin })
 					},
 					Err(_) => {
 						warn!(value = *b, "Invalid builtin regex rule value, skipping");
@@ -1500,13 +1986,10 @@ fn convert_regex_rules(
 				}
 			},
 			Some(proto::agent::backend_policy_spec::ai::regex_rule::Kind::Regex(n)) => {
-				match regex::Regex::new(&n.pattern) {
-					Ok(pattern) => Some(crate::llm::policy::RegexRule::Regex {
-						pattern,
-						name: n.name.clone(),
-					}),
+				match regex::Regex::new(n) {
+					Ok(pattern) => Some(llm::policy::RegexRule::Regex { pattern }),
 					Err(err) => {
-						warn!(error = %err, name = %n.name, pattern = %n.pattern, "Invalid regex pattern");
+						warn!(error = %err, pattern = %n, "Invalid regex pattern");
 						None
 					},
 				}
@@ -1514,7 +1997,7 @@ fn convert_regex_rules(
 			None => None,
 		})
 		.collect();
-	crate::llm::policy::RegexRules { action, rules }
+	llm::policy::RegexRules { action, rules }
 }
 
 fn resolve_reference(
@@ -1525,14 +2008,11 @@ fn resolve_reference(
 	};
 	Ok(match target.kind.as_ref() {
 		None => BackendReference::Invalid,
-		Some(proto::agent::backend_reference::Kind::Service(svc_key)) => {
-			let ns = match svc_key.split_once('/') {
-				Some((namespace, hostname)) => Ok(NamespacedHostname {
-					namespace: namespace.into(),
-					hostname: hostname.into(),
-				}),
-				None => Err(ProtoError::NamespacedHostnameParse(svc_key.clone())),
-			}?;
+		Some(proto::agent::backend_reference::Kind::Service(svc)) => {
+			let ns = NamespacedHostname {
+				namespace: strng::new(&svc.namespace),
+				hostname: strng::new(&svc.hostname),
+			};
 			BackendReference::Service {
 				name: ns,
 				port: target.port as u16,
@@ -1552,11 +2032,11 @@ fn convert_header_match(h: &[proto::agent::HeaderMatch]) -> Result<Vec<HeaderMat
 				"invalid header match value".to_string(),
 			)),
 			Some(proto::agent::header_match::Value::Exact(e)) => Ok(HeaderMatch {
-				name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
+				name: crate::http::HeaderOrPseudo::try_from(h.name.as_str())?,
 				value: HeaderValueMatch::Exact(crate::http::HeaderValue::from_bytes(e.as_bytes())?),
 			}),
 			Some(proto::agent::header_match::Value::Regex(e)) => Ok(HeaderMatch {
-				name: crate::http::HeaderName::from_bytes(h.name.as_bytes())?,
+				name: crate::http::HeaderOrPseudo::try_from(h.name.as_str())?,
 				value: HeaderValueMatch::Regex(regex::Regex::new(e)?),
 			}),
 		})
@@ -1600,71 +2080,14 @@ mod tests {
 			// to verify the contents
 			Ok(())
 		} else {
-			panic!("Expected CSRF policy variant, got: {:?}", policy);
-		}
-	}
-
-	#[tokio::test]
-	async fn test_ai_backend_routes_conversion() -> Result<(), ProtoError> {
-		use proto::agent::ai_backend;
-
-		// Test proto routes field converts to Rust RouteType
-		let mut routes_map = std::collections::HashMap::new();
-		routes_map.insert(
-			"/v1/chat/completions".to_string(),
-			ai_backend::RouteType::Completions as i32,
-		);
-		routes_map.insert(
-			"/v1/messages".to_string(),
-			ai_backend::RouteType::Messages as i32,
-		);
-
-		let proto_backend = proto::agent::Backend {
-			name: "test/backend".to_string(),
-			kind: Some(proto::agent::backend::Kind::Ai(proto::agent::AiBackend {
-				provider_groups: vec![ai_backend::ProviderGroup {
-					providers: vec![ai_backend::Provider {
-						name: "test-provider".to_string(),
-						host_override: None,
-						path_override: None,
-						routes: routes_map,
-						provider: Some(ai_backend::provider::Provider::Openai(ai_backend::OpenAi {
-							model: None,
-						})),
-						inline_policies: vec![],
-					}],
-				}],
-			})),
-			inline_policies: vec![],
-		};
-
-		let backend = BackendWithPolicies::try_from(&proto_backend)?.backend;
-		if let Backend::AI(name, ai_backend) = backend {
-			assert_eq!(name.as_str(), "test/backend");
-			let (provider, _handle) = ai_backend.select_provider().expect("should have provider");
-			assert_eq!(provider.routes.len(), 2);
-			// Suffix matching: paths ending with these suffixes should match
-			assert_eq!(
-				provider.resolve_route("/v1/chat/completions"),
-				llm::RouteType::Completions
-			);
-			assert_eq!(
-				provider.resolve_route("/v1/messages"),
-				llm::RouteType::Messages
-			);
-			// No match -> default to Completions
-			assert_eq!(
-				provider.resolve_route("/unknown"),
-				llm::RouteType::Completions
-			);
-			Ok(())
-		} else {
-			panic!("Expected AI backend")
+			panic!("Expected CSRF policy variant, got: {policy:?}");
 		}
 	}
 
 	#[test]
 	fn test_backend_policy_spec_to_ai_policy() -> Result<(), ProtoError> {
+		use proto::agent::backend_policy_spec::ai::RouteType;
+
 		let spec = proto::agent::BackendPolicySpec {
 			kind: Some(proto::agent::backend_policy_spec::Kind::Ai(Ai {
 				defaults: vec![
@@ -1688,6 +2111,15 @@ mod tests {
 				prompts: None,
 				model_aliases: Default::default(),
 				prompt_caching: None,
+				routes: vec![
+					(
+						"/v1/chat/completions".to_string(),
+						RouteType::Completions as i32,
+					),
+					("/v1/messages".to_string(), RouteType::Messages as i32),
+				]
+				.into_iter()
+				.collect(),
 			})),
 		};
 
@@ -1725,6 +2157,17 @@ mod tests {
 			let array_val = overrides.get("array_value").unwrap();
 			assert!(array_val.is_array(), "array_value should be an array");
 			assert_eq!(array_val, &json!([1, 2, 3]));
+
+			// Verify routes conversion
+			assert_eq!(ai_policy.routes.len(), 2);
+			assert_eq!(
+				ai_policy.routes.get("/v1/chat/completions"),
+				Some(&llm::RouteType::Completions)
+			);
+			assert_eq!(
+				ai_policy.routes.get("/v1/messages"),
+				Some(&llm::RouteType::Messages)
+			);
 		} else {
 			panic!("Expected AI policy variant");
 		}

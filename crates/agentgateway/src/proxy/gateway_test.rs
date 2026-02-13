@@ -1,27 +1,28 @@
-use crate::http::tests_common::*;
-use crate::http::transformation_cel::Transformation;
-use crate::http::{Body, transformation_cel};
-use crate::llm::{AIProvider, openai};
-use crate::proxy::request_builder::RequestBuilder;
-use crate::test_helpers::proxymock::*;
-use crate::types::agent::Backend;
-use crate::types::agent::Target;
-use crate::types::agent::{BackendPolicy, BackendWithPolicies};
-use crate::types::agent::{
-	BackendReference, Bind, Listener, ListenerProtocol, ListenerSet, PathMatch, PolicyTarget, Route,
-	RouteBackendReference, RouteMatch, RouteSet, TargetedPolicy, TrafficPolicy,
-};
-use crate::*;
-use ::http::StatusCode;
-use ::http::{Method, Version};
+use ::http::{Method, StatusCode, Version};
 use agent_core::strng;
 use assert_matches::assert_matches;
+use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::Client;
-use rand::Rng;
+use rand::RngExt;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use x509_parser::nom::AsBytes;
+
+use crate::http::cors;
+use crate::http::tests_common::*;
+use crate::http::transformation_cel::Transformation;
+use crate::http::{Body, Response, transformation_cel};
+use crate::llm::{AIProvider, openai};
+use crate::proxy::request_builder::RequestBuilder;
+use crate::test_helpers::proxymock::*;
+use crate::types::agent::{
+	Backend, BackendPolicy, BackendReference, BackendWithPolicies, Bind, BindProtocol, Listener,
+	ListenerProtocol, ListenerSet, PathMatch, PolicyTarget, ResourceName, Route,
+	RouteBackendReference, RouteMatch, RouteName, RouteSet, Target, TargetedPolicy, TrafficPolicy,
+};
+use crate::types::backend;
+use crate::*;
 
 #[tokio::test]
 async fn basic_handling() {
@@ -29,6 +30,7 @@ async fn basic_handling() {
 	let res = send_request(io, Method::POST, "http://lo").await;
 	assert_eq!(res.status(), 200);
 	let body = read_body(res.into_body()).await;
+	assert_eq!(body.version, Version::HTTP_11);
 	assert_eq!(body.method, Method::POST);
 }
 
@@ -55,14 +57,21 @@ async fn basic_http2() {
 		.await
 		.unwrap();
 	assert_eq!(res.status(), 200);
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_2);
 }
 
 #[tokio::test]
 async fn local_ratelimit() {
 	let (_mock, bind, io) = basic_setup().await;
 	let _bind = bind.with_policy(TargetedPolicy {
-		name: strng::new("rl"),
-		target: PolicyTarget::Route("route".into()),
+		key: strng::new("rl"),
+		name: None,
+		target: PolicyTarget::Route(RouteName {
+			name: "route".into(),
+			namespace: "".into(),
+			rule_name: None,
+			kind: None,
+		}),
 		policy: TrafficPolicy::LocalRateLimit(vec![
 			http::localratelimit::RateLimitSpec {
 				max_tokens: 1,
@@ -80,6 +89,144 @@ async fn local_ratelimit() {
 	assert_eq!(res.status(), 200);
 	let res = send_request(io.clone(), Method::GET, "http://lo").await;
 	assert_eq!(res.status(), 429);
+}
+
+/// Helper to build a CORS policy for tests.
+fn cors_policy(allow_origins: Vec<&str>, allow_methods: Vec<&str>) -> cors::Cors {
+	cors::Cors::try_from(cors::CorsSerde {
+		allow_credentials: false,
+		allow_headers: vec!["*".to_string()],
+		allow_methods: allow_methods.into_iter().map(String::from).collect(),
+		allow_origins: allow_origins.into_iter().map(String::from).collect(),
+		expose_headers: vec![],
+		max_age: None,
+	})
+	.unwrap()
+}
+
+/// Verifies that a CORS preflight (OPTIONS) request returns 200 even when
+/// the rate limit is exhausted, because CORS runs before rate limiting.
+#[tokio::test]
+async fn cors_preflight_bypasses_ratelimit() {
+	let (_mock, bind, io) = basic_setup().await;
+	let route_target = PolicyTarget::Route(RouteName {
+		name: "route".into(),
+		namespace: "".into(),
+		rule_name: None,
+		kind: None,
+	});
+
+	// Attach CORS + rate limit (1 token, essentially immediately exhausted after first real request)
+	let _bind = bind
+		.with_policy(TargetedPolicy {
+			key: strng::new("cors"),
+			name: None,
+			target: route_target.clone(),
+			policy: TrafficPolicy::CORS(cors_policy(vec!["http://example.com"], vec!["GET", "POST"]))
+				.into(),
+		})
+		.with_policy(TargetedPolicy {
+			key: strng::new("rl"),
+			name: None,
+			target: route_target,
+			policy: TrafficPolicy::LocalRateLimit(vec![
+				http::localratelimit::RateLimitSpec {
+					max_tokens: 1,
+					tokens_per_fill: 1,
+					fill_interval: Duration::from_secs(100),
+					limit_type: Default::default(),
+				}
+				.try_into()
+				.unwrap(),
+			])
+			.into(),
+		});
+
+	// First real request exhausts the single token
+	let res = send_request(io.clone(), Method::GET, "http://lo").await;
+	assert_eq!(res.status(), 200);
+
+	// Second real request should be rate limited
+	let res = send_request(io.clone(), Method::GET, "http://lo").await;
+	assert_eq!(res.status(), 429);
+
+	// A CORS preflight should still succeed (200) even though rate limit is exhausted
+	let res = send_request_headers(
+		io.clone(),
+		Method::OPTIONS,
+		"http://lo",
+		&[
+			("origin", "http://example.com"),
+			("access-control-request-method", "GET"),
+		],
+	)
+	.await;
+	assert_eq!(res.status(), 200);
+	assert_eq!(res.hdr("access-control-allow-origin"), "http://example.com");
+}
+
+/// Verifies that when a cross-origin request is rate limited (429), the response
+/// still carries the CORS headers so browsers can read the error.
+#[tokio::test]
+async fn cors_headers_present_on_ratelimited_response() {
+	let (_mock, bind, io) = basic_setup().await;
+	let route_target = PolicyTarget::Route(RouteName {
+		name: "route".into(),
+		namespace: "".into(),
+		rule_name: None,
+		kind: None,
+	});
+
+	let _bind = bind
+		.with_policy(TargetedPolicy {
+			key: strng::new("cors"),
+			name: None,
+			target: route_target.clone(),
+			policy: TrafficPolicy::CORS(cors_policy(vec!["http://example.com"], vec!["GET", "POST"]))
+				.into(),
+		})
+		.with_policy(TargetedPolicy {
+			key: strng::new("rl"),
+			name: None,
+			target: route_target,
+			policy: TrafficPolicy::LocalRateLimit(vec![
+				http::localratelimit::RateLimitSpec {
+					max_tokens: 1,
+					tokens_per_fill: 1,
+					fill_interval: Duration::from_secs(100),
+					limit_type: Default::default(),
+				}
+				.try_into()
+				.unwrap(),
+			])
+			.into(),
+		});
+
+	// Exhaust rate limit with a normal cross-origin GET
+	let res = send_request_headers(
+		io.clone(),
+		Method::GET,
+		"http://lo",
+		&[("origin", "http://example.com")],
+	)
+	.await;
+	assert_eq!(res.status(), 200);
+	assert_eq!(res.hdr("access-control-allow-origin"), "http://example.com");
+
+	// Second cross-origin request is rate limited, but should still have CORS headers
+	let res = send_request_headers(
+		io.clone(),
+		Method::GET,
+		"http://lo",
+		&[("origin", "http://example.com")],
+	)
+	.await;
+	assert_eq!(res.status(), 429);
+	assert_eq!(
+		res.hdr("access-control-allow-origin"),
+		"http://example.com",
+		"CORS headers must be present even on rate-limited responses"
+	);
 }
 
 #[tokio::test]
@@ -183,11 +330,15 @@ async fn direct_response() {
 		}),
 		request: None,
 	};
-	let xfm = Transformation::try_from(xfm).unwrap();
+	let xfm = Transformation::try_from_local_config(xfm, true).unwrap();
 	let bind = base_gateway(&mock).with_route(Route {
 		key: "route2".into(),
-		route_name: "route2".into(),
-		rule_name: None,
+		name: RouteName {
+			name: "route2".into(),
+			namespace: Default::default(),
+			rule_name: None,
+			kind: None,
+		},
 		hostnames: Default::default(),
 		matches: vec![RouteMatch {
 			headers: vec![],
@@ -236,12 +387,15 @@ async fn tls_termination() {
 		listeners: ListenerSet::from_list([Listener {
 			key: LISTENER_KEY,
 			name: Default::default(),
-			gateway_name: Default::default(),
 			hostname: strng::new("*.example.com"),
 			protocol: ListenerProtocol::HTTPS(
 				types::local::LocalTLSServerConfig {
 					cert: "../../examples/tls/certs/cert.pem".into(),
 					key: "../../examples/tls/certs/key.pem".into(),
+					root: None,
+					cipher_suites: None,
+					min_tls_version: None,
+					max_tls_version: None,
 				}
 				.try_into()
 				.unwrap(),
@@ -249,6 +403,8 @@ async fn tls_termination() {
 			tcp_routes: Default::default(),
 			routes: RouteSet::from_list(vec![route]),
 		}]),
+		protocol: BindProtocol::tls,
+		tunnel_protocol: Default::default(),
 	};
 
 	let t = setup_proxy_test("{}")
@@ -257,7 +413,7 @@ async fn tls_termination() {
 		.with_bind(bind);
 
 	let io = t.serve_https(strng::new("bind"), Some("a.example.com"));
-	let res = RequestBuilder::new(Method::GET, "http://lo")
+	let res = RequestBuilder::new(Method::GET, "http://a.example.com")
 		.send(io)
 		.await
 		.unwrap();
@@ -270,12 +426,221 @@ async fn tls_termination() {
 }
 
 #[tokio::test]
+async fn tls_backend_connection() {
+	let (mock, certs) = tls_mock().await;
+	let backend_tls = http::backendtls::ResolvedBackendTLS {
+		root: Some(certs.root_cert.pem().into_bytes()),
+		hostname: Some("localhost".to_string()),
+		..Default::default()
+	}
+	.try_into()
+	.unwrap();
+
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
+				Target::Address(*mock.address()),
+			),
+			inline_policies: vec![BackendPolicy::BackendTLS(backend_tls)],
+		})
+		.with_bind(simple_bind(basic_route(*mock.address())));
+
+	let res = send_http_version(&t, Version::HTTP_2).await;
+	assert_eq!(res.status(), 200);
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_2);
+
+	let res = send_http_version(&t, Version::HTTP_11).await;
+	assert_eq!(res.status(), 200);
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_2);
+}
+
+#[tokio::test]
+async fn tls_backend_connection_alpn() {
+	let (mock, certs) = tls_mock().await;
+	let backend_tls = http::backendtls::ResolvedBackendTLS {
+		root: Some(certs.root_cert.pem().into_bytes()),
+		hostname: Some("localhost".to_string()),
+		alpn: Some(vec!["http/1.1".to_string()]),
+		..Default::default()
+	}
+	.try_into()
+	.unwrap();
+
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
+				Target::Address(*mock.address()),
+			),
+			inline_policies: vec![BackendPolicy::BackendTLS(backend_tls)],
+		})
+		.with_bind(simple_bind(basic_route(*mock.address())));
+
+	let res = send_http_version(&t, Version::HTTP_11).await;
+	assert_eq!(res.status(), 200);
+	// We should keep HTTP/1.1! We negotiated to ALPN HTTP/1.1 so must send that.
+	assert_eq!(
+		read_body(res.into_body()).await.version,
+		::http::Version::HTTP_11
+	);
+
+	let res = send_http_version(&t, Version::HTTP_2).await;
+	assert_eq!(res.status(), 200);
+	// We should downgrade! We negotiated to ALPN HTTP/1.1 so must send that.
+	assert_eq!(
+		read_body(res.into_body()).await.version,
+		::http::Version::HTTP_11
+	);
+}
+
+#[tokio::test]
+async fn tls_backend_http2_version() {
+	let (mock, certs) = tls_mock().await;
+	let backend_tls = http::backendtls::ResolvedBackendTLS {
+		root: Some(certs.root_cert.pem().into_bytes()),
+		hostname: Some("localhost".to_string()),
+		..Default::default()
+	}
+	.try_into()
+	.unwrap();
+	let backend_version = backend::HTTP {
+		version: Some(Version::HTTP_2),
+		..Default::default()
+	};
+
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
+				Target::Address(*mock.address()),
+			),
+			inline_policies: vec![
+				BackendPolicy::BackendTLS(backend_tls),
+				BackendPolicy::HTTP(backend_version),
+			],
+		})
+		.with_bind(simple_bind(basic_route(*mock.address())));
+
+	let res = send_http_version(&t, Version::HTTP_2).await;
+	assert_eq!(res.status(), 200);
+	// We explicitly set HTTP2, and the ALPN allows it
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_2);
+
+	let res = send_http_version(&t, Version::HTTP_11).await;
+	assert_eq!(res.status(), 200);
+	// We explicitly set HTTP2, and the ALPN allows it
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_2);
+}
+
+#[tokio::test]
+async fn tls_backend_http1_version() {
+	let (mock, certs) = tls_mock().await;
+	let backend_tls = http::backendtls::ResolvedBackendTLS {
+		root: Some(certs.root_cert.pem().into_bytes()),
+		hostname: Some("localhost".to_string()),
+		..Default::default()
+	}
+	.try_into()
+	.unwrap();
+	let backend_version = backend::HTTP {
+		version: Some(Version::HTTP_11),
+		..Default::default()
+	};
+
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
+				Target::Address(*mock.address()),
+			),
+			inline_policies: vec![
+				BackendPolicy::BackendTLS(backend_tls),
+				BackendPolicy::HTTP(backend_version),
+			],
+		})
+		.with_bind(simple_bind(basic_route(*mock.address())));
+
+	let res = send_http_version(&t, Version::HTTP_2).await;
+	assert_eq!(res.status(), 200);
+	// We explicitly set HTTP_11, and the ALPN allows it. We should downgrade their request!
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_11);
+
+	let res = send_http_version(&t, Version::HTTP_11).await;
+	assert_eq!(res.status(), 200);
+	// We explicitly set HTTP_11, and the ALPN allows it
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_11);
+}
+
+#[tokio::test]
+async fn tls_backend_version_with_alpn() {
+	let (mock, certs) = tls_mock().await;
+	let backend_tls = http::backendtls::ResolvedBackendTLS {
+		alpn: Some(vec!["http/1.1".to_string()]),
+		root: Some(certs.root_cert.pem().into_bytes()),
+		hostname: Some("localhost".to_string()),
+		..Default::default()
+	}
+	.try_into()
+	.unwrap();
+	let backend_version = backend::HTTP {
+		version: Some(Version::HTTP_2),
+		..Default::default()
+	};
+
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
+				Target::Address(*mock.address()),
+			),
+			inline_policies: vec![
+				BackendPolicy::BackendTLS(backend_tls),
+				BackendPolicy::HTTP(backend_version),
+			],
+		})
+		.with_bind(simple_bind(basic_route(*mock.address())));
+
+	let res = send_http_version(&t, Version::HTTP_2).await;
+	assert_eq!(res.status(), 200);
+	// Explicit ALPN takes precedence over explicit backend version
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_11);
+
+	let res = send_http_version(&t, Version::HTTP_11).await;
+	assert_eq!(res.status(), 200);
+	// Explicit ALPN takes precedence over explicit backend version
+	assert_eq!(read_body(res.into_body()).await.version, Version::HTTP_11);
+}
+
+async fn send_http_version(t: &TestBind, v: Version) -> Response {
+	let io = if v == Version::HTTP_11 {
+		t.serve_http(strng::new("bind"))
+	} else {
+		t.serve_http2(strng::new("bind"))
+	};
+	RequestBuilder::new(Method::GET, "http://lo")
+		.version(v)
+		.send(io)
+		.await
+		.unwrap()
+}
+
+#[tokio::test]
 async fn header_manipulation() {
 	let mock = simple_mock().await;
 	let bind = base_gateway(&mock).with_route(Route {
 		key: "route2".into(),
-		route_name: "route2".into(),
-		rule_name: None,
+		name: RouteName {
+			name: "route2".into(),
+			namespace: Default::default(),
+			rule_name: None,
+			kind: None,
+		},
 		hostnames: Default::default(),
 		matches: vec![RouteMatch {
 			headers: vec![],
@@ -297,7 +662,7 @@ async fn header_manipulation() {
 		],
 		backends: vec![RouteBackendReference {
 			weight: 1,
-			backend: BackendReference::Backend(mock.address().to_string().into()),
+			backend: BackendReference::Backend(strng::format!("/{}", mock.address())),
 			inline_policies: vec![
 				BackendPolicy::RequestHeaderModifier(http::filters::HeaderModifier {
 					add: vec![("x-backend-req".into(), "backend-req".into())],
@@ -335,8 +700,12 @@ async fn inline_backend_policies() {
 	let bind = base_gateway(&mock)
 		.with_route(Route {
 			key: "route2".into(),
-			route_name: "route2".into(),
-			rule_name: None,
+			name: RouteName {
+				name: "route2".into(),
+				namespace: Default::default(),
+				rule_name: None,
+				kind: None,
+			},
 			hostnames: Default::default(),
 			matches: vec![RouteMatch {
 				headers: vec![],
@@ -358,7 +727,7 @@ async fn inline_backend_policies() {
 			],
 			backends: vec![RouteBackendReference {
 				weight: 1,
-				backend: BackendReference::Backend(mock.address().to_string().into()),
+				backend: BackendReference::Backend(strng::format!("/{}", mock.address())),
 				inline_policies: vec![
 					BackendPolicy::RequestHeaderModifier(http::filters::HeaderModifier {
 						add: vec![("x-backend-route-req".into(), "backend-route-req".into())],
@@ -375,7 +744,7 @@ async fn inline_backend_policies() {
 		})
 		.with_raw_backend(BackendWithPolicies {
 			backend: Backend::Opaque(
-				strng::format!("{}", mock.address()),
+				ResourceName::new(strng::format!("{}", mock.address()), "".into()),
 				Target::Address(*mock.address()),
 			),
 			inline_policies: vec![
@@ -417,8 +786,14 @@ async fn api_key() {
 	let (_mock, bind, io) = basic_setup().await;
 	let _bind = bind
 		.with_policy(TargetedPolicy {
-			name: strng::new("apikey"),
-			target: PolicyTarget::Route("route".into()),
+			key: strng::new("apikey"),
+			name: Default::default(),
+			target: PolicyTarget::Route(RouteName {
+				name: "route".into(),
+				namespace: "".into(),
+				rule_name: None,
+				kind: None,
+			}),
 			policy: TrafficPolicy::APIKey(
 				http::apikey::LocalAPIKeys {
 					keys: vec![
@@ -438,8 +813,14 @@ async fn api_key() {
 			.into(),
 		})
 		.with_policy(TargetedPolicy {
-			name: strng::new("auth"),
-			target: PolicyTarget::Route("route".into()),
+			key: strng::new("auth"),
+			name: Default::default(),
+			target: PolicyTarget::Route(RouteName {
+				name: "route".into(),
+				namespace: "".into(),
+				rule_name: None,
+				kind: None,
+			}),
 			policy: TrafficPolicy::Authorization(deser(json!({
 				"rules": ["apiKey.group == 'eng'"]
 			})))
@@ -482,8 +863,14 @@ async fn basic_auth() {
 	let (_mock, bind, io) = basic_setup().await;
 	let _bind = bind
 		.with_policy(TargetedPolicy {
-			name: strng::new("basic"),
-			target: PolicyTarget::Route("route".into()),
+			key: strng::new("basic"),
+			name: None,
+			target: PolicyTarget::Route(RouteName {
+				name: "route".into(),
+				namespace: "".into(),
+				rule_name: None,
+				kind: None,
+			}),
 			policy: TrafficPolicy::BasicAuth(
 				http::basicauth::LocalBasicAuth {
 					htpasswd: FileOrInline::Inline(
@@ -502,8 +889,14 @@ crypt_test:bGVh02xkuGli2"
 			.into(),
 		})
 		.with_policy(TargetedPolicy {
-			name: strng::new("auth"),
-			target: PolicyTarget::Route("route".into()),
+			key: strng::new("auth"),
+			name: Default::default(),
+			target: PolicyTarget::Route(RouteName {
+				name: "route".into(),
+				namespace: "".into(),
+				rule_name: None,
+				kind: None,
+			}),
 			policy: TrafficPolicy::Authorization(deser(json!({
 				"rules": ["basicAuth.username == 'user'"]
 			})))
@@ -560,6 +953,120 @@ crypt_test:bGVh02xkuGli2"
 	)
 	.await;
 	assert_eq!(res.status(), 401);
+}
+
+#[tokio::test]
+async fn test_hbone_address_parsing() {
+	// Test parsing IP:port
+	let uri = "127.0.0.1:8080".parse::<http::Uri>().unwrap();
+	let addr = super::HboneAddress::try_from(&uri).unwrap();
+	assert_matches!(addr, super::HboneAddress::SocketAddr(_));
+
+	// Test parsing hostname:port
+	let uri = "example.com:443".parse::<http::Uri>().unwrap();
+	let addr = super::HboneAddress::try_from(&uri).unwrap();
+	assert_matches!(addr, super::HboneAddress::SvcHostname(host, port) => {
+		assert_eq!(host.as_ref(), "example.com");
+		assert_eq!(port, 443);
+	});
+
+	// Test parsing invalid URI (this will panic on parse, so we skip it)
+	// let uri = "invalid-uri".parse::<http::Uri>().unwrap(); // This would panic
+
+	// Test URI with no host
+	let uri_no_host = "/path".parse::<http::Uri>().unwrap();
+	let result_no_host = super::HboneAddress::try_from(&uri_no_host);
+	assert!(result_no_host.is_err());
+
+	// Test URI with host but no port (should fail for CONNECT)
+	let uri_no_port = "http://example.com".parse::<http::Uri>().unwrap();
+	let result_no_port = super::HboneAddress::try_from(&uri_no_port);
+	assert!(result_no_port.is_err());
+}
+
+#[tokio::test]
+async fn test_hostname_resolution_logic() {
+	use crate::types::discovery::{NetworkAddress, Service};
+
+	// Create a mock service store with a service that has a hostname
+	let mut stores = crate::store::DiscoveryStore::new();
+
+	let service = Service {
+		name: strng::new("waypoint-service"),
+		namespace: strng::new("default"),
+		hostname: strng::new("my-app.example.com"),
+		vips: vec![NetworkAddress {
+			network: strng::new("default"),
+			address: "10.0.0.100".parse().unwrap(),
+		}],
+		ports: std::collections::HashMap::from([(80, 8080)]),
+		app_protocols: Default::default(),
+		endpoints: Default::default(),
+		subject_alt_names: Default::default(),
+		waypoint: Some(crate::types::discovery::GatewayAddress {
+			destination: crate::types::discovery::gatewayaddress::Destination::Hostname(
+				crate::types::discovery::NamespacedHostname {
+					namespace: strng::new("istio-system"),
+					hostname: strng::new("waypoint"),
+				},
+			),
+			hbone_mtls_port: 15008,
+		}),
+		load_balancer: None,
+		ip_families: None,
+	};
+
+	stores.insert_service_internal(service);
+
+	// Test URI parsing for hostname:port
+	let uri = "my-app.example.com:80".parse::<http::Uri>().unwrap();
+	let parsed_addr = super::HboneAddress::try_from(&uri).unwrap();
+
+	// Should parse as SvcHostname
+	assert_matches!(parsed_addr, super::HboneAddress::SvcHostname(host, port) => {
+		assert_eq!(host.as_ref(), "my-app.example.com");
+		assert_eq!(port, 80);
+	});
+
+	// Test service lookup by hostname
+	let hostname_str = "my-app.example.com";
+	let found_service = super::find_service_by_hostname(&stores, hostname_str);
+	assert!(found_service.is_some());
+
+	let svc = found_service.unwrap();
+	assert_eq!(svc.hostname.as_str(), "my-app.example.com");
+	assert_eq!(svc.namespace.as_str(), "default");
+	assert!(!svc.vips.is_empty());
+
+	// Verify we can get the VIP
+	let network = strng::new("default");
+	let vip = svc.vips.iter().find(|v| v.network == network);
+	assert!(vip.is_some());
+	assert_eq!(vip.unwrap().address.to_string(), "10.0.0.100");
+
+	// Test hostname that doesn't exist as a service
+	let nonexistent_hostname = "nonexistent.example.com";
+	let not_found = super::find_service_by_hostname(&stores, nonexistent_hostname);
+	assert!(not_found.is_none());
+
+	// Test service exists but has no VIPs
+	let service_no_vips = Service {
+		name: strng::new("service-no-vips"),
+		namespace: strng::new("default"),
+		hostname: strng::new("no-vips.example.com"),
+		vips: vec![], // No VIPs
+		ports: Default::default(),
+		app_protocols: Default::default(),
+		endpoints: Default::default(),
+		subject_alt_names: Default::default(),
+		waypoint: None,
+		load_balancer: None,
+		ip_families: None,
+	};
+	stores.insert_service_internal(service_no_vips);
+
+	let no_vips_found = super::find_service_by_hostname(&stores, "no-vips.example.com");
+	assert!(no_vips_found.is_none()); // Should return None because service has no VIPs
 }
 
 async fn assert_llm(io: Client<MemoryConnector, Body>, body: &[u8], want: Value) {

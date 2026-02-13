@@ -17,12 +17,13 @@ use rmcp::model::{
 	ServerInfo, ServerJsonRpcMessage, ServerResult, Tool, ToolsCapability,
 };
 
-use crate::cel::ContextBuilder;
 use crate::http::Response;
 use crate::http::jwt::Claims;
+use crate::http::sessionpersistence::MCPSession;
 use crate::mcp::mergestream::MergeFn;
-use crate::mcp::rbac::{Identity, McpAuthorizationSet};
+use crate::mcp::rbac::{CelExecWrapper, Identity, McpAuthorizationSet};
 use crate::mcp::router::McpBackendGroup;
+use crate::mcp::streamablehttp::ServerSseMessage;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
 use crate::mcp::{ClientError, MCPInfo, mergestream, rbac, upstream};
 use crate::proxy::httpproxy::PolicyClient;
@@ -89,6 +90,23 @@ impl Relay {
 }
 
 impl Relay {
+	pub fn get_sessions(&self) -> Option<Vec<MCPSession>> {
+		let mut sessions = Vec::with_capacity(self.upstreams.size());
+		for (_, us) in self.upstreams.iter_named() {
+			sessions.push(us.get_session_state()?);
+		}
+		Some(sessions)
+	}
+
+	pub fn set_sessions(&self, sessions: Vec<MCPSession>) {
+		for ((_, us), session) in self.upstreams.iter_named().zip(sessions) {
+			us.set_session_id(&session.session, session.backend);
+		}
+	}
+	pub fn count(&self) -> usize {
+		self.upstreams.size()
+	}
+
 	pub fn is_multiplexing(&self) -> bool {
 		self.is_multiplexing
 	}
@@ -96,7 +114,7 @@ impl Relay {
 		self.default_target_name.clone()
 	}
 
-	pub fn merge_tools(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
+	pub fn merge_tools(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		let default_target_name = self.default_target_name.clone();
 		Box::new(move |streams| {
@@ -135,21 +153,38 @@ impl Relay {
 				ListToolsResult {
 					tools,
 					next_cursor: None,
+					meta: None,
 				}
 				.into(),
 			)
 		})
 	}
 
-	pub fn merge_initialize(&self, pv: ProtocolVersion) -> Box<MergeFn> {
-		let info = self.get_info(pv);
-		Box::new(move |_| {
+	pub fn merge_initialize(&self, pv: ProtocolVersion, multiplexing: bool) -> Box<MergeFn> {
+		Box::new(move |s| {
+			if !multiplexing {
+				// Happy case: we can forward everything
+				let (_, ServerResult::InitializeResult(ir)) = s.into_iter().next().unwrap() else {
+					return Ok(Self::get_info(pv, multiplexing).into());
+				};
+				return Ok(ir.clone().into());
+			}
+
+			// Multiplexing is more complex. We need to find the lowest protocol version that all servers support.
+			let lowest_version = s
+				.into_iter()
+				.flat_map(|(_, v)| match v {
+					ServerResult::InitializeResult(r) => Some(r.protocol_version),
+					_ => None,
+				})
+				.min_by_key(|i| i.to_string())
+				.unwrap_or(pv);
 			// For now, we just send our own info. In the future, we should merge the results from each upstream.
-			Ok(info.into())
+			Ok(Self::get_info(lowest_version, multiplexing).into())
 		})
 	}
 
-	pub fn merge_prompts(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
+	pub fn merge_prompts(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		let default_target_name = self.default_target_name.clone();
 		Box::new(move |streams| {
@@ -182,12 +217,13 @@ impl Relay {
 				ListPromptsResult {
 					prompts,
 					next_cursor: None,
+					meta: None,
 				}
 				.into(),
 			)
 		})
 	}
-	pub fn merge_resources(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
+	pub fn merge_resources(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		Box::new(move |streams| {
 			let resources = streams
@@ -217,12 +253,13 @@ impl Relay {
 				ListResourcesResult {
 					resources,
 					next_cursor: None,
+					meta: None,
 				}
 				.into(),
 			)
 		})
 	}
-	pub fn merge_resource_templates(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
+	pub fn merge_resource_templates(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		Box::new(move |streams| {
 			let resource_templates = streams
@@ -252,6 +289,7 @@ impl Relay {
 				ListResourceTemplatesResult {
 					resource_templates,
 					next_cursor: None,
+					meta: None,
 				}
 				.into(),
 			)
@@ -341,29 +379,45 @@ impl Relay {
 
 		Ok(accepted_response())
 	}
-	fn get_info(&self, pv: ProtocolVersion) -> ServerInfo {
-		ServerInfo {
-			protocol_version: pv,
-			capabilities: ServerCapabilities {
+	fn get_info(pv: ProtocolVersion, multiplexing: bool) -> ServerInfo {
+		let capabilities = if multiplexing {
+			ServerCapabilities {
 				completions: None,
 				experimental: None,
 				logging: None,
+				tasks: None,
+				tools: Some(ToolsCapability::default()),
+				// These are not supported when multiplexing.
+				prompts: None,
+				resources: None,
+			}
+		} else {
+			ServerCapabilities {
+				completions: None,
+				experimental: None,
+				logging: None,
+				tasks: None,
+				tools: Some(ToolsCapability::default()),
 				prompts: Some(PromptsCapability::default()),
 				resources: Some(ResourcesCapability::default()),
-				tools: Some(ToolsCapability::default()),
-			},
+			}
+		};
+		let instructions = Some(
+			"This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string(),
+		);
+		ServerInfo {
+			protocol_version: pv,
+			capabilities,
 			server_info: Implementation::from_build_env(),
-			instructions: Some(
-				"This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string(),
-			),
+			instructions,
 		}
 	}
 }
 
 pub fn setup_request_log(
-	http: &Parts,
+	http: Parts,
 	span_name: &str,
-) -> (BoxedSpan, AsyncLog<MCPInfo>, Arc<ContextBuilder>) {
+) -> (BoxedSpan, AsyncLog<MCPInfo>, CelExecWrapper) {
 	let traceparent = http.extensions.get::<TraceParent>();
 	let mut ctx = Context::new();
 	if let Some(tp) = traceparent {
@@ -375,7 +429,7 @@ pub fn setup_request_log(
 			TraceState::default(),
 		));
 	}
-	let claims = http.extensions.get::<Claims>();
+	let claims = http.extensions.get::<Claims>().cloned();
 
 	let log = http
 		.extensions
@@ -383,14 +437,10 @@ pub fn setup_request_log(
 		.cloned()
 		.unwrap_or_default();
 
-	let cel = http
-		.extensions
-		.get::<Arc<ContextBuilder>>()
-		.cloned()
-		.expect("CelContextBuilder must be set");
+	let cel = CelExecWrapper::new(http);
 
 	let tracer = trcng::get_tracer();
-	let _span = trcng::start_span(span_name.to_string(), &Identity::new(claims.cloned()))
+	let _span = trcng::start_span(span_name.to_string(), &Identity::new(claims))
 		.with_kind(SpanKind::Server)
 		.start_with_context(tracer, &ctx);
 	(_span, log, cel)
@@ -402,7 +452,6 @@ fn messages_to_response(
 ) -> Result<Response, UpstreamError> {
 	use futures_util::StreamExt;
 	use rmcp::model::ServerJsonRpcMessage;
-	use rmcp::transport::common::server_side_http::ServerSseMessage;
 	let stream = stream.map(move |rpc| {
 		let r = match rpc {
 			Ok(rpc) => rpc,

@@ -102,10 +102,17 @@ pub struct UrlRewrite {
 	pub path: Option<PathRedirect>,
 }
 
+/// OriginalUrl is an HTTP Extension that signals the original URI when a URI was rewritten
 #[derive(Debug, Clone)]
 pub struct OriginalUrl(pub Uri);
+
+/// AutoHostname is an HTTP Extension that signals that auto-hostname rewrite should be used
 #[derive(Debug, Clone)]
 pub struct AutoHostname();
+
+/// BackendRequestTimeout is an HTTP Extension that signals the backend request timeout to use for backend calls.
+#[derive(Debug, Clone)]
+pub struct BackendRequestTimeout(pub Duration);
 
 impl UrlRewrite {
 	pub fn apply(&self, req: &mut Request) -> Result<(), Error> {
@@ -154,8 +161,7 @@ impl DirectResponse {
 	}
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[apply(schema!)]
 pub struct RequestMirror {
 	pub backend: SimpleBackendReference,
 	// 0.0-1.0

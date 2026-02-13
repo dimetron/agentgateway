@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Trash2, Plus } from "lucide-react";
-import { formatArrayForInput, handleArrayInput, handleNumberArrayInput } from "@/lib/policy-utils";
+import { formatArrayForInput, handleNumberArrayInput } from "@/lib/policy-utils";
 import { McpAuthorizationRule } from "@/lib/types";
 import {
   ArrayInput,
@@ -1532,7 +1532,7 @@ export function renderAiForm({ data, onChange }: FormRendererProps) {
   );
 }
 
-export function renderA2aForm({ data, onChange }: FormRendererProps) {
+export function renderA2aForm({ data: _data, onChange: _onChange }: FormRendererProps) {
   return (
     <div className="space-y-6">
       <div className="bg-muted/50 border rounded-lg p-4">

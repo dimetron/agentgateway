@@ -1,52 +1,54 @@
 use ::http::Uri;
-use ::http::header::CONTENT_TYPE;
+use ::http::header::{ACCEPT, CONTENT_TYPE};
 use anyhow::anyhow;
 use futures::StreamExt;
-use reqwest::header::ACCEPT;
+use headers::HeaderMapExt;
 use rmcp::model::{
 	ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcRequest, ServerJsonRpcMessage,
 };
 use rmcp::transport::common::http_header::{
 	EVENT_STREAM_MIME_TYPE, HEADER_SESSION_ID, JSON_MIME_TYPE,
 };
-use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::SseStream;
 
+use crate::client::ResolvedDestination;
 use crate::http::Request;
 use crate::mcp::ClientError;
+use crate::mcp::streamablehttp::StreamableHttpPostResponse;
 use crate::mcp::upstream::IncomingRequestContext;
-use crate::proxy::httpproxy::PolicyClient;
-use crate::store::BackendPolicies;
-use crate::types::agent::SimpleBackend;
-use crate::{json, *};
+use crate::*;
 
 #[derive(Clone, Debug)]
 pub struct Client {
-	backend: Arc<SimpleBackend>,
+	http_client: super::McpHttpClient,
 	uri: Uri,
-	client: PolicyClient,
-	policies: BackendPolicies,
 	session_id: AtomicOption<String>,
 }
 
 impl Client {
-	pub fn new(
-		backend: SimpleBackend,
-		path: Strng,
-		client: PolicyClient,
-		policies: BackendPolicies,
-	) -> anyhow::Result<Self> {
-		let hp = backend.hostport();
+	pub fn new(http_client: super::McpHttpClient, path: Strng) -> anyhow::Result<Self> {
+		let hp = http_client.backend().hostport();
 		Ok(Self {
-			backend: Arc::new(backend),
+			http_client,
 			uri: ("http://".to_string() + &hp + path.as_str()).parse()?,
-			client,
-			policies,
 			session_id: Default::default(),
 		})
 	}
-	pub fn set_session_id(&self, s: String) {
-		self.session_id.store(Some(Arc::new(s)));
+
+	pub fn get_session_state(&self) -> Option<http::sessionpersistence::MCPSession> {
+		let session_id = self.session_id.load().clone()?;
+		let be = self.http_client.pinned_backend()?;
+		Some(http::sessionpersistence::MCPSession {
+			session: session_id.to_string(),
+			backend: be,
+		})
+	}
+
+	pub fn set_session_id(&self, s: &str, pinned: Option<SocketAddr>) {
+		self.session_id.store(Some(Arc::new(s.to_string())));
+		if let Some(pinned) = pinned {
+			self.http_client.pin_backend(ResolvedDestination(pinned));
+		}
 	}
 
 	pub async fn send_request(
@@ -73,8 +75,6 @@ impl Client {
 
 		ctx: &IncomingRequestContext,
 	) -> Result<StreamableHttpPostResponse, ClientError> {
-		let client = self.client.clone();
-
 		let body = serde_json::to_vec(&message).map_err(ClientError::new)?;
 
 		let mut req = ::http::Request::builder()
@@ -89,10 +89,7 @@ impl Client {
 
 		ctx.apply(&mut req);
 
-		let resp = client
-			.call_with_default_policies(req, &self.backend, self.policies.clone())
-			.await
-			.map_err(ClientError::new)?;
+		let resp = self.http_client.call(req).await?;
 
 		if resp.status() == http::StatusCode::ACCEPTED {
 			return Ok(StreamableHttpPostResponse::Accepted);
@@ -111,13 +108,26 @@ impl Client {
 
 		match content_type {
 			Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-				let event_stream = SseStream::from_byte_stream(resp.into_body().into_data_stream()).boxed();
+				let content_encoding = resp.headers().typed_get::<headers::ContentEncoding>();
+				let (body, _encoding) =
+					crate::http::compression::decompress_body(resp.into_body(), content_encoding.as_ref())
+						.map_err(ClientError::new)?;
+				let event_stream = SseStream::from_byte_stream(body.into_data_stream()).boxed();
 				Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
 			},
 			Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-				let message = json::from_response_body::<ServerJsonRpcMessage>(resp)
-					.await
-					.map_err(ClientError::new)?;
+				let lim = crate::http::response_buffer_limit(&resp);
+				let content_encoding = resp.headers().typed_get::<headers::ContentEncoding>();
+				let body_bytes = crate::http::compression::to_bytes_with_decompression(
+					resp.into_body(),
+					content_encoding.as_ref(),
+					lim,
+				)
+				.await
+				.map_err(ClientError::new)?
+				.1;
+				let message =
+					serde_json::from_slice::<ServerJsonRpcMessage>(&body_bytes).map_err(ClientError::new)?;
 				Ok(StreamableHttpPostResponse::Json(message, session_id))
 			},
 			_ => Err(ClientError::new(anyhow!(
@@ -131,8 +141,6 @@ impl Client {
 
 		ctx: &IncomingRequestContext,
 	) -> Result<StreamableHttpPostResponse, ClientError> {
-		let client = self.client.clone();
-
 		let mut req = ::http::Request::builder()
 			.uri(&self.uri)
 			.method(http::Method::DELETE)
@@ -143,10 +151,7 @@ impl Client {
 
 		ctx.apply(&mut req);
 
-		let resp = client
-			.call_with_default_policies(req, &self.backend, self.policies.clone())
-			.await
-			.map_err(ClientError::new)?;
+		let resp = self.http_client.call(req).await?;
 
 		if !resp.status().is_success() {
 			return Err(ClientError::Status(Box::new(resp)));
@@ -157,8 +162,6 @@ impl Client {
 		&self,
 		ctx: &IncomingRequestContext,
 	) -> Result<StreamableHttpPostResponse, ClientError> {
-		let client = self.client.clone();
-
 		let mut req = ::http::Request::builder()
 			.uri(&self.uri)
 			.method(http::Method::GET)
@@ -170,10 +173,7 @@ impl Client {
 
 		ctx.apply(&mut req);
 
-		let resp = client
-			.call_with_default_policies(req, &self.backend, self.policies.clone())
-			.await
-			.map_err(ClientError::new)?;
+		let resp = self.http_client.call(req).await?;
 
 		if !resp.status().is_success() {
 			return Err(ClientError::Status(Box::new(resp)));
@@ -187,7 +187,11 @@ impl Client {
 			.map(|s| s.to_string());
 		match content_type {
 			Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-				let event_stream = SseStream::from_byte_stream(resp.into_body().into_data_stream()).boxed();
+				let content_encoding = resp.headers().typed_get::<headers::ContentEncoding>();
+				let (body, _encoding) =
+					crate::http::compression::decompress_body(resp.into_body(), content_encoding.as_ref())
+						.map_err(ClientError::new)?;
+				let event_stream = SseStream::from_byte_stream(body.into_data_stream()).boxed();
 				Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
 			},
 			_ => Err(ClientError::new(anyhow!(

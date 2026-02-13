@@ -49,7 +49,7 @@ use telemetry::{metrics, trc};
 
 use crate::control::{AuthSource, RootCert};
 use crate::telemetry::trc::Protocol;
-use crate::types::agent::GatewayName;
+use crate::types::agent::{ListenerTarget, PolicyTargetRef};
 
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +87,9 @@ pub struct RawConfig {
 	/// Readiness probe server address in the format "ip:port"
 	readiness_addr: Option<String>,
 
+	/// Configuration for stateful session management
+	session: Option<RawSession>,
+
 	#[serde(default, with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	connection_termination_deadline: Option<Duration>,
@@ -104,7 +107,27 @@ pub struct RawConfig {
 	#[serde(default)]
 	backend: BackendConfig,
 
+	#[serde(
+		default,
+		rename = "listener",
+		deserialize_with = "removed::rename_listener"
+	)]
+	#[cfg_attr(feature = "schema", schemars(skip))]
+	_listener: serdes::RenamedField,
+
 	hbone: Option<RawHBONE>,
+}
+
+mod removed {
+	use serde::Deserializer;
+
+	use crate::serdes;
+
+	pub fn rename_listener<'de, D: Deserializer<'de>>(
+		d: D,
+	) -> Result<serdes::RenamedField, D::Error> {
+		serdes::renamed_field("listener", "frontendPolicies", d).map(|_| serdes::RenamedField)
+	}
 }
 
 #[apply(schema!)]
@@ -174,6 +197,15 @@ pub struct RawHBONE {
 }
 
 #[apply(schema_de!)]
+pub struct RawSession {
+	/// The signing key to be used. If not set, sessions will not be encrypted.
+	/// For example, generated via `openssl rand -hex 32`.
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	#[serde(serialize_with = "ser_redact", deserialize_with = "deser_key")]
+	key: secrecy::SecretString,
+}
+
+#[apply(schema_de!)]
 pub struct RawTracing {
 	otlp_endpoint: String,
 	#[serde(default)]
@@ -191,6 +223,8 @@ pub struct RawTracing {
 	/// This should evaluate to either a float between 0.0-1.0 (0-100%) or true/false.
 	/// This defaults to 'true'.
 	client_sampling: Option<StringBoolFloat>,
+	/// OTLP path. Default is /v1/traces
+	path: Option<String>,
 }
 
 #[apply(schema_de!)]
@@ -336,6 +370,7 @@ impl schemars::JsonSchema for StringBoolFloat {
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
+	pub ipv6_enabled: bool,
 	pub network: Strng,
 	#[serde(with = "serde_dur")]
 	pub termination_max_deadline: Duration,
@@ -357,13 +392,28 @@ pub struct Config {
 	pub dns: client::Config,
 	pub proxy_metadata: ProxyMetadata,
 	pub threading_mode: ThreadingMode,
+	pub session_encoder: http::sessionpersistence::Encoder,
+	/// Handle for tasks/spans emitted on the admin runtime.
+	#[serde(skip)]
+	pub admin_runtime_handle: Option<tokio::runtime::Handle>,
 
 	pub backend: BackendConfig,
 }
 
 impl Config {
-	pub fn gateway(&self) -> GatewayName {
-		strng::format!("{}/{}", self.xds.namespace, self.xds.gateway)
+	pub fn gateway(&self) -> ListenerTarget {
+		ListenerTarget {
+			gateway_name: self.xds.gateway.clone(),
+			gateway_namespace: self.xds.namespace.clone(),
+			listener_name: None,
+		}
+	}
+	pub fn gateway_ref(&self) -> PolicyTargetRef {
+		PolicyTargetRef::Gateway {
+			gateway_name: self.xds.gateway.as_ref(),
+			gateway_namespace: self.xds.namespace.as_ref(),
+			listener_name: None,
+		}
 	}
 }
 
@@ -383,8 +433,8 @@ pub struct XDSConfig {
 	pub address: Option<String>,
 	pub auth: AuthSource,
 	pub ca_cert: RootCert,
-	pub namespace: String,
-	pub gateway: String,
+	pub namespace: Strng,
+	pub gateway: Strng,
 
 	pub local_config: Option<ConfigSource>,
 }
@@ -393,8 +443,6 @@ pub struct XDSConfig {
 pub enum ConfigSource {
 	File(PathBuf),
 	Static(Bytes),
-	// #[cfg(any(test, feature = "testing"))]
-	// Dynamic(Arc<tokio::sync::Mutex<MpscAckReceiver<LocalConfig>>>),
 }
 
 impl Serialize for ConfigSource {
@@ -414,16 +462,12 @@ impl ConfigSource {
 		Ok(match self {
 			ConfigSource::File(path) => fs_err::tokio::read_to_string(path).await?,
 			ConfigSource::Static(data) => std::str::from_utf8(data).map(|s| s.to_string())?,
-			// #[cfg(any(test, feature = "testing"))]
-			// _ => "{}".to_string(),
 		})
 	}
 	pub fn read_to_string_sync(&self) -> anyhow::Result<String> {
 		Ok(match self {
 			ConfigSource::File(path) => fs_err::read_to_string(path)?,
 			ConfigSource::Static(data) => std::str::from_utf8(data).map(|s| s.to_string())?,
-			// #[cfg(any(test, feature = "testing"))]
-			// _ => "{}".to_string(),
 		})
 	}
 }
@@ -436,7 +480,7 @@ pub struct ProxyInputs {
 	upstream: client::Client,
 
 	metrics: Arc<metrics::Metrics>,
-	tracer: Option<trc::Tracer>,
+	tracer: Option<std::sync::Arc<trc::Tracer>>,
 
 	mcp_state: mcp::App,
 	ca: Option<Arc<CaClient>>,

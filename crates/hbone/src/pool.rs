@@ -147,7 +147,7 @@ impl<K: Key> PoolState<K> {
 			async move {
 				debug!("starting an idle timeout for connection {:?}", pool_key_ref);
 				pool_ref
-					.idle_timeout(&pool_key_ref, release_timeout, evict, rx, pickup)
+					.idle_timeout(&pool_key_ref, Some(release_timeout), evict, rx, pickup)
 					.await;
 				debug!(
 					"connection {:?} was removed/checked out/timed out of the pool",
@@ -379,6 +379,19 @@ impl<K: Key> WorkloadHBONEPool<K> {
 		let mut connection = self.connect(workload_key).await?;
 
 		connection.send_request(request).await
+	}
+
+	/// Get the HBONE config used by this pool
+	pub fn config(&self) -> Arc<crate::Config> {
+		self.state.spawner.cfg.clone()
+	}
+
+	/// Fetch a certificate for the given workload key
+	pub async fn fetch_certificate(
+		&self,
+		key: K,
+	) -> anyhow::Result<Arc<rustls::client::ClientConfig>> {
+		self.state.spawner.certificates.fetch_certificate(key).await
 	}
 
 	// Obtain a pooled connection. Will prefer to retrieve an existing conn from the pool, but

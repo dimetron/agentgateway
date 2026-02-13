@@ -1,8 +1,7 @@
 use itertools::Itertools;
 use serde_json::json;
 
-use super::Provider;
-use super::{Jwt, Mode, TokenError};
+use super::{Jwt, Mode, Provider, TokenError};
 
 type ProviderInfo = (&'static str, &'static str, &'static str);
 
@@ -113,7 +112,8 @@ fn setup_test_jwt() -> (Jwt, &'static str, &'static str, &'static str) {
 }
 
 fn build_unsigned_token(kid: &str, iss: &str, aud: &str, exp: u64) -> String {
-	use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+	use base64::Engine as _;
+	use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 	let header = json!({ "alg": "ES256", "kid": kid });
 	let payload = json!({ "iss": iss, "aud": aud, "exp": exp });
 	let h = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
@@ -123,7 +123,8 @@ fn build_unsigned_token(kid: &str, iss: &str, aud: &str, exp: u64) -> String {
 }
 
 fn build_unsigned_token_without_kid(iss: &str, aud: &str, exp: u64) -> String {
-	use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+	use base64::Engine as _;
+	use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 	let header = json!({ "alg": "ES256" });
 	let payload = json!({ "iss": iss, "aud": aud, "exp": exp });
 	let h = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
@@ -135,8 +136,9 @@ fn build_unsigned_token_without_kid(iss: &str, aud: &str, exp: u64) -> String {
 // Validate specific rejection reasons for tokens: audience, issuer, expiry, missing kid, unknown kid
 #[test]
 pub fn test_jwt_rejections_table() {
-	use jsonwebtoken::errors::ErrorKind;
 	use std::time::{SystemTime, UNIX_EPOCH};
+
+	use jsonwebtoken::errors::ErrorKind;
 
 	let (jwt, kid, issuer, allowed_aud) = setup_test_jwt();
 	let now = SystemTime::now()
@@ -207,7 +209,7 @@ pub async fn test_apply_strict_missing_token() {
 	// Minimal RequestLog
 	let mut req_log = make_min_req_log();
 
-	let res = jwt.apply(&mut req_log, &mut req).await;
+	let res = jwt.apply(Some(&mut req_log), &mut req).await;
 	assert!(matches!(res, Err(super::TokenError::Missing)));
 }
 
@@ -221,7 +223,7 @@ pub async fn test_apply_permissive_no_token_ok() {
 	};
 	let mut req = crate::http::Request::new(crate::http::Body::empty());
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
 	assert!(req.extensions().get::<super::Claims>().is_none());
 }
@@ -240,7 +242,7 @@ pub async fn test_apply_permissive_invalid_token_ok_and_keeps_header() {
 		crate::http::HeaderValue::from_static("Bearer invalid-token"),
 	);
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
 	// Header should remain present on failure in permissive mode
 	assert!(
@@ -273,7 +275,7 @@ pub async fn test_apply_permissive_valid_token_inserts_claims_and_removes_header
 		crate::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
 	);
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
 	assert!(
 		req
@@ -294,7 +296,7 @@ pub async fn test_apply_optional_no_token_ok() {
 	};
 	let mut req = crate::http::Request::new(crate::http::Body::empty());
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
 	assert!(req.extensions().get::<super::Claims>().is_none());
 }
@@ -313,7 +315,7 @@ pub async fn test_apply_optional_invalid_token_err() {
 		crate::http::HeaderValue::from_static("Bearer invalid-token"),
 	);
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(matches!(res, Err(TokenError::InvalidHeader(_))));
 }
 
@@ -337,7 +339,7 @@ pub async fn test_apply_optional_valid_token_inserts_claims_and_removes_header()
 		crate::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
 	);
 	let mut log = make_min_req_log();
-	let res = jwt.apply(&mut log, &mut req).await;
+	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
 	assert!(
 		req
@@ -357,10 +359,9 @@ fn make_min_req_log() -> crate::telemetry::log::RequestLog {
 	use frozen_collections::FzHashSet;
 	use prometheus_client::registry::Registry;
 
-	use crate::telemetry::log;
 	use crate::telemetry::log::{LoggingFields, MetricFields, RequestLog};
 	use crate::telemetry::metrics::Metrics;
-	use crate::telemetry::trc;
+	use crate::telemetry::{log, trc};
 	use crate::transport::stream::TCPConnectionInfo;
 
 	let log_cfg = log::Config {
@@ -378,18 +379,19 @@ fn make_min_req_log() -> crate::telemetry::log::RequestLog {
 		fields: LoggingFields::default(),
 		random_sampling: None,
 		client_sampling: None,
+		path: "/v1/traces".to_string(),
 	};
 	let cel = log::CelLogging::new(log_cfg, tracing_cfg);
 	let mut prom = Registry::default();
 	let metrics = Arc::new(Metrics::new(&mut prom, FzHashSet::default()));
 	let start = Instant::now();
-	let start_time = agent_core::telemetry::render_current_time();
 	let tcp_info = TCPConnectionInfo {
 		peer_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 12345),
 		local_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
 		start,
+		raw_peer_addr: None,
 	};
-	RequestLog::new(cel, metrics, start, start_time, tcp_info)
+	RequestLog::new(cel, metrics, start, tcp_info)
 }
 
 fn setup_test_multi_jwt() -> (Jwt, ProviderInfo, ProviderInfo) {

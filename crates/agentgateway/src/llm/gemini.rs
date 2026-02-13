@@ -1,9 +1,7 @@
 use agent_core::strng;
 use agent_core::strng::Strng;
-use bytes::Bytes;
 
-use super::universal;
-use crate::llm::AIError;
+use crate::llm::RouteType;
 use crate::*;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -19,15 +17,10 @@ impl super::Provider for Provider {
 }
 pub const DEFAULT_HOST_STR: &str = "generativelanguage.googleapis.com";
 pub const DEFAULT_HOST: Strng = strng::literal!(DEFAULT_HOST_STR);
-pub const DEFAULT_PATH: &str = "/v1beta/openai/chat/completions";
 
-impl Provider {
-	pub fn process_error(
-		&self,
-		bytes: &Bytes,
-	) -> Result<universal::ChatCompletionErrorResponse, AIError> {
-		let resp = serde_json::from_slice::<universal::ChatCompletionErrorResponse>(bytes)
-			.map_err(AIError::ResponseParsing)?;
-		Ok(resp)
+pub fn path(route: RouteType) -> &'static str {
+	match route {
+		RouteType::Embeddings => "/v1beta/openai/embeddings",
+		_ => "/v1beta/openai/chat/completions",
 	}
 }

@@ -1,24 +1,26 @@
-use rand::prelude::IndexedRandom;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::cel::SourceContext;
+use rand::prelude::IndexedRandom;
+
 use crate::proxy::httpproxy::BackendCall;
 use crate::proxy::{ProxyError, httpproxy};
-use crate::store::BackendPolicies;
+use crate::store::{BackendPolicies, RoutePath};
 use crate::telemetry::log;
 use crate::telemetry::log::{DropOnLog, RequestLog};
 use crate::telemetry::metrics::TCPLabels;
 use crate::transport::stream::{Socket, TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent;
 use crate::types::agent::{
-	BindName, BindProtocol, Listener, ListenerProtocol, SimpleBackend, TCPRoute, TCPRouteBackend,
-	TCPRouteBackendReference,
+	BackendPolicy, BindKey, Listener, ListenerProtocol, SimpleBackend, SimpleBackendWithPolicies,
+	TCPRoute, TCPRouteBackend, TCPRouteBackendReference, TransportProtocol,
 };
 use crate::{ProxyInputs, *};
 
 #[derive(Clone)]
 pub struct TCPProxy {
-	pub(super) bind_name: BindName,
+	pub(super) bind_name: BindKey,
 	pub(super) inputs: Arc<ProxyInputs>,
 	pub(super) selected_listener: Arc<Listener>,
 	#[allow(unused)]
@@ -28,11 +30,16 @@ pub struct TCPProxy {
 impl TCPProxy {
 	pub async fn proxy(&self, connection: Socket) {
 		let start = Instant::now();
-		let start_time = agent_core::telemetry::render_current_time();
 
 		let tcp = connection
 			.ext::<TCPConnectionInfo>()
 			.expect("tcp connection must be set");
+		let tls = connection.ext::<TLSConnectionInfo>();
+		let src = SourceContext {
+			address: tcp.peer_addr.ip(),
+			port: tcp.peer_addr.port(),
+			tls: tls.and_then(|t| t.src_identity.clone()),
+		};
 		let mut log: DropOnLog = RequestLog::new(
 			log::CelLogging::new(
 				self.inputs.cfg.logging.clone(),
@@ -40,10 +47,11 @@ impl TCPProxy {
 			),
 			self.inputs.metrics.clone(),
 			start,
-			start_time,
 			tcp.clone(),
 		)
 		.into();
+		// Set source context for TCP logging
+		log.with(|l| l.source_context = Some(src));
 		let ret = self.proxy_internal(connection, log.as_mut().unwrap()).await;
 		if let Err(e) = ret {
 			log.with(|l| l.error = Some(e.to_string()));
@@ -55,22 +63,35 @@ impl TCPProxy {
 		connection: Socket,
 		log: &mut RequestLog,
 	) -> Result<(), ProxyError> {
+		let frontend_policies = self
+			.inputs
+			.stores
+			.read_binds()
+			.frontend_policies(self.inputs.cfg.gateway_ref());
+
+		// Apply frontend policies for access logging (skip tracing for TCP)
+		frontend_policies.register_cel_expressions(log.cel.ctx());
+		if let Some(lp) = &frontend_policies.access_log {
+			httpproxy::apply_logging_policy_to_log(log, lp);
+		}
+
 		log.tls_info = connection.ext::<TLSConnectionInfo>().cloned();
 		log.backend_protocol = Some(cel::BackendProtocol::tcp);
+		let tcp_labels = TCPLabels {
+			bind: Some(&self.bind_name).into(),
+			gateway: Some(&self.selected_listener.name.as_gateway_name()).into(),
+			listener: self.selected_listener.name.listener_name.clone().into(),
+			protocol: if log.tls_info.is_some() {
+				TransportProtocol::tls
+			} else {
+				TransportProtocol::tcp
+			},
+		};
 		self
 			.inputs
 			.metrics
 			.downstream_connection
-			.get_or_create(&TCPLabels {
-				bind: Some(&self.bind_name).into(),
-				gateway: Some(&self.selected_listener.gateway_name).into(),
-				listener: Some(&self.selected_listener.name).into(),
-				protocol: if log.tls_info.is_some() {
-					BindProtocol::tls
-				} else {
-					BindProtocol::tcp
-				},
-			})
+			.get_or_create(&tcp_labels)
 			.inc();
 		let sni = log
 			.tls_info
@@ -82,22 +103,30 @@ impl TCPProxy {
 		let bind_name = self.bind_name.clone();
 		debug!(bind=%bind_name, "route for bind");
 		log.bind_name = Some(bind_name.clone());
-		log.gateway_name = Some(selected_listener.gateway_name.clone());
 		log.listener_name = Some(selected_listener.name.clone());
 		debug!(bind=%bind_name, listener=%selected_listener.key, "selected listener");
 
 		let selected_route =
 			select_best_route(sni, selected_listener.clone()).ok_or(ProxyError::RouteNotFound)?;
-		log.route_rule_name = selected_route.rule_name.clone();
-		log.route_name = Some(selected_route.route_name.clone());
+		log.route_name = Some(selected_route.name.clone());
+
+		let route_path = RoutePath {
+			route: &selected_route.name,
+			listener: &selected_listener.name,
+		};
 
 		debug!(bind=%bind_name, listener=%selected_listener.key, route=%selected_route.key, "selected route");
 		let selected_backend =
 			select_tcp_backend(selected_route.as_ref()).ok_or(ProxyError::NoValidBackends)?;
 		let selected_backend = resolve_backend(selected_backend, self.inputs.as_ref())?;
-		let backend_policies = get_backend_policies(&self.inputs, &selected_backend.backend);
+		let backend_policies = get_backend_policies(
+			&self.inputs,
+			&selected_backend.backend,
+			&selected_backend.inline_policies,
+			route_path,
+		);
 
-		let backend_call = match &selected_backend.backend {
+		let backend_call = match &selected_backend.backend.backend {
 			SimpleBackend::Service(svc, port) => httpproxy::build_service_call(
 				inputs.as_ref(),
 				backend_policies,
@@ -110,15 +139,13 @@ impl TCPProxy {
 				target: target.clone(),
 				http_version_override: None,
 				transport_override: None,
+				network_gateway: None,
 				backend_policies,
 			},
 			SimpleBackend::Invalid => return Err(ProxyError::BackendDoesNotExist),
 		};
 
-		let bi = selected_backend.backend.backend_info();
-		if let Some(bp) = log.backend_protocol {
-			log.cel.ctx().with_backend(&bi, bp)
-		}
+		let bi = selected_backend.backend.backend.backend_info();
 		log.endpoint = Some(backend_call.target.clone());
 		log.backend_info = Some(bi);
 
@@ -126,22 +153,14 @@ impl TCPProxy {
 			&inputs,
 			&backend_call,
 			backend_call.backend_policies.backend_tls.clone(),
+			// TODO: for TCP we should actually probably do something here: telling it to not use ALPN at all?
+			None,
 		)
 		.await?;
 
 		// export rx/tx bytes on drop
 		let mut connection = connection;
-		let labels = TCPLabels {
-			bind: Some(&self.bind_name).into(),
-			gateway: Some(&self.selected_listener.gateway_name).into(),
-			listener: Some(&self.selected_listener.name).into(),
-			protocol: if log.tls_info.is_some() {
-				BindProtocol::tls
-			} else {
-				BindProtocol::tcp
-			},
-		};
-		connection.set_transport_metrics(self.inputs.metrics.clone(), labels);
+		connection.set_transport_metrics(self.inputs.metrics.clone(), tcp_labels);
 
 		inputs
 			.upstream
@@ -191,17 +210,19 @@ fn resolve_backend(
 	Ok(TCPRouteBackend {
 		weight: b.weight,
 		backend,
+		inline_policies: b.inline_policies,
 	})
 }
 
-pub fn get_backend_policies(inputs: &ProxyInputs, backend: &SimpleBackend) -> BackendPolicies {
-	let service = match backend {
-		SimpleBackend::Service(svc, _) => Some(strng::format!("{}/{}", svc.namespace, svc.hostname)),
-		_ => None,
-	};
-
-	inputs
-		.stores
-		.read_binds()
-		.backend_policies(Some(backend.name()), service, None, &[])
+pub fn get_backend_policies(
+	inputs: &ProxyInputs,
+	backend: &SimpleBackendWithPolicies,
+	inline_policies: &[BackendPolicy],
+	route_path: RoutePath,
+) -> BackendPolicies {
+	inputs.stores.read_binds().backend_policies(
+		backend.backend.target(),
+		&[&backend.inline_policies, inline_policies],
+		Some(route_path),
+	)
 }

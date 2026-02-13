@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 pub use binds::{
 	BackendPolicies, FrontendPolices, GatewayPolicies, LLMRequestPolicies, LLMResponsePolicies,
-	RoutePolicies, Store as BindStore,
+	RoutePath, RoutePolicies, Store as BindStore,
 };
 use serde::{Serialize, Serializer};
 mod discovery;
@@ -31,15 +31,17 @@ pub struct Stores {
 
 impl Default for Stores {
 	fn default() -> Self {
-		Self::new()
+		Self::with_ipv6_enabled(true)
 	}
 }
 
 impl Stores {
-	pub fn new() -> Stores {
+	pub fn with_ipv6_enabled(ipv6_enabled: bool) -> Stores {
 		Stores {
 			discovery: discovery::StoreUpdater::new(Arc::new(RwLock::new(discovery::Store::new()))),
-			binds: binds::StoreUpdater::new(Arc::new(RwLock::new(binds::Store::new()))),
+			binds: binds::StoreUpdater::new(Arc::new(RwLock::new(binds::Store::with_ipv6_enabled(
+				ipv6_enabled,
+			)))),
 		}
 	}
 	pub fn read_binds(&self) -> std::sync::RwLockReadGuard<'_, store::BindStore> {

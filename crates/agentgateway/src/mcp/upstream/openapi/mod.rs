@@ -1,27 +1,29 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use ::http::header::{HeaderName, HeaderValue};
+use headers::HeaderMapExt;
 use http::Method;
-use http::header::{ACCEPT, CONTENT_TYPE};
+use http::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, HOST, TRANSFER_ENCODING};
+use once_cell::sync::Lazy;
 use openapiv3::{OpenAPI, Parameter, ReferenceOr, RequestBody, Schema, SchemaKind, Type};
-use reqwest::header::{HeaderName, HeaderValue};
+use percent_encoding::{AsciiSet, utf8_percent_encode};
+use regex::{Captures, Regex, Replacer};
 use rmcp::model::{ClientRequest, JsonObject, JsonRpcRequest, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::{debug, warn};
 
-use crate::json;
 use crate::mcp::mergestream;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
-use crate::proxy::httpproxy::PolicyClient;
-use crate::store::BackendPolicies;
-use crate::types::agent::SimpleBackend;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct UpstreamOpenAPICall {
 	pub method: String, /* TODO: Switch to Method, but will require getting rid of Serialize/Deserialize */
 	pub path: String,
+	pub allowed_headers: HashSet<String>,
 	// todo: params
 }
 
@@ -35,7 +37,7 @@ pub enum ParseError {
 	MissingReference(String),
 	#[error("unsupported reference")]
 	UnsupportedReference(String),
-	#[error("information required: {0}")] // Corrected typo from "requireds"
+	#[error("information required: {0}")]
 	InformationRequired(String),
 	#[error("serde error: {0}")]
 	SerdeError(#[from] serde_json::Error),
@@ -140,7 +142,7 @@ fn resolve_nested_schema<'a>(
 		SchemaKind::Not { not } => {
 			let temp_ref = (**not).clone();
 			let resolved = resolve_nested_schema(&temp_ref, doc)?;
-			*not = Box::new(ReferenceOr::Item(resolved));
+			**not = ReferenceOr::Item(resolved);
 		},
 		SchemaKind::Any(any_schema) => {
 			// Properties
@@ -179,7 +181,7 @@ fn resolve_nested_schema<'a>(
 			if let Some(not_box) = any_schema.not.as_mut() {
 				let temp_ref = (**not_box).clone();
 				let resolved = resolve_nested_schema(&temp_ref, doc)?;
-				*not_box = Box::new(ReferenceOr::Item(resolved));
+				**not_box = ReferenceOr::Item(resolved);
 			}
 		},
 		// Base types (String, Number, Integer, Boolean) - no nested schemas to resolve further
@@ -283,9 +285,6 @@ pub(crate) fn parse_openapi_schema(
 											let schema = resolve_nested_schema(schema_ref, open_api)?;
 											let body_schema =
 												serde_json::to_value(schema).map_err(ParseError::SerdeError)?;
-											if body.required {
-												final_schema.required.push(BODY_NAME.clone());
-											}
 											final_schema
 												.properties
 												.insert(BODY_NAME.clone(), body_schema.clone());
@@ -339,6 +338,12 @@ pub(crate) fn parse_openapi_schema(
 									}
 								})?;
 
+							// Extract allowed header names before consuming param_schemas
+							let allowed_headers: HashSet<String> = param_schemas
+								.get(&ParameterType::Header)
+								.map(|headers| headers.iter().map(|(name, _, _)| name.clone()).collect())
+								.unwrap_or_default();
+
 							for (param_type, props) in param_schemas {
 								let sub_schema = JsonSchema {
 									required: props
@@ -369,6 +374,7 @@ pub(crate) fn parse_openapi_schema(
 								))?
 								.clone();
 							let tool = Tool {
+								meta: None,
 								annotations: None,
 								name: Cow::Owned(name.clone()),
 								description: Some(Cow::Owned(
@@ -387,6 +393,7 @@ pub(crate) fn parse_openapi_schema(
 								// method: Method::from_bytes(method.as_ref()).expect("todo"),
 								method: method.to_string(),
 								path: path.clone(),
+								allowed_headers,
 							};
 							Ok((tool, upstream))
 						},
@@ -482,6 +489,39 @@ impl Default for JsonSchema {
 	}
 }
 
+/// Regex to match path template parameters like `{param_name}`.
+static PATH_PARAM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{([^}]+)\}").unwrap());
+
+/// Characters that are safe in path segments (RFC 3986 unreserved characters).
+/// All other characters will be percent-encoded to prevent path traversal/injection.
+const PATH_SEGMENT_SAFE: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+	.remove(b'-')
+	.remove(b'.')
+	.remove(b'_')
+	.remove(b'~');
+
+/// Replaces path template parameters.
+struct PathParamReplacer(serde_json::Map<String, Value>);
+
+impl Replacer for PathParamReplacer {
+	fn replace_append(&mut self, caps: &Captures<'_>, dst: &mut String) {
+		let param = &caps[1];
+		match self.0.get(param) {
+			Some(Value::Number(n_val)) => return dst.push_str(&n_val.to_string()),
+			Some(Value::String(s_val)) => {
+				return dst.extend(utf8_percent_encode(s_val, PATH_SEGMENT_SAFE));
+			},
+			Some(unexpected) => warn!(
+				"Unexpected parameter '{param}' (value: {:?}), leaving path param",
+				unexpected
+			),
+			_ => {},
+		};
+		// fallback to use path parm
+		dst.push_str(&caps[0]);
+	}
+}
+
 /// Normalizes URL path construction to avoid double slashes
 /// Ensures exactly one slash between prefix and path components
 fn normalize_url_path(prefix: &str, path: &str) -> String {
@@ -500,16 +540,33 @@ fn normalize_url_path(prefix: &str, path: &str) -> String {
 	}
 }
 
+fn encode_query_value(value: &str) -> Cow<'_, str> {
+	Cow::from(utf8_percent_encode(
+		value,
+		percent_encoding::NON_ALPHANUMERIC,
+	))
+}
+
 #[derive(Debug)]
 pub struct Handler {
 	pub prefix: String,
-	pub client: PolicyClient,
+	pub http_client: super::McpHttpClient,
 	pub tools: Vec<(Tool, UpstreamOpenAPICall)>,
-	pub default_policies: BackendPolicies,
-	pub backend: SimpleBackend,
 }
 
 impl Handler {
+	pub fn new(
+		http_client: super::McpHttpClient,
+		tools: Vec<(Tool, UpstreamOpenAPICall)>,
+		prefix: String,
+	) -> Self {
+		Self {
+			prefix,
+			http_client,
+			tools,
+		}
+	}
+
 	pub async fn send_message(
 		&self,
 		request: JsonRpcRequest<ClientRequest>,
@@ -536,6 +593,7 @@ impl Handler {
 			ClientRequest::ListPromptsRequest(_) => Messages::from_result(
 				id,
 				ListPromptsResult {
+					meta: None,
 					next_cursor: None,
 					prompts: vec![],
 				},
@@ -543,6 +601,7 @@ impl Handler {
 			ClientRequest::ListResourcesRequest(_) => Messages::from_result(
 				id,
 				ListResourcesResult {
+					meta: None,
 					next_cursor: None,
 					resources: vec![],
 				},
@@ -550,14 +609,31 @@ impl Handler {
 			ClientRequest::ListResourceTemplatesRequest(_) => Messages::from_result(
 				id,
 				ListResourceTemplatesResult {
+					meta: None,
 					next_cursor: None,
 					resource_templates: vec![],
 				},
 			),
+			ClientRequest::ListTasksRequest(_) => Messages::from_result(
+				id,
+				ListTasksResult {
+					next_cursor: None,
+					tasks: vec![],
+					total: None,
+				},
+			),
+			ClientRequest::GetTaskInfoRequest(_) => {
+				Messages::from_result(id, GetTaskInfoResult { task: None })
+			},
+			ClientRequest::GetTaskResultRequest(_) => {
+				return Err(UpstreamError::InvalidMethod(method.to_string()));
+			},
+			ClientRequest::CancelTaskRequest(_) => Messages::empty(),
 			ClientRequest::ReadResourceRequest(_) => {
 				Messages::from_result(id, ReadResourceResult { contents: vec![] })
 			},
 			ClientRequest::PingRequest(_)
+			| ClientRequest::CustomRequest(_)
 			| ClientRequest::SetLevelRequest(_)
 			| ClientRequest::SubscribeRequest(_)
 			| ClientRequest::UnsubscribeRequest(_) => Messages::empty(),
@@ -568,10 +644,18 @@ impl Handler {
 				let res = self
 					.call_tool(ctr.params.name.as_ref(), ctr.params.arguments, ctx)
 					.await?;
+
+				// Serialize structured content to JSON string for backwards compatibility
+				// Per MCP spec https://modelcontextprotocol.io/specification/2025-06-18/server/tools#structured-content:
+				//   "a tool that returns structured content SHOULD also return the serialized JSON in a TextContent block"
+				// Note: This part of the spec is in flux, see https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1624
+				let serialized_content = serde_json::to_string(&res)
+					.map_err(|e| anyhow::anyhow!("Failed to serialize tool response: {}", e))?;
+
 				Messages::from_result(
 					id,
 					CallToolResult {
-						content: vec![],
+						content: vec![Content::text(serialized_content)],
 						structured_content: Some(res),
 						is_error: None,
 						meta: None,
@@ -581,6 +665,7 @@ impl Handler {
 			ClientRequest::ListToolsRequest(_) => Messages::from_result(
 				id,
 				ListToolsResult {
+					meta: None,
 					next_cursor: None,
 					tools: self.tools(),
 				},
@@ -605,7 +690,7 @@ impl Handler {
 		name: &str,
 		args: Option<JsonObject>,
 		ctx: &IncomingRequestContext,
-	) -> Result<serde_json::Value, anyhow::Error> {
+	) -> Result<serde_json::Value, UpstreamError> {
 		let (_tool, info) = self
 			.tools
 			.iter()
@@ -633,33 +718,15 @@ impl Handler {
 		let body_value = args.get(&*BODY_NAME).cloned();
 
 		// --- URL Construction ---
-		let mut path = info.path.clone();
-		// Substitute path parameters into the path template
-		for (key, value) in &path_params {
-			match value {
-				Value::String(s_val) => {
-					path = path.replace(&format!("{{{key}}}"), s_val);
-				},
-				Value::Number(n_val) => {
-					path = path.replace(&format!("{{{key}}}"), n_val.to_string().as_str());
-				},
-				_ => {
-					tracing::warn!(
-						"Path parameter '{}' for tool '{}' is not a string (value: {:?}), skipping substitution",
-						key,
-						name,
-						value
-					);
-				},
-			}
-		}
+		// Substitute path parameters into the path template in a single pass
+		let path = PATH_PARAM_RE.replace_all(&info.path, PathParamReplacer(path_params));
 
 		// Use normalize_url_path to avoid double slashes
 		let normalized_path = normalize_url_path(&self.prefix, &path);
 		let base_url = format!(
 			"{}://{}{}",
 			"http",
-			self.backend.hostport(),
+			self.http_client.backend().hostport(),
 			normalized_path
 		);
 
@@ -674,67 +741,54 @@ impl Handler {
 		})?;
 
 		// Build query string
-		let query_string = if !query_params.is_empty() {
-			let mut pairs = Vec::new();
-			for (k, v) in query_params.iter() {
-				if let Some(s) = v.as_str() {
-					pairs.push(format!("{k}={s}"));
-				} else {
-					tracing::warn!(
-						"Query parameter '{}' for tool '{}' is not a string (value: {:?}), skipping",
-						k,
-						name,
-						v
-					);
-				}
-			}
-			if !pairs.is_empty() {
-				format!("?{}", pairs.join("&"))
-			} else {
-				String::new()
-			}
-		} else {
+		let query_string = if query_params.is_empty() {
 			String::new()
+		} else {
+			let format_pair = |param_name: &str, key: &str, v: &Value| -> Option<String> {
+				match v {
+					Value::Null => Some(key.to_string()),
+					Value::Bool(b) => Some(format!("{key}={b}")),
+					Value::Number(n) => Some(format!("{key}={n}")),
+					Value::String(s) => Some(format!("{key}={}", encode_query_value(s))),
+					_ => {
+						warn!(
+							"Query parameter '{}' for tool '{}' unsupported (value: {:?}), skipping",
+							param_name, name, v
+						);
+						None
+					},
+				}
+			};
+			query_params
+				.iter()
+				.flat_map(|(k, v)| {
+					let key = encode_query_value(k);
+					match v {
+						Value::Array(a) => a
+							.iter()
+							.filter_map(|v| format_pair(k, &key, v))
+							.collect::<Vec<_>>(),
+						_ => format_pair(k, &key, v).into_iter().collect(),
+					}
+				})
+				.fold(String::new(), |mut acc, pair| {
+					acc.push(if acc.is_empty() { '?' } else { '&' });
+					acc.push_str(&pair);
+					acc
+				})
 		};
 
 		let uri = format!("{base_url}{query_string}");
-		let mut rb = http::Request::builder().method(method).uri(uri);
 
-		rb = rb.header(ACCEPT, HeaderValue::from_static("application/json"));
-		for (key, value) in &header_params {
-			if let Some(s_val) = value.as_str() {
-				match (
-					HeaderName::from_bytes(key.as_bytes()),
-					HeaderValue::from_str(s_val),
-				) {
-					(Ok(h_name), Ok(h_value)) => {
-						rb = rb.header(h_name, h_value);
-					},
-					(Err(_), _) => tracing::warn!(
-						"Invalid header name '{}' for tool '{}', skipping",
-						key,
-						name
-					),
-					(_, Err(_)) => tracing::warn!(
-						"Invalid header value '{}' for header '{}' in tool '{}', skipping",
-						s_val,
-						key,
-						name
-					),
-				}
-			} else {
-				tracing::warn!(
-					"Header parameter '{}' for tool '{}' is not a string (value: {:?}), skipping",
-					key,
-					name,
-					value
-				);
-			}
-		}
+		let mut rb = http::Request::builder()
+			.method(method)
+			.uri(uri)
+			.header(ACCEPT, HeaderValue::from_static("application/json"));
+
 		// Build request body
 		let body = if let Some(body_val) = body_value {
 			rb = rb.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-			serde_json::to_vec(&body_val)?
+			serde_json::to_vec(&body_val).map_err(|e| UpstreamError::OpenAPIError(e.into()))?
 		} else {
 			Vec::new()
 		};
@@ -746,31 +800,97 @@ impl Handler {
 
 		ctx.apply(&mut request);
 
-		// Make the request
-		let response = self
-			.client
-			.call_with_default_policies(request, &self.backend, self.default_policies.clone())
-			.await?;
+		// First header set wins including headers set by ctx.apply or the gateway
+		for (key, value) in &header_params {
+			// Only allow headers defined in the OpenAPI schema
+			if !info.allowed_headers.contains(key) {
+				debug!(
+					"Ignoring header '{}' for tool '{}' not defined in schema",
+					key, name
+				);
+				continue;
+			}
+
+			if let Some(s_val) = value.as_str() {
+				match (
+					HeaderName::from_bytes(key.as_bytes()),
+					HeaderValue::from_str(s_val),
+				) {
+					(Ok(header_name), Ok(header_value)) => {
+						// Ingore if header is protected
+						if header_name == CONTENT_LENGTH
+							|| header_name == CONTENT_TYPE
+							|| header_name == TRANSFER_ENCODING
+							|| header_name == HOST
+						{
+							debug!("Ignoring protected header '{}' for tool '{}'", key, name);
+							continue;
+						}
+
+						// Don't override existing headers
+						if request.headers().contains_key(&header_name) {
+							debug!("Ingoring header '{}' for tool '{}' already set", key, name);
+							continue;
+						}
+
+						request.headers_mut().insert(header_name, header_value);
+					},
+					(Err(_), _) => warn!(
+						"Invalid header name '{}' for tool '{}', skipping",
+						key, name
+					),
+					(_, Err(_)) => warn!(
+						"Invalid header value '{}' for header '{}' in tool '{}', skipping",
+						s_val, key, name
+					),
+				}
+			} else {
+				warn!(
+					"Header parameter '{}' for tool '{}' is not a string (value: {:?}), skipping",
+					key, name, value
+				);
+			}
+		}
+
+		let response = self.http_client.call(request).await?;
 
 		// Read response body
 		let status = response.status();
 		// Check if the request was successful
 		if status.is_success() {
-			let body = json::from_response_body::<serde_json::Value>(response).await?;
-			Ok(body)
+			let lim = crate::http::response_buffer_limit(&response);
+			let content_encoding = response.headers().typed_get::<headers::ContentEncoding>();
+			let body_bytes = crate::http::compression::to_bytes_with_decompression(
+				response.into_body(),
+				content_encoding.as_ref(),
+				lim,
+			)
+			.await
+			.map_err(|e| UpstreamError::OpenAPIError(e.into()))?
+			.1;
+
+			// Wrap responses that are not structuredContent compliant in object
+			Ok(json!({ "data":
+				match serde_json::from_slice::<serde_json::Value>(&body_bytes).map_err(|e| UpstreamError::OpenAPIError(e.into()))? {
+					Value::Object(obj) => return Ok(Value::Object(obj)),
+					Value::Null => return Ok(Value::Null),
+					data => data,
+			}}))
 		} else {
 			let lim = crate::http::response_buffer_limit(&response);
 			let body = String::from_utf8(
 				crate::http::read_body_with_limit(response.into_body(), lim)
-					.await?
+					.await
+					.map_err(|e| UpstreamError::OpenAPIError(e.into()))?
 					.to_vec(),
-			)?;
-			Err(anyhow::anyhow!(
+			)
+			.map_err(|e| UpstreamError::OpenAPIError(e.into()))?;
+			Err(UpstreamError::OpenAPIError(anyhow::anyhow!(
 				"Upstream API call for tool '{}' failed with status {}: {}",
 				name,
 				status,
 				body
-			))
+			)))
 		}
 	}
 

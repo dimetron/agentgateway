@@ -20,6 +20,7 @@ pub mod ext_proc;
 pub mod outlierdetection;
 mod peekbody;
 pub mod remoteratelimit;
+pub mod sessionpersistence;
 #[cfg(any(test, feature = "internal_benches"))]
 pub mod tests_common;
 pub mod transformation_cel;
@@ -29,6 +30,45 @@ pub type Body = axum_core::body::Body;
 pub type Request = ::http::Request<Body>;
 pub type Response = ::http::Response<Body>;
 
+// SendDirectResponse is a Response that has been buffered so that it is Send.
+pub struct SendDirectResponse(pub ::http::Response<Bytes>);
+
+impl Debug for SendDirectResponse {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("SendDirectResponse")
+			.field("status", &self.0.status())
+			.finish()
+	}
+}
+
+impl Deref for SendDirectResponse {
+	type Target = ::http::Response<Bytes>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl SendDirectResponse {
+	pub async fn new(response: Response) -> Result<Self, Error> {
+		let (head, bytes) = read_response_body(response).await?;
+		Ok(SendDirectResponse(::http::Response::from_parts(
+			head, bytes,
+		)))
+	}
+}
+
+pub fn version_str(v: &http::Version) -> &'static str {
+	match *v {
+		http::Version::HTTP_09 => "HTTP/0.9",
+		http::Version::HTTP_10 => "HTTP/1.0",
+		http::Version::HTTP_11 => "HTTP/1.1",
+		http::Version::HTTP_2 => "HTTP/2",
+		http::Version::HTTP_3 => "HTTP/3",
+		_ => "unknown",
+	}
+}
+
 /// A mutable handle that can represent either a request or a response
 #[derive(Debug)]
 pub enum RequestOrResponse<'a> {
@@ -36,8 +76,97 @@ pub enum RequestOrResponse<'a> {
 	Response(&'a mut Response),
 }
 
-use std::fmt::Debug;
+impl<'a> From<&'a mut Request> for RequestOrResponse<'a> {
+	fn from(req: &'a mut Request) -> Self {
+		RequestOrResponse::Request(req)
+	}
+}
+
+impl<'a> From<&'a mut Response> for RequestOrResponse<'a> {
+	fn from(req: &'a mut Response) -> RequestOrResponse<'a> {
+		RequestOrResponse::Response(req)
+	}
+}
+
+impl RequestOrResponse<'_> {
+	pub fn headers(&mut self) -> &mut http::HeaderMap {
+		match self {
+			RequestOrResponse::Request(r) => r.headers_mut(),
+			RequestOrResponse::Response(r) => r.headers_mut(),
+		}
+	}
+	pub fn body(&mut self) -> &mut Body {
+		match self {
+			RequestOrResponse::Request(r) => r.body_mut(),
+			RequestOrResponse::Response(r) => r.body_mut(),
+		}
+	}
+	pub fn apply_header(&mut self, k: &HeaderOrPseudo, v: Option<HeaderOrPseudoValue>, append: bool) {
+		match (k, v) {
+			(HeaderOrPseudo::Header(k), Some(HeaderOrPseudoValue::Header(v))) => {
+				if append {
+					self.headers().append(k.clone(), v);
+				} else {
+					self.headers().insert(k.clone(), v);
+				}
+			},
+			(HeaderOrPseudo::Header(k), None) => {
+				// Need to sanitize it, so a failed execution cannot mean the user can set arbitrary headers.
+				self.headers().remove(k);
+			},
+			(_, Some(HeaderOrPseudoValue::Method(v))) => {
+				if let RequestOrResponse::Request(r) = self {
+					*r.method_mut() = v;
+				}
+			},
+			(_, Some(HeaderOrPseudoValue::Scheme(v))) => {
+				if let RequestOrResponse::Request(r) = self {
+					let _ = modify_req_uri(r, |uri| {
+						uri.scheme = Some(v);
+						Ok(())
+					});
+				}
+			},
+			(_, Some(HeaderOrPseudoValue::Authority(v))) => {
+				if let RequestOrResponse::Request(r) = self {
+					let _ = modify_req_uri(r, |uri| {
+						uri.authority = Some(v);
+						if uri.scheme.is_none() {
+							// When authority is set, scheme must also be set
+							// TODO: do the same for HeaderOrPseudo::Scheme
+							uri.scheme = Some(Scheme::HTTP);
+						}
+						Ok(())
+					});
+				}
+			},
+			(_, Some(HeaderOrPseudoValue::Path(v))) => {
+				if let RequestOrResponse::Request(r) = self {
+					let _ = modify_req_uri(r, |uri| {
+						uri.path_and_query = Some(v);
+						Ok(())
+					});
+				}
+			},
+			(_, Some(HeaderOrPseudoValue::Status(v))) => {
+				if let RequestOrResponse::Response(r) = self {
+					*r.status_mut() = v;
+				}
+			},
+			(_, None) => {
+				// Invalid, do nothing
+			},
+			(_, _) => {
+				unreachable!("invalid k/v pair")
+			},
+		}
+	}
+}
+
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
 
 pub use ::http::uri::{Authority, Scheme};
@@ -45,17 +174,22 @@ pub use ::http::{
 	HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header, status, uri,
 };
 use bytes::Bytes;
+use cel::Value;
+use http::uri::PathAndQuery;
 use http_body::{Frame, SizeHint};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tower_serve_static::private::mime;
 use url::Url;
 
+use crate::cel::{BackendContext, LLMContext, RequestStartTime, SourceContext};
+use crate::client::PoolKey;
 use crate::proxy::{ProxyError, ProxyResponse};
 use crate::transport::BufferLimit;
-
-use serde::{Serialize, Serializer};
+use crate::transport::stream::TCPConnectionInfo;
+use crate::types::agent::PathMatch;
 
 /// Represents either an HTTP header or an HTTP/2 pseudo-header
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HeaderOrPseudo {
 	Header(HeaderName),
 	Method,
@@ -63,6 +197,55 @@ pub enum HeaderOrPseudo {
 	Authority,
 	Path,
 	Status,
+}
+
+/// Represents a value for an HTTP header or an HTTP/2 pseudo-header
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HeaderOrPseudoValue {
+	Header(HeaderValue),
+	Method(Method),
+	Scheme(Scheme),
+	Authority(Authority),
+	Path(PathAndQuery),
+	Status(StatusCode),
+}
+
+impl HeaderOrPseudoValue {
+	pub fn from_cel_result(k: &HeaderOrPseudo, res: Option<Value>) -> Option<HeaderOrPseudoValue> {
+		match (res?, k) {
+			(v, HeaderOrPseudo::Header(_)) => v
+				.as_bytes()
+				.ok()
+				.and_then(|b| HeaderValue::from_bytes(b).ok())
+				.map(HeaderOrPseudoValue::Header),
+			(v, HeaderOrPseudo::Status) => v
+				.as_unsigned()
+				.ok()
+				.and_then(|v| u16::try_from(v).ok())
+				.and_then(|v| StatusCode::from_u16(v).ok())
+				.map(HeaderOrPseudoValue::Status),
+			(v, HeaderOrPseudo::Method) => v
+				.as_bytes()
+				.ok()
+				.and_then(|b| ::http::Method::from_bytes(b).ok())
+				.map(HeaderOrPseudoValue::Method),
+			(v, HeaderOrPseudo::Scheme) => v
+				.as_bytes()
+				.ok()
+				.and_then(|b| ::http::uri::Scheme::try_from(b).ok())
+				.map(HeaderOrPseudoValue::Scheme),
+			(v, HeaderOrPseudo::Authority) => v
+				.as_bytes()
+				.ok()
+				.and_then(|b| ::http::uri::Authority::try_from(b).ok())
+				.map(HeaderOrPseudoValue::Authority),
+			(v, HeaderOrPseudo::Path) => v
+				.as_bytes()
+				.ok()
+				.and_then(|b| ::http::uri::PathAndQuery::try_from(b).ok())
+				.map(HeaderOrPseudoValue::Path),
+		}
+	}
 }
 
 impl TryFrom<&str> for HeaderOrPseudo {
@@ -96,6 +279,26 @@ impl Serialize for HeaderOrPseudo {
 	}
 }
 
+impl<'de> Deserialize<'de> for HeaderOrPseudo {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		let s = String::deserialize(deserializer)?;
+
+		match s.as_str() {
+			":method" => Ok(HeaderOrPseudo::Method),
+			":scheme" => Ok(HeaderOrPseudo::Scheme),
+			":authority" => Ok(HeaderOrPseudo::Authority),
+			":path" => Ok(HeaderOrPseudo::Path),
+			":status" => Ok(HeaderOrPseudo::Status),
+			_ => Ok(HeaderOrPseudo::Header(
+				HeaderName::from_str(&s).map_err(serde::de::Error::custom)?,
+			)),
+		}
+	}
+}
+
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for HeaderOrPseudo {
 	fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -117,6 +320,18 @@ impl std::fmt::Display for HeaderOrPseudo {
 			HeaderOrPseudo::Path => write!(f, ":path"),
 			HeaderOrPseudo::Status => write!(f, ":status"),
 		}
+	}
+}
+
+/// Extract the value for a pseudo header or header from the request
+pub fn get_pseudo_or_header_value<'a>(
+	pseudo: &HeaderOrPseudo,
+	req: &'a Request,
+) -> Option<std::borrow::Cow<'a, HeaderValue>> {
+	match pseudo {
+		HeaderOrPseudo::Header(v) => req.headers().get(v).map(std::borrow::Cow::Borrowed),
+		_ => get_pseudo_header_value(pseudo, req)
+			.and_then(|v| HeaderValue::try_from(&v).ok().map(std::borrow::Cow::Owned)),
 	}
 }
 
@@ -160,7 +375,11 @@ pub fn get_request_pseudo_headers(req: &Request) -> Vec<(HeaderOrPseudo, String)
 }
 
 /// Apply a pseudo header mutation to either a request or a response. Returns true if applied.
-pub fn apply_pseudo(rr: &mut RequestOrResponse, pseudo: &HeaderOrPseudo, raw: &[u8]) -> bool {
+pub fn apply_header_or_pseudo(
+	rr: &mut RequestOrResponse,
+	pseudo: &HeaderOrPseudo,
+	raw: &[u8],
+) -> bool {
 	match (rr, pseudo) {
 		(RequestOrResponse::Request(req), HeaderOrPseudo::Method) => {
 			if let Ok(m) = ::http::Method::from_bytes(raw) {
@@ -181,6 +400,11 @@ pub fn apply_pseudo(rr: &mut RequestOrResponse, pseudo: &HeaderOrPseudo, raw: &[
 			if let Ok(a) = ::http::uri::Authority::try_from(raw) {
 				let _ = modify_req_uri(req, |uri| {
 					uri.authority = Some(a);
+					if uri.scheme.is_none() {
+						// When authority is set, scheme must also be set
+						// TODO: do the same for HeaderOrPseudo::Scheme
+						uri.scheme = Some(Scheme::HTTP);
+					}
 					Ok(())
 				});
 				return true;
@@ -205,7 +429,21 @@ pub fn apply_pseudo(rr: &mut RequestOrResponse, pseudo: &HeaderOrPseudo, raw: &[
 				return true;
 			}
 		},
-		// Non-applicable combinations or regular headers
+		(RequestOrResponse::Response(resp), HeaderOrPseudo::Header(hn)) => {
+			let Ok(hv) = HeaderValue::try_from(raw) else {
+				return false;
+			};
+			resp.headers_mut().insert(hn, hv);
+			return true;
+		},
+		(RequestOrResponse::Request(req), HeaderOrPseudo::Header(hn)) => {
+			let Ok(hv) = HeaderValue::try_from(raw) else {
+				return false;
+			};
+			req.headers_mut().insert(hn, hv);
+			return true;
+		},
+		// Not applicable combination
 		_ => {},
 	}
 	false
@@ -265,6 +503,10 @@ pub fn modify_uri(
 	f(&mut parts)?;
 	head.uri = Uri::from_parts(parts)?;
 	Ok(())
+}
+
+pub fn as_url(uri: &Uri) -> anyhow::Result<Url> {
+	Ok(Url::parse(&uri.to_string())?)
 }
 
 pub fn modify_url(
@@ -329,7 +571,17 @@ pub fn get_host(req: &Request) -> Result<&str, ProxyError> {
 	// We expect a normalized request, so this will always be in the URI
 	// TODO: handle absolute HTTP/1.1 form
 	let host = req.uri().host().ok_or(ProxyError::InvalidRequest)?;
-	let host = strip_port(host);
+	Ok(host)
+}
+
+pub fn get_host_with_port(req: &Request) -> Result<&str, ProxyError> {
+	// We expect a normalized request, so this will always be in the URI
+	// TODO: handle absolute HTTP/1.1 form
+	let host = req
+		.uri()
+		.authority()
+		.map(|a| a.as_str())
+		.ok_or(ProxyError::InvalidRequest)?;
 	Ok(host)
 }
 
@@ -354,6 +606,14 @@ pub async fn read_body(req: Request) -> Result<Bytes, axum_core::Error> {
 	read_body_with_limit(req.into_body(), lim).await
 }
 
+pub async fn read_response_body(
+	resp: Response,
+) -> Result<(::http::response::Parts, Bytes), axum_core::Error> {
+	let lim = response_buffer_limit(&resp);
+	let (h, b) = resp.into_parts();
+	read_body_with_limit(b, lim).await.map(|b| (h, b))
+}
+
 pub async fn read_body_with_limit(body: Body, limit: usize) -> Result<Bytes, axum_core::Error> {
 	axum::body::to_bytes(body, limit).await
 }
@@ -370,27 +630,6 @@ pub async fn inspect_response_body(resp: &mut Response) -> anyhow::Result<Bytes>
 
 pub async fn inspect_body_with_limit(body: &mut Body, limit: usize) -> anyhow::Result<Bytes> {
 	peekbody::inspect_body(body, limit).await
-}
-
-// copied from private `http` method
-fn strip_port(auth: &str) -> &str {
-	let host_port = auth
-		.rsplit('@')
-		.next()
-		.expect("split always has at least 1 item");
-
-	if host_port.as_bytes()[0] == b'[' {
-		let i = host_port
-			.find(']')
-			.expect("parsing should validate brackets");
-		// ..= ranges aren't available in 1.20, our minimum Rust version...
-		&host_port[0..i + 1]
-	} else {
-		host_port
-			.split(':')
-			.next()
-			.expect("split always has at least 1 item")
-	}
 }
 
 #[derive(Debug, Default)]
@@ -486,5 +725,74 @@ where
 
 	fn size_hint(&self) -> SizeHint {
 		self.body.size_hint()
+	}
+}
+
+// DebugExtensions is a wrapper that logs a requests known-extensions in the Debug implementation.
+// Note: there is no compile time guarantees we did not miss a given extension.
+pub struct DebugExtensions<'a>(pub &'a Request);
+
+impl Debug for DebugExtensions<'_> {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+		let mut d = f.debug_struct("Extensions");
+		let ext = self.0.extensions();
+		if let Some(e) = ext.get::<jwt::Claims>() {
+			d.field("jwt::Claims", e);
+		}
+		if let Some(e) = ext.get::<apikey::Claims>() {
+			d.field("apikey::Claims", e);
+		}
+		if let Some(e) = ext.get::<basicauth::Claims>() {
+			d.field("basicauth::Claims", e);
+		}
+		if let Some(e) = ext.get::<crate::http::filters::BackendRequestTimeout>() {
+			d.field("BackendRequestTimeout", e);
+		}
+		if let Some(e) = ext.get::<crate::http::filters::OriginalUrl>() {
+			d.field("OriginalUrl", e);
+		}
+		if let Some(e) = ext.get::<crate::llm::bedrock::AwsRegion>() {
+			d.field("AwsRegion", e);
+		}
+		if let Some(e) = ext.get::<crate::client::ResolvedDestination>() {
+			d.field("ResolvedDestination", e);
+		}
+		if let Some(e) = ext.get::<crate::http::ext_authz::ExtAuthzDynamicMetadata>() {
+			d.field("ExtAuthzDynamicMetadata", e);
+		}
+		if let Some(e) = ext.get::<PathMatch>() {
+			d.field("PathMatch", e);
+		}
+		if let Some(e) = ext.get::<crate::telemetry::trc::TraceParent>() {
+			d.field("TraceParent", e);
+		}
+		if let Some(e) = ext.get::<crate::transport::stream::TLSConnectionInfo>() {
+			d.field("TLSConnectionInfo", e);
+		}
+		if let Some(e) = ext.get::<TCPConnectionInfo>() {
+			d.field("TCPConnectionInfo", e);
+		}
+		if let Some(e) = ext.get::<crate::transport::stream::HBONEConnectionInfo>() {
+			d.field("HBONEConnectionInfo", e);
+		}
+		if let Some(e) = ext.get::<BufferLimit>() {
+			d.field("BufferLimit", e);
+		}
+		if let Some(e) = ext.get::<PoolKey>() {
+			d.field("PoolKey", e);
+		}
+		if let Some(e) = ext.get::<LLMContext>() {
+			d.field("LLMContext", e);
+		}
+		if let Some(e) = ext.get::<BackendContext>() {
+			d.field("BackendContext", e);
+		}
+		if let Some(e) = ext.get::<SourceContext>() {
+			d.field("SourceContext", e);
+		}
+		if let Some(e) = ext.get::<RequestStartTime>() {
+			d.field("RequestStartTime", e);
+		}
+		d.finish()
 	}
 }

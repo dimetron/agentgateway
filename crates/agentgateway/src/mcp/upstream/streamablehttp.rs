@@ -37,10 +37,10 @@ impl Client {
 
 	pub fn get_session_state(&self) -> Option<http::sessionpersistence::MCPSession> {
 		let session_id = self.session_id.load().clone()?;
-		let be = self.http_client.pinned_backend()?;
+		let backend = self.http_client.pinned_backend();
 		Some(http::sessionpersistence::MCPSession {
 			session: session_id.to_string(),
-			backend: be,
+			backend,
 		})
 	}
 
@@ -91,7 +91,9 @@ impl Client {
 
 		let resp = self.http_client.call(req).await?;
 
-		if resp.status() == http::StatusCode::ACCEPTED {
+		// MCP spec has 202 only but some servers in the wild return 204. This is close enough for us to massage it.
+		if resp.status() == http::StatusCode::ACCEPTED || resp.status() == http::StatusCode::NO_CONTENT
+		{
 			return Ok(StreamableHttpPostResponse::Accepted);
 		}
 

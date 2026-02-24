@@ -10,6 +10,8 @@ type Inputs struct {
 	Dev                        bool
 	ImageDefaults              *agentgateway.Image
 	ControlPlane               ControlPlaneInfo
+	NoListenersDummyPort       uint16
+	ImageInfo                  *ImageInfo
 	CommonCollections          *collections.CommonCollections
 	AgentgatewayClassName      string
 	AgentgatewayControllerName string
@@ -17,10 +19,8 @@ type Inputs struct {
 
 // InMemoryGatewayParametersConfig holds the configuration for creating in-memory GatewayParameters.
 type InMemoryGatewayParametersConfig struct {
-	ControllerName             string
 	ClassName                  string
 	ImageInfo                  *ImageInfo
-	WaypointClassName          string
 	AgwControllerName          string
 	OmitDefaultSecurityContext bool
 }

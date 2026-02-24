@@ -134,7 +134,7 @@ type Webhook struct {
 
 // CustomResponse configures a response to return to the client if request content
 // is matched against a regex pattern and the action is `REJECT`.
-// +kubebuilder:validation:AtLeastOneOf=message;statusCode
+// +kubebuilder:validation:AtLeastOneFieldSet
 type CustomResponse struct {
 	// A custom response message to return to the client. If not specified, defaults to
 	// "The request was rejected due to inappropriate content".
@@ -155,13 +155,53 @@ type OpenAIModeration struct {
 	// +optional
 	Model *string `json:"model,omitempty"`
 	// policies controls policies for communicating with OpenAI.
-	// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth
+	// +kubebuilder:validation:AtLeastOneFieldSet
+	// +optional
+	Policies *BackendSimple `json:"policies,omitempty"`
+}
+
+type BedrockGuardrails struct {
+	// GuardrailIdentifier is the identifier of the Guardrail policy to use for the backend.
+	// +required
+	GuardrailIdentifier ShortString `json:"identifier"`
+
+	// GuardrailVersion is the version of the Guardrail policy to use for the backend.
+	// +required
+	GuardrailVersion ShortString `json:"version"`
+
+	// Region is the AWS region where the guardrail is deployed (e.g., "us-west-2").
+	// +required
+	Region ShortString `json:"region"`
+
+	// policies controls policies for communicating with AWS Bedrock Guardrails.
+	// +kubebuilder:validation:AtLeastOneFieldSet
+	// +optional
+	Policies *BackendSimple `json:"policies,omitempty"`
+}
+
+type GoogleModelArmor struct {
+	// TemplateID is the template ID for Google Model Armor.
+	// +required
+	TemplateID ShortString `json:"templateId"`
+
+	// ProjectID is the Google Cloud project ID.
+	// +required
+	ProjectID ShortString `json:"projectId"`
+
+	// Location is the Google Cloud location (e.g., "us-central1").
+	// Defaults to "us-central1" if not specified.
+	// +kubebuilder:default="us-central1"
+	// +optional
+	Location *ShortString `json:"location,omitempty"`
+
+	// policies controls policies for communicating with Google Model Armor.
+	// +kubebuilder:validation:AtLeastOneFieldSet
 	// +optional
 	Policies *BackendSimple `json:"policies,omitempty"`
 }
 
 // PromptguardRequest defines the prompt guards to apply to requests sent by the client.
-// +kubebuilder:validation:ExactlyOneOf=regex;webhook;openAIModeration
+// +kubebuilder:validation:ExactlyOneOf=regex;webhook;openAIModeration;bedrockGuardrails;googleModelArmor
 type PromptguardRequest struct {
 	// A custom response message to return to the client. If not specified, defaults to
 	// "The request was rejected due to inappropriate content".
@@ -177,13 +217,21 @@ type PromptguardRequest struct {
 	Webhook *Webhook `json:"webhook,omitempty"`
 
 	// openAIModeration passes prompt data through the OpenAI Moderations endpoint.
-	// See https://platform.openai.com/docs/api-reference/moderations for more information.
+	// See https://developers.openai.com/api/reference/resources/moderations for more information.
 	// +optional
 	OpenAIModeration *OpenAIModeration `json:"openAIModeration,omitempty"`
+
+	// bedrockGuardrails configures AWS Bedrock Guardrails for prompt guarding.
+	// +optional
+	BedrockGuardrails *BedrockGuardrails `json:"bedrockGuardrails,omitempty"`
+
+	// googleModelArmor configures Google Model Armor for prompt guarding.
+	// +optional
+	GoogleModelArmor *GoogleModelArmor `json:"googleModelArmor,omitempty"`
 }
 
 // PromptguardResponse configures the response that the prompt guard applies to responses returned by the LLM provider.
-// +kubebuilder:validation:ExactlyOneOf=regex;webhook
+// +kubebuilder:validation:ExactlyOneOf=regex;webhook;bedrockGuardrails;googleModelArmor
 type PromptguardResponse struct {
 	// A custom response message to return to the client. If not specified, defaults to
 	// "The response was rejected due to inappropriate content".
@@ -197,6 +245,14 @@ type PromptguardResponse struct {
 	// Configure a webhook to forward responses to for prompt guarding.
 	// +optional
 	Webhook *Webhook `json:"webhook,omitempty"`
+
+	// bedrockGuardrails configures AWS Bedrock Guardrails for prompt guarding.
+	// +optional
+	BedrockGuardrails *BedrockGuardrails `json:"bedrockGuardrails,omitempty"`
+
+	// googleModelArmor configures Google Model Armor for prompt guarding.
+	// +optional
+	GoogleModelArmor *GoogleModelArmor `json:"googleModelArmor,omitempty"`
 }
 
 // AIPromptGuard configures a prompt guards to block unwanted requests to the LLM provider and mask sensitive data.
@@ -223,7 +279,7 @@ type PromptguardResponse struct {
 //	    action: MASK
 //
 // ```
-// +kubebuilder:validation:AtLeastOneOf=request;response
+// +kubebuilder:validation:AtLeastOneFieldSet
 type AIPromptGuard struct {
 	// Prompt guards to apply to requests sent by the client.
 	// +kubebuilder:validation:MinItems=1

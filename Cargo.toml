@@ -83,7 +83,12 @@ futures = "0.3"
 futures-channel = "0.3"
 futures-core = "0.3"
 futures-util = "0.3"
-google-cloud-auth = { git = "https://github.com/googleapis/google-cloud-rust", rev = "18f8434cb598ae9f9835b7d77b2a8774fec1d2ea", default-features = false, features = ["idtoken"] }
+google-cloud-auth = { version = "1.6", default-features = false, features = [
+    "idtoken",
+    # They use AWS-LC which is what we want so its fine. If they changed we would need to switch
+    # To installing a global default which is annoying so prefer to do it this way.
+    "default-rustls-provider",
+] }
 hashbrown = "0.16"
 h2 = "0.4"
 headers = "0.4"
@@ -97,10 +102,10 @@ http-body-util = "0.1.3"
 hyper = { version = "1.6", features = ["full"] }
 hyper-rustls = "0.27"
 hyper-util = { version = "0.1", features = ["full"] }
-hyper-util-fork = { path = "crates/hyper-util-fork", features = ["full"] }
+hyper-util-fork = { path = "crates/hyper-util-fork" }
 include_dir = "0.7"
 indexmap = { version = "2.9", features = ["serde"] }
-insta = { version = "1.38", features = ["json", "redactions", "filters"] }
+insta = { version = "1.38", features = ["json", "redactions", "filters", "yaml"] }
 ipnet = { version = "2.11", features = ["serde"] }
 itertools = "0.14"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
@@ -114,7 +119,7 @@ once_cell = "1.21"
 openapiv3 = "2.2"
 opentelemetry = "0.31"
 opentelemetry-http = "0.31"
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "internal-logs", "trace", "grpc-tonic"] }
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 parking_lot = "0.12"
@@ -139,11 +144,10 @@ pwhash = "1"
 rand = "0.10"
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 regex = "1.11"
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "http2",
     "charset",
-    "macos-system-configuration",
-    "rustls-tls",
+    "rustls",
 ] }
 rstest = "0.26"
 rustc_version = "0.4"

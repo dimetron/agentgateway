@@ -53,7 +53,11 @@ func (a *AgentgatewayParametersApplier) ApplyToHelmValues(vals *deployer.HelmCon
 		return
 	}
 
-	configs := a.params.Spec.AgentgatewayParametersConfigs
+	// Deep copy to avoid mutating the cached AgentgatewayParameters object.
+	// Without this, the first Apply (GatewayClass) can alias configs.Resources
+	// into res, and the second Apply (Gateway) would mutate the cached
+	// GatewayClass object when merging maps in-place.
+	configs := *a.params.Spec.AgentgatewayParametersConfigs.DeepCopy()
 	res := vals.Agentgateway.AgentgatewayParametersConfigs
 
 	// Do a manual merge of the fields.
@@ -281,7 +285,7 @@ func DefaultGatewayIRGetter(gw *gwv1.Gateway, commonCollections *collections.Com
 }
 func (g *agentgatewayParametersHelmValuesGenerator) getDefaultAgentgatewayHelmValues(gw *gwv1.Gateway) (*deployer.HelmConfig, error) {
 	irGW := DefaultGatewayIRGetter(gw, g.inputs.CommonCollections)
-	ports := deployer.GetPortsValues(irGW)
+	ports := deployer.GetPortsValues(irGW, int32(g.inputs.NoListenersDummyPort))
 	if len(ports) == 0 {
 		return nil, ErrNoValidPorts
 	}

@@ -134,7 +134,7 @@ type BackendSimple struct {
 	Auth *BackendAuth `json:"auth,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;mcp
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendWithMCP struct {
 	BackendSimple `json:",inline"`
 
@@ -143,7 +143,7 @@ type BackendWithMCP struct {
 	MCP *BackendMCP `json:"mcp,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;ai
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendWithAI struct {
 	BackendSimple `json:",inline"`
 
@@ -152,7 +152,7 @@ type BackendWithAI struct {
 	AI *BackendAI `json:"ai,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;mcp;ai
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendFull struct {
 	BackendSimple `json:",inline"`
 
@@ -251,6 +251,7 @@ type BackendTLS struct {
 	AlpnProtocols *[]TinyString `json:"alpnProtocols,omitempty"`
 }
 
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Frontend struct {
 	// tcp defines settings on managing incoming TCP connections.
 	// +optional
@@ -271,7 +272,7 @@ type Frontend struct {
 	Tracing *Tracing `json:"tracing,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=maxBufferSize;http1MaxHeaders;http1IdleTimeout;http2WindowSize;http2ConnectionWindowSize;http2FrameSize;http2KeepaliveInterval;http2KeepaliveTimeout
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendHTTP struct {
 	// maxBufferSize defines the maximum size HTTP body that will be buffered into memory.
 	// Bodies will only be buffered for policies which require buffering.
@@ -317,7 +318,7 @@ type FrontendHTTP struct {
 	HTTP2KeepaliveTimeout *metav1.Duration `json:"http2KeepaliveTimeout,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=handshakeTimeout
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendTLS struct {
 	// handshakeTimeout specifies the deadline for a TLS handshake to complete.
 	// If unset, this defaults to 15s.
@@ -380,7 +381,7 @@ const (
 	CipherSuiteTLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 CipherSuite = "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
 )
 
-// +kubebuilder:validation:AtLeastOneOf=keepalive
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendTCP struct {
 	// keepalive defines settings for enabling TCP keepalives on the connection.
 	// +optional
@@ -419,7 +420,7 @@ const (
 	PolicyPhasePostRouting PolicyPhase = "PostRouting"
 )
 
-// +kubebuilder:validation:XValidation:rule="has(self.phase) && self.phase == 'PreRouting' ? !has(self.rateLimit) && !has(self.cors) && !has(self.csrf) && !has(self.headerModifiers) && !has(self.hostRewrite) && !has(self.timeouts) && !has(self.retry) && !has(self.authorization): true",message="phase PreRouting only supports extAuth, transformation, extProc, jwtAuthentication, basicAuthentication, and apiKeyAuthentication"
+// +kubebuilder:validation:IfThenOnlyFields:if="has(self.phase) && self.phase == 'PreRouting'",fields=phase;transformation;extProc;extAuth;jwtAuthentication;basicAuthentication;apiKeyAuthentication,message="phase PreRouting only supports extAuth, transformation, extProc, jwtAuthentication, basicAuthentication, and apiKeyAuthentication"
 type Traffic struct {
 	// The phase to apply the traffic policy to. If the phase is PreRouting, the targetRef must be a Gateway or a Listener.
 	// PreRouting is typically used only when a policy needs to influence the routing decision.
@@ -748,7 +749,7 @@ const (
 	HostnameRewriteModeNone HostnameRewriteMode = "None"
 )
 
-// +kubebuilder:validation:ExactlyOneOf=key;secretRef;passthrough;aws;gcp
+// +kubebuilder:validation:ExactlyOneOf=key;secretRef;passthrough;aws;azure;gcp
 type BackendAuth struct {
 	// key provides an inline key to use as the value of the Authorization header.
 	// This option is the least secure; usage of a Secret is preferred.
@@ -774,6 +775,11 @@ type BackendAuth struct {
 	//
 	// +optional
 	AWS *AwsAuth `json:"aws,omitempty"`
+
+	// Azure specifies an Azure authentication method for the backend.
+	//
+	// +optional
+	Azure *AzureAuth `json:"azure,omitempty"`
 
 	// Auth specifies to use a Google  authentication method for the backend.
 	// When omitted, we will try to use the default AWS SDK authentication methods.
@@ -813,10 +819,32 @@ type AwsAuth struct {
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
 }
 
+type AzureAuth struct {
+	// SecretRef references a Kubernetes Secret containing the Azure credentials.
+	// The Secret must have keys "clientId", "tenantId", and "clientSecret".
+	//
+	// +optional
+	SecretRef corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Details for managed identity authentication
+	//
+	// +optional
+	ManagedIdentity *AzureManagedIdentity `json:"managedIdentity,omitempty"`
+}
+
+type AzureManagedIdentity struct {
+	// +required
+	ClientID string `json:"clientId"`
+	// +required
+	ObjectID string `json:"objectId"`
+	// +required
+	ResourceID string `json:"resourceId"`
+}
+
 type BackendAuthPassthrough struct {
 }
 
-// +kubebuilder:validation:AtLeastOneOf=prompt;promptGuard;defaults;overrides;modelAliases;promptCaching;routes
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendAI struct {
 	// Enrich requests sent to the LLM provider by appending and prepending system prompts. This can be configured only for
 	// LLM providers that use the `CHAT` or `CHAT_STREAMING` API route type.
@@ -886,11 +914,11 @@ const (
 	// RouteTypeEmbeddings processes OpenAI /v1/embeddings format requests
 	RouteTypeEmbeddings RouteType = "Embeddings"
 
-	//RouteTypeRealtime processes OpenAI /v1/realtime requests
+	// RouteTypeRealtime processes OpenAI /v1/realtime requests
 	RouteTypeRealtime RouteType = "Realtime"
 )
 
-// +kubebuilder:validation:AtLeastOneOf=authorization;authentication
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendMCP struct {
 	// authorization defines MCPBackend level authorization. Unlike authorization at the HTTP level, which will reject
 	// unauthorized requests with a 403 error, this policy works at the MCPBackend level.
@@ -931,6 +959,7 @@ type MCPAuthentication struct {
 	JWKS RemoteJWKS `json:"jwks"`
 
 	// validation mode for JWT authentication.
+	// +kubebuilder:default=Strict
 	// +optional
 	Mode JWTAuthenticationMode `json:"mode,omitempty"`
 }
@@ -979,7 +1008,7 @@ type BackendTCP struct {
 	ConnectTimeout *metav1.Duration `json:"connectTimeout,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=request;response
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Transformation struct {
 	// request is used to modify the request path.
 	// +optional
@@ -990,7 +1019,7 @@ type Transformation struct {
 	Response *Transform `json:"response,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=set;add;remove;body
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Transform struct {
 	// set is a list of headers and the value they should be set to.
 	//
@@ -1142,7 +1171,7 @@ type ExtAuthBody struct {
 	MaxSize int32 `json:"maxSize"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=local;global
+// +kubebuilder:validation:AtLeastOneFieldSet
 type RateLimits struct {
 	// Local defines a local rate limiting policy.
 	// +kubebuilder:validation:MinItems=1
@@ -1204,7 +1233,7 @@ type RateLimitDescriptorEntry struct {
 	//
 	// For example, to rate limit based on the Client IP: `source.address`.
 	//
-	// See https://agentgateway.dev/docs/reference/cel/ for more info.
+	// See https://agentgateway.dev/docs/standalone/latest/reference/cel/ for more info.
 	// +required
 	Expression shared.CELExpression `json:"expression"`
 }
@@ -1302,7 +1331,7 @@ type AccessLog struct {
 	Attributes *LogTracingAttributes `json:"attributes,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=remove;add
+// +kubebuilder:validation:AtLeastOneFieldSet
 type LogTracingAttributes struct {
 	// remove lists the default fields that should be removed. For example, "http.method".
 	// +kubebuilder:validation:MinItems=1

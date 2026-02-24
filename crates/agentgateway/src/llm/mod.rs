@@ -6,7 +6,6 @@ use ::http::uri::{Authority, PathAndQuery};
 use ::http::{HeaderValue, header};
 use agent_core::prelude::Strng;
 use agent_core::strng;
-use agent_hbone::server::RequestParts;
 use axum_extra::headers::authorization::Bearer;
 use headers::{ContentEncoding, HeaderMapExt};
 pub use policy::Policy;
@@ -126,6 +125,16 @@ pub enum AIProvider {
 	AzureOpenAI(azureopenai::Provider),
 }
 
+#[apply(schema!)]
+pub enum LocalModelAIProvider {
+	OpenAI,
+	Gemini,
+	Vertex,
+	Anthropic,
+	Bedrock,
+	AzureOpenAI,
+}
+
 trait Provider {
 	const NAME: Strng;
 }
@@ -220,8 +229,13 @@ pub struct LLMResponse {
 	pub count_tokens: Option<u64>,
 	pub output_tokens: Option<u64>,
 	pub total_tokens: Option<u64>,
+	pub reasoning_tokens: Option<u64>,
+	pub cache_creation_input_tokens: Option<u64>,
+	pub cached_input_tokens: Option<u64>,
+
 	pub provider_model: Option<Strng>,
 	pub completion: Option<Vec<String>>,
+
 	// Time to get the first token. Only used for streaming.
 	pub first_token: Option<Instant>,
 }
@@ -646,10 +660,10 @@ impl AIProvider {
 		let new_request = if original_format == InputFormat::CountTokens {
 			match self {
 				AIProvider::Anthropic(_) => req.to_anthropic()?,
-				AIProvider::Bedrock(_) => req.to_bedrock_token_count(parts.headers())?,
+				AIProvider::Bedrock(_) => req.to_bedrock_token_count(&parts.headers)?,
 				AIProvider::Vertex(provider) => {
 					let body = req.to_anthropic()?;
-					provider.prepare_anthropic_request_body(body)?
+					provider.prepare_anthropic_count_tokens_body(body)?
 				},
 				_ => {
 					return Err(AIError::UnsupportedConversion(strng::literal!(
@@ -661,7 +675,7 @@ impl AIProvider {
 			match self {
 				AIProvider::Vertex(provider) if provider.is_anthropic_model(Some(request_model)) => {
 					let body = req.to_anthropic()?;
-					provider.prepare_anthropic_request_body(body)?
+					provider.prepare_anthropic_message_body(body)?
 				},
 				AIProvider::OpenAI(_) | AIProvider::Gemini(_) | AIProvider::AzureOpenAI(_) => {
 					req.to_openai()?
@@ -825,16 +839,28 @@ impl AIProvider {
 				AIProvider::OpenAI(_) | AIProvider::Gemini(_) | AIProvider::AzureOpenAI(_),
 				InputFormat::Completions,
 			) => Ok(Box::new(
-				serde_json::from_slice::<types::completions::Response>(bytes)
-					.map_err(AIError::ResponseParsing)?,
+				serde_json::from_slice::<types::completions::Response>(bytes).map_err(|e| {
+					warn!(
+						error = %e,
+						body = %String::from_utf8_lossy(bytes),
+						"failed to parse completions response"
+					);
+					AIError::ResponseParsing(e)
+				})?,
 			)),
 			// Responses with OpenAI: just passthrough
 			(
 				AIProvider::OpenAI(_) | AIProvider::Gemini(_) | AIProvider::AzureOpenAI(_),
 				InputFormat::Responses,
 			) => Ok(Box::new(
-				serde_json::from_slice::<types::responses::Response>(bytes)
-					.map_err(AIError::ResponseParsing)?,
+				serde_json::from_slice::<types::responses::Response>(bytes).map_err(|e| {
+					warn!(
+						error = %e,
+						body = %String::from_utf8_lossy(bytes),
+						"failed to parse responses response"
+					);
+					AIError::ResponseParsing(e)
+				})?,
 			)),
 			// Anthropic messages: passthrough
 			(AIProvider::Anthropic(_) | AIProvider::Vertex(_), InputFormat::Messages) => Ok(Box::new(
@@ -989,10 +1015,10 @@ impl AIProvider {
 	async fn read_body_and_default_model<T: RequestType + DeserializeOwned>(
 		&self,
 		policies: Option<&Policy>,
-		req: Request,
+		hreq: Request,
 	) -> Result<(Parts, T), AIError> {
-		let buffer = http::buffer_limit(&req);
-		let (parts, body) = req.into_parts();
+		let buffer = http::buffer_limit(&hreq);
+		let (parts, body) = hreq.into_parts();
 		let Ok(bytes) = http::read_body_with_limit(body, buffer).await else {
 			return Err(AIError::RequestTooLarge);
 		};

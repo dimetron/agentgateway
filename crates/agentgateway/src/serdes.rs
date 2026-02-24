@@ -51,6 +51,7 @@ attribute_alias! {
 		#[apply(schema_de!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 		#[apply(schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+		#[apply(schema_enum!)] = #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
 pub fn is_default<T: Default + PartialEq>(t: &T) -> bool {
@@ -125,6 +126,35 @@ pub mod serde_dur_option {
 			.map(durfmt::parse)
 			.transpose()
 			.map_err(serde::de::Error::custom)
+	}
+}
+
+pub mod serde_base64 {
+	use base64::Engine;
+	use base64::prelude::BASE64_STANDARD;
+	use serde::{Deserialize, Deserializer, Serializer};
+
+	pub fn serialize<T, S>(key: &T, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		T: AsRef<[u8]>,
+		S: Serializer,
+	{
+		serializer.serialize_str(&BASE64_STANDARD.encode(key.as_ref()))
+	}
+
+	pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+	where
+		D: Deserializer<'de>,
+		T: From<Vec<u8>>,
+	{
+		use serde::de::Error;
+		String::deserialize(deserializer)
+			.and_then(|string| {
+				BASE64_STANDARD
+					.decode(&string)
+					.map_err(|err| Error::custom(err.to_string()))
+			})
+			.map(|bytes| T::from(bytes))
 	}
 }
 

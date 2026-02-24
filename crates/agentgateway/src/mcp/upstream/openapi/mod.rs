@@ -374,6 +374,7 @@ pub(crate) fn parse_openapi_schema(
 								))?
 								.clone();
 							let tool = Tool {
+								execution: None,
 								meta: None,
 								annotations: None,
 								name: Cow::Owned(name.clone()),
@@ -622,9 +623,13 @@ impl Handler {
 					total: None,
 				},
 			),
-			ClientRequest::GetTaskInfoRequest(_) => {
-				Messages::from_result(id, GetTaskInfoResult { task: None })
-			},
+			ClientRequest::GetTaskInfoRequest(_) => Messages::from_result(
+				id,
+				GetTaskResult {
+					task: Task::default(),
+					meta: None,
+				},
+			),
 			ClientRequest::GetTaskResultRequest(_) => {
 				return Err(UpstreamError::InvalidMethod(method.to_string()));
 			},

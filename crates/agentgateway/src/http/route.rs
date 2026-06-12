@@ -1,28 +1,114 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::cmp;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use agent_core::strng;
+use itertools::Itertools;
 
 use crate::http::Request;
+use crate::proxy::dtrace;
 use crate::types::agent;
 use crate::types::agent::{
-	BackendReference, HeaderMatch, HeaderValueMatch, Listener, ListenerProtocol, PathMatch,
-	QueryValueMatch, Route, RouteBackendReference, RouteName,
+	BackendReference, HeaderMatch, HeaderValueMatch, Listener, PathMatch, QueryValueMatch, Route,
+	RouteBackendReference, RouteMatch, RouteName, RouteSet,
 };
-use crate::types::discovery::gatewayaddress::Destination;
-use crate::types::discovery::{NamespacedHostname, NetworkAddress};
 use crate::*;
 
 #[cfg(any(test, feature = "internal_benches"))]
 #[path = "route_test.rs"]
 mod tests;
 
+/// Check if a RouteMatch matches the given request (path, method, headers, query).
+fn matches_request(m: &RouteMatch, request: &Request) -> bool {
+	let request_path =
+		if request.method() == ::http::Method::CONNECT && request.uri().path().is_empty() {
+			"/"
+		} else {
+			request.uri().path()
+		};
+	let path_matches = match &m.path {
+		PathMatch::Exact(p) => request_path == p.as_str(),
+		PathMatch::Regex(r) => r
+			.find(request_path)
+			.map(|m| m.start() == 0 && m.end() == request_path.len())
+			.unwrap_or(false),
+		PathMatch::Invalid => false,
+		PathMatch::PathPrefix(p) => {
+			let p = p.trim_end_matches('/');
+			let Some(suffix) = request_path.trim_end_matches('/').strip_prefix(p) else {
+				return false;
+			};
+			// TODO this is not right!!
+			suffix.is_empty() || suffix.starts_with('/')
+		},
+	};
+	if !path_matches {
+		return false;
+	}
+
+	if let Some(method) = &m.method
+		&& request.method().as_str() != method.method.as_str()
+	{
+		return false;
+	}
+	for HeaderMatch { name, value } in &m.headers {
+		let Some(have) = http::get_pseudo_or_header_value(name, request) else {
+			return false;
+		};
+		match value {
+			HeaderValueMatch::Exact(want) => {
+				if have.as_ref() != *want {
+					return false;
+				}
+			},
+			HeaderValueMatch::Regex(want) => {
+				let Some(have_str) = have.to_str().ok() else {
+					return false;
+				};
+				let Some(m) = want.find(have_str) else {
+					return false;
+				};
+				if !(m.start() == 0 && m.end() == have_str.len()) {
+					return false;
+				}
+			},
+			HeaderValueMatch::Invalid => return false,
+		}
+	}
+	// TODO: this re-parses the query string on every call; hoist to caller if this becomes a hot path.
+	let query = request
+		.uri()
+		.query()
+		.map(|q| url::form_urlencoded::parse(q.as_bytes()).collect::<HashMap<_, _>>())
+		.unwrap_or_default();
+	for agent::QueryMatch { name, value } in &m.query {
+		let Some(have) = query.get(name.as_str()) else {
+			return false;
+		};
+		match value {
+			QueryValueMatch::Exact(want) => {
+				if have.as_ref() != want.as_str() {
+					return false;
+				}
+			},
+			QueryValueMatch::Regex(want) => {
+				let Some(m) = want.find(have) else {
+					return false;
+				};
+				if !(m.start() == 0 && m.end() == have.len()) {
+					return false;
+				}
+			},
+			QueryValueMatch::Invalid => return false,
+		}
+	}
+	true
+}
+
 pub fn select_best_route(
 	stores: Stores,
-	network: Strng,
-	self_addr: Option<Strng>,
 	dst: SocketAddr,
 	listener: &Listener,
 	request: &Request,
@@ -45,173 +131,184 @@ pub fn select_best_route(
 	// criteria.
 
 	let host = http::get_host(request).ok()?;
-	// TODO: ensure we actually serve this service
-	let (default_response, host) = if matches!(listener.protocol, ListenerProtocol::HBONE) {
-		let Some(self_addr) = self_addr else {
-			warn!("waypoint requires self address");
-			return None;
-		};
-		// We are going to get a VIP request. Look up the Service
-		// TODO: add a mode to fallback to a DFP backend
-		let svc = stores
-			.read_discovery()
-			.services
-			.get_by_vip(&NetworkAddress {
-				network,
-				address: dst.ip(),
-			})?;
-		let wp = svc.waypoint.as_ref()?;
-		// Make sure the service is actually bound to us. TODO: should we have a more explicit setup?
-		match &wp.destination {
-			Destination::Address(aadr) => {
-				// TODO: this is pretty sketchy
-				let Some(ns) = self_addr.split(".").nth(1) else {
-					warn!("waypoint cannot find self namespace");
-					return None;
-				};
-				let self_svc =
-					stores
-						.read_discovery()
-						.services
-						.get_by_namespaced_host(&NamespacedHostname {
-							namespace: ns.into(),
-							hostname: self_addr,
-						})?;
-				if !self_svc.vips.contains(aadr) {
-					warn!(
-						"service {} is meant for waypoint {}, but we are {:?}",
-						svc.hostname, aadr, self_svc.vips,
-					);
-				}
-			},
-			Destination::Hostname(n) => {
-				if n.hostname != self_addr {
-					warn!(
-						"service {} is meant for waypoint {}, but we are {}",
-						svc.hostname, n.hostname, self_addr
-					);
-					return None;
-				}
-			},
-		}
-		// TODO: only build this if we don't match one
-		let default_route = Route {
-			key: strng::literal!("_waypoint-default"),
-			name: RouteName {
-				name: strng::literal!("_waypoint-default"),
-				namespace: svc.namespace.clone(),
-				rule_name: None,
-				kind: None,
-			},
-			hostnames: vec![],
-			matches: vec![],
-			inline_policies: vec![],
-			backends: vec![RouteBackendReference {
-				weight: 1,
-				backend: BackendReference::Service {
-					name: svc.namespaced_hostname(),
-					port: dst.port(), // TODO: get from req
-				},
-				inline_policies: Vec::new(),
-			}],
-		};
-		// If there is no route, use a default one
-		let def = Some((
-			Arc::new(default_route),
-			PathMatch::PathPrefix(strng::new("/")),
-		));
-		(def, Cow::Owned(svc.hostname.to_string()))
-	} else {
-		(None, Cow::Borrowed(host))
-	};
-	for hnm in agent::HostnameMatch::all_matches(&host) {
-		let mut candidates = listener.routes.get_hostname(&hnm);
-		let best_match = candidates.find(|(_, m)| {
-			let path_matches = match &m.path {
-				PathMatch::Exact(p) => request.uri().path() == p.as_str(),
-				PathMatch::Regex(r, _) => {
-					// Regex has no defined ordering. We will order by the length of the regex expression.
-					let path = request.uri().path();
-					r.find(path)
-						.map(|m| m.start() == 0 && m.end() == path.len())
-						.unwrap_or(false)
-				},
-				PathMatch::PathPrefix(p) => {
-					let p = p.trim_end_matches('/');
-					let Some(suffix) = request.uri().path().trim_end_matches('/').strip_prefix(p) else {
-						return false;
-					};
-					// TODO this is not right!!
-					suffix.is_empty() || suffix.starts_with('/')
-				},
+
+	let (default_response, host) =
+		if let Some(wps) = request.extensions().get::<crate::proxy::WaypointService>() {
+			// When routes are attached to a Service via parentRef, they take priority
+			// over listener-attached routes. If service routes exist but none match,
+			// the request is rejected (per GAMMA spec).
+			let svc = wps.as_ref();
+			let svc_nh = svc.namespaced_hostname();
+			let dst_port = dst.port();
+			let svc_routes = {
+				let binds = stores.read_binds();
+				binds.get_service_routes(&svc_nh)
 			};
-			if !path_matches {
-				return false;
+			let (has_svc_routes, svc_route_match) = match svc_routes {
+				Some(svc_routes) => {
+					let mut result = None;
+					for hnm in agent::HostnameMatch::all_matches(&svc.hostname) {
+						// Match port-agnostic routes (service_port == 0) and those scoped
+						// to this port. Precedence stays the normal GAMMA order; being
+						// port-scoped is not a tiebreaker (consistent with Istio).
+						result = svc_routes
+							.get_hostname(&hnm)
+							.filter(|(route, _)| route.service_port == 0 || route.service_port == dst_port)
+							.find(|(_, m)| matches_request(m, request))
+							.map(|(route, matcher)| (route, matcher.path.clone()));
+						if result.is_some() {
+							break;
+						}
+					}
+					(true, result)
+				},
+				None => (false, None),
+			};
+			if let Some(result) = svc_route_match {
+				return Some(result);
+			}
+			if has_svc_routes {
+				// GAMMA: service routes exist but none matched -> reject
+				return None;
 			}
 
-			if let Some(method) = &m.method
-				&& request.method().as_str() != method.method.as_str()
-			{
-				return false;
-			}
-			for HeaderMatch { name, value } in &m.headers {
-				let Some(have) = http::get_pseudo_or_header_value(name, request) else {
-					return false;
-				};
-				match value {
-					HeaderValueMatch::Exact(want) => {
-						if have.as_ref() != *want {
-							return false;
-						}
-					},
-					HeaderValueMatch::Regex(want) => {
-						// Must be a valid string to do regex match
-						let Some(have_str) = have.to_str().ok() else {
-							return false;
-						};
-						let Some(m) = want.find(have_str) else {
-							return false;
-						};
-						// Make sure we matched the entire thing
-						if !(m.start() == 0 && m.end() == have_str.len()) {
-							return false;
-						}
-					},
-				}
-			}
-			let query = request
-				.uri()
-				.query()
-				.map(|q| url::form_urlencoded::parse(q.as_bytes()).collect::<HashMap<_, _>>())
-				.unwrap_or_default();
-			for agent::QueryMatch { name, value } in &m.query {
-				let Some(have) = query.get(name.as_str()) else {
-					return false;
-				};
+			// No service-keyed routes: fall through to hostname matching with default route
+			let default_route = Route {
+				key: strng::literal!("_waypoint-default"),
+				service_key: Some(svc.namespaced_hostname()),
+				service_port: 0,
+				name: RouteName {
+					name: strng::literal!("_waypoint-default"),
+					namespace: svc.namespace.clone(),
+					rule_name: None,
+					kind: None,
+				},
+				hostnames: vec![],
+				matches: vec![],
+				inline_policies: vec![],
+				backends: vec![RouteBackendReference {
+					weight: 1,
+					target: BackendReference::Service {
+						name: svc.namespaced_hostname(),
+						port: dst_port,
+					}
+					.into(),
+					inline_policies: Vec::new(),
+				}],
+			};
+			let def = Some((
+				Arc::new(default_route),
+				PathMatch::PathPrefix(strng::new("/")),
+			));
+			(def, Cow::Owned(svc.hostname.to_string()))
+		} else {
+			(None, Cow::Borrowed(host))
+		};
+	let listener_routes = {
+		let binds = stores.read_binds();
+		binds.get_listener_routes(&listener.key)
+	};
 
-				match value {
-					QueryValueMatch::Exact(want) => {
-						if have.as_ref() != want.as_str() {
-							return false;
-						}
-					},
-					QueryValueMatch::Regex(want) => {
-						// Must be a valid string to do regex match
-						let Some(m) = want.find(have) else {
-							return false;
-						};
-						// Make sure we matched the entire thing
-						if !(m.start() == 0 && m.end() == have.len()) {
-							return false;
-						}
-					},
-				}
+	if let Some(routes) = listener_routes {
+		let get_all = || {
+			let mut all_routes = HashSet::new();
+			for hnm in agent::HostnameMatch::all_matches(&host) {
+				routes.get_hostname(&hnm).for_each(|i| {
+					all_routes.insert(i.0.key.clone());
+				});
 			}
-			true
+			all_routes.into_iter().sorted().collect_vec()
+		};
+		for hnm in agent::HostnameMatch::all_matches(&host) {
+			let mut candidates = routes.get_hostname(&hnm);
+			let best_match = candidates.find(|(_, m)| matches_request(m, request));
+			if let Some((route, matcher)) = best_match {
+				dtrace::trace(|d| {
+					let selected = route.key.clone();
+					d.route_selection(Some(selected), get_all());
+				});
+				return Some((route, matcher.path.clone()));
+			}
+		}
+		dtrace::trace(|d| {
+			d.route_selection(None, get_all());
 		});
+	}
+	default_response
+}
+
+pub fn select_best_route_group(
+	rg: &RouteSet,
+	request: &Request,
+) -> Option<(Arc<Route>, PathMatch)> {
+	let host = http::get_host(request).ok()?;
+	for hnm in agent::HostnameMatch::all_matches(host) {
+		let mut candidates = rg.get_hostname(&hnm);
+		let best_match = candidates.find(|(_, m)| matches_request(m, request));
 		if let Some((route, matcher)) = best_match {
 			return Some((route, matcher.path.clone()));
 		}
 	}
-	default_response
+	None
+}
+
+pub fn best_match_for_route(route: &Route, request: &Request) -> Option<PathMatch> {
+	let mut best: Option<&agent::RouteMatch> = None;
+	for candidate in route.matches.iter().filter(|m| matches_request(m, request)) {
+		if let Some(current) = best {
+			if compare_route_match(candidate, current) == cmp::Ordering::Greater {
+				best = Some(candidate);
+			}
+		} else {
+			best = Some(candidate);
+		}
+	}
+	best.map(|m| m.path.clone())
+}
+
+fn compare_route_match(a: &agent::RouteMatch, b: &agent::RouteMatch) -> cmp::Ordering {
+	let path_rank1 = get_path_rank(&a.path);
+	let path_rank2 = get_path_rank(&b.path);
+	if path_rank1 != path_rank2 {
+		return path_rank1.cmp(&path_rank2);
+	}
+
+	let path_len1 = get_path_length(&a.path);
+	let path_len2 = get_path_length(&b.path);
+	if path_len1 != path_len2 {
+		return path_len1.cmp(&path_len2);
+	}
+
+	let method1 = a.method.is_some();
+	let method2 = b.method.is_some();
+	if method1 != method2 {
+		return method1.cmp(&method2);
+	}
+
+	let header_count1 = a.headers.len();
+	let header_count2 = b.headers.len();
+	if header_count1 != header_count2 {
+		return header_count1.cmp(&header_count2);
+	}
+
+	a.query.len().cmp(&b.query.len())
+}
+
+fn get_path_rank(path: &PathMatch) -> u8 {
+	match path {
+		PathMatch::Exact(_) => 3,
+		PathMatch::PathPrefix(_) => 2,
+		PathMatch::Regex(_) => 1,
+		// Because this can never match, its rank is irrelevant
+		PathMatch::Invalid => 0,
+	}
+}
+
+fn get_path_length(path: &PathMatch) -> usize {
+	match path {
+		PathMatch::Exact(p) | PathMatch::PathPrefix(p) => p.len(),
+		PathMatch::Regex(r) => r.as_str().len(),
+		// Because this can never match, its rank is irrelevant
+		PathMatch::Invalid => 0,
+	}
 }

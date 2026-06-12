@@ -1,9 +1,21 @@
 use std::collections::HashSet;
 
-use http::Method;
+use http::{HeaderValue, Method};
+use http_body_util::BodyExt;
+use serde_json::json;
 
 use super::*;
 use crate::http::Body;
+
+fn eval(expr: &str) -> Result<serde_json::Value, Error> {
+	let exec_serde = full_example_executor();
+	let exec = exec_serde.as_executor();
+	let exp = Expression::new_strict(expr)?;
+	exec
+		.eval(&exp)?
+		.json()
+		.map_err(|e| Error::Variable(format!("{e}")))
+}
 
 fn eval_request(expr: &str, req: crate::http::Request) -> Result<Value, Error> {
 	let mut cb = ContextBuilder::new();
@@ -13,6 +25,31 @@ fn eval_request(expr: &str, req: crate::http::Request) -> Result<Value, Error> {
 	Ok(exec.eval(&exp)?.as_static())
 }
 
+#[test]
+fn test_permissive() {
+	let exec_serde = full_example_executor();
+	let exec = exec_serde.as_executor();
+	let assert_compile_failure = |expr: Expression| {
+		assert!(
+			exec
+				.eval(&expr)
+				.expect_err("must be an error")
+				.to_string()
+				.contains("could not be compiled")
+		);
+	};
+	let (valid, err) = Expression::new_permissive("1 + 1");
+	assert!(err.is_none());
+	assert_eq!(2, exec.eval(&valid).unwrap().json().unwrap());
+
+	assert_compile_failure(Expression::new_permissive("1 +").0);
+
+	assert_compile_failure(Expression::new_permissive("'").0);
+
+	assert_compile_failure(Expression::new_permissive("\"h").0);
+
+	assert_compile_failure(Expression::new_permissive(r#"" || true || "#).0);
+}
 #[test]
 fn test_eval() {
 	let req = ::http::Request::builder()
@@ -33,6 +70,354 @@ fn expression() {
 		.body(Body::empty())
 		.unwrap();
 	assert_eq!(Value::Bool(true), eval_request(expr, req).unwrap());
+}
+
+#[tokio::test]
+async fn log_only_request_body_records_without_buffering() {
+	let exp = Expression::new_strict("request.body").unwrap();
+	let mut cb = ContextBuilder::new();
+	cb.register_log_expression(&exp);
+	let mut req = ::http::Request::builder()
+		.method(Method::POST)
+		.uri("http://example.com")
+		.body(Body::from("hello"))
+		.unwrap();
+
+	cb.maybe_buffer_request_body(&mut req).await;
+
+	assert!(req.extensions().get::<BufferedBody>().is_none());
+	assert!(
+		req
+			.extensions()
+			.get::<crate::http::RecordedBodyHandle>()
+			.is_some()
+	);
+
+	let snapshot = cb.maybe_snapshot_request(&mut req, false).unwrap();
+	let body = std::mem::replace(req.body_mut(), Body::empty());
+	let sent = body.collect().await.unwrap().to_bytes();
+	assert_eq!(sent, bytes::Bytes::from_static(b"hello"));
+
+	let exec = Executor::new_logger(Some(&snapshot), None, None, None, None, None);
+	assert_eq!(
+		helpers::value_as_byte_or_json(exec.eval(&exp).unwrap()).unwrap(),
+		bytes::Bytes::from_static(b"hello")
+	);
+}
+
+#[tokio::test]
+async fn request_body_expression_buffers_before_log() {
+	let exp = Expression::new_strict("request.body").unwrap();
+	let mut cb = ContextBuilder::new();
+	cb.register_expression(&exp);
+	let mut req = ::http::Request::builder()
+		.method(Method::POST)
+		.uri("http://example.com")
+		.body(Body::from("hello"))
+		.unwrap();
+
+	cb.maybe_buffer_request_body(&mut req).await;
+
+	assert!(req.extensions().get::<BufferedBody>().is_some());
+	assert!(
+		req
+			.extensions()
+			.get::<crate::http::RecordedBodyHandle>()
+			.is_none()
+	);
+	let exec = Executor::new_request(&req);
+	assert_eq!(
+		helpers::value_as_byte_or_json(exec.eval(&exp).unwrap()).unwrap(),
+		bytes::Bytes::from_static(b"hello")
+	);
+}
+
+#[tokio::test]
+async fn log_only_response_body_records_without_buffering() {
+	let exp = Expression::new_strict("response.body").unwrap();
+	let mut cb = ContextBuilder::new();
+	cb.register_log_expression(&exp);
+	let mut resp = ::http::Response::builder()
+		.status(200)
+		.body(Body::from("world"))
+		.unwrap();
+
+	cb.maybe_buffer_response_body(&mut resp).await;
+
+	assert!(resp.extensions().get::<BufferedBody>().is_none());
+	assert!(
+		resp
+			.extensions()
+			.get::<crate::http::RecordedBodyHandle>()
+			.is_some()
+	);
+
+	let snapshot = cb.maybe_snapshot_response(&mut resp).unwrap();
+	let body = std::mem::replace(resp.body_mut(), Body::empty());
+	let sent = body.collect().await.unwrap().to_bytes();
+	assert_eq!(sent, bytes::Bytes::from_static(b"world"));
+
+	let exec = Executor::new_logger(None, Some(&snapshot), None, None, None, None);
+	assert_eq!(
+		helpers::value_as_byte_or_json(exec.eval(&exp).unwrap()).unwrap(),
+		bytes::Bytes::from_static(b"world")
+	);
+}
+
+#[test]
+fn list_in() {
+	let expr = "'san' in source.subjectAltNames";
+	assert_eq!(json!(true), eval(expr).unwrap());
+	let expr = "'not-san' in source.subjectAltNames";
+	assert_eq!(json!(false), eval(expr).unwrap());
+}
+
+fn request_with_header_modes() -> crate::http::Request {
+	let mut req = ::http::Request::builder()
+		.method(Method::GET)
+		.uri("http://example.com")
+		.header("single", "z")
+		.header("multi", "a,b")
+		.body(Body::empty())
+		.unwrap();
+	req.headers_mut().append("multi", "c".parse().unwrap());
+	let mut authorization = HeaderValue::from_static("Bearer token");
+	authorization.set_sensitive(true);
+	req.headers_mut().insert("authorization", authorization);
+	req
+}
+
+mod headers {
+	use cel::Value;
+
+	use crate::cel::tests::{eval_request, request_with_header_modes};
+
+	#[test]
+	fn lookup_default() {
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.headers.multi == ['a,b', 'c']"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+		);
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.headers.single == 'z'"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+		);
+	}
+
+	#[test]
+	fn redacted() {
+		assert_eq!(
+			"Bearer token",
+			eval_request(
+				r#"request.headers.authorization"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.as_ref()
+		);
+		assert_eq!(
+			"<redacted>",
+			eval_request(
+				r#"request.headers.redacted().authorization"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.as_ref()
+		);
+	}
+
+	#[test]
+	fn join() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.join().multi == "a,b,c""#, req).unwrap()
+		);
+	}
+
+	#[test]
+	fn raw() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.raw().multi == ['a,b','c']"#, req,).unwrap()
+		);
+	}
+
+	#[test]
+	fn split() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.split().multi == ['a','b','c']"#, req,).unwrap()
+		);
+	}
+
+	#[test]
+	fn chained() {
+		let req = request_with_header_modes();
+		assert_eq!(
+				Value::Bool(true),
+				eval_request(
+					r#"size(request.headers.redacted().raw()["authorization"]) == 1 && request.headers.redacted().raw()["authorization"][0] == "<redacted>""#,
+					req,
+				)
+				.unwrap()
+			);
+	}
+
+	#[test]
+	fn extension_functions() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			serde_json::json!({"single": "z"}),
+			eval_request(r#"request.headers.filterKeys(k, k == "single")"#, req,)
+				.unwrap()
+				.json()
+				.unwrap()
+		);
+	}
+
+	#[test]
+	fn last_mode_wins() {
+		let req = request_with_header_modes();
+		assert_eq!(
+				Value::Bool(true),
+				eval_request(
+					r#"request.headers.raw().join().multi == "a,b,c" && request.headers.join().split().multi == ['a','b','c']"#,
+					req,
+				)
+				.unwrap()
+			);
+	}
+
+	#[test]
+	fn cookie() {
+		let req = || {
+			::http::Request::builder()
+				.method(http::Method::GET)
+				.uri("http://example.com")
+				.header("cookie", "session=abc; theme=light")
+				.header("cookie", "session=def")
+				.body(crate::http::Body::empty())
+				.unwrap()
+		};
+		assert_eq!(
+			"abc",
+			eval_request(r#"request.headers.cookie("session")"#, req())
+				.unwrap()
+				.as_str()
+				.unwrap()
+				.as_ref()
+		);
+		assert_eq!(
+			"light",
+			eval_request(r#"request.headers.cookie("theme")"#, req())
+				.unwrap()
+				.as_str()
+				.unwrap()
+				.as_ref()
+		);
+	}
+
+	#[test]
+	fn cookie_missing() {
+		let req = ::http::Request::builder()
+			.method(http::Method::GET)
+			.uri("http://example.com")
+			.header("cookie", "session=abc")
+			.body(crate::http::Body::empty())
+			.unwrap();
+		let err = eval_request(r#"request.headers.cookie("theme")"#, req).unwrap_err();
+		assert!(err.to_string().contains("No such key: theme"));
+	}
+}
+
+#[test]
+fn api_key_secret_is_redacted_by_default() {
+	assert_eq!(json!("<redacted>"), eval("apiKey.key").unwrap());
+	assert_eq!(
+		json!("test-api-key-id"),
+		eval("apiKey.key.unredacted()").unwrap()
+	);
+}
+
+#[test]
+fn jwt_token_is_redacted_by_default() {
+	assert_eq!(json!("<redacted>"), eval("jwt.rawToken").unwrap());
+	assert_eq!(
+		json!("fake.jwt.token"),
+		eval("jwt.rawToken.unredacted()").unwrap()
+	);
+}
+
+mod query_accessors {
+	use cel::Value;
+	use http::Method;
+
+	use crate::cel::tests::eval_request;
+	use crate::http::Body;
+
+	fn request() -> crate::http::Request {
+		::http::Request::builder()
+			.method(Method::GET)
+			.uri("http://example.com/api/test?foo=bar&foo=baz&zap=zip")
+			.body(Body::empty())
+			.unwrap()
+	}
+
+	#[test]
+	fn path_stays_string_compatible() {
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.path == "/api/test""#, request()).unwrap()
+		);
+	}
+
+	#[test]
+	fn query_reads_from_path_and_uri() {
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.pathAndQuery.query("foo") == ["bar", "baz"] && request.uri.query("zap") == ["zip"]"#,
+				request()
+			)
+			.unwrap()
+		);
+	}
+
+	#[test]
+	fn missing_query_is_no_such_key() {
+		let err = eval_request(r#"request.pathAndQuery.query("missing")"#, request()).unwrap_err();
+		assert!(err.to_string().contains("No such key: missing"), "{err}");
+	}
+
+	#[test]
+	fn add_and_set_query_return_new_values() {
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.pathAndQuery == "/api/test?foo=bar&foo=baz&zap=zip" &&
+request.pathAndQuery.addQuery("foo", "qux") == "/api/test?foo=bar&foo=baz&zap=zip&foo=qux" &&
+request.pathAndQuery.setQuery("foo", "qux") == "/api/test?zap=zip&foo=qux" &&
+request.uri.setQuery("foo", "qux") == "http://example.com/api/test?zap=zip&foo=qux""#,
+				request()
+			)
+			.unwrap()
+		);
+	}
 }
 
 #[test]
@@ -65,11 +450,73 @@ fn test_properties() {
 	test(r#"!a.b"#, &["a.b"]);
 	test(r#"a.b < c"#, &["a.b", "c"]);
 	test(r#"a.b + c + 2"#, &["a.b", "c"]);
-	// This is not right! Should just be 'a' probably
-	test(r#"a["b"].c"#, &["a.c"]);
+	test(r#"a["b"].c"#, &["a"]);
+	test(r#"a["b"]["c"]"#, &["a"]);
 	test(r#"a.b[0]"#, &["a.b"]);
+	test(r#"a.b[0].c"#, &["a.b"]);
+	test(r#"a[b.c]"#, &["a", "b.c"]);
 	test(r#"{"a":"b"}.a"#, &[]);
 	// Test extauthz namespace recognition
 	test(r#"extauthz.user_id"#, &["extauthz.user_id"]);
 	test(r#"extauthz.role == "admin""#, &["extauthz.role"]);
+}
+
+#[test]
+fn map() {
+	let expr = r#"request.headers.map(v, v)"#;
+	let v = eval(expr).unwrap();
+	let v = v.as_array().unwrap();
+	assert!(v.contains(&json!("user-agent")), "{v:?}");
+}
+
+#[test]
+fn test_struct() {
+	let expr = r#"foo{}"#;
+	eval(expr).expect_err("expected an error");
+}
+
+#[test]
+fn map_filter_dynamic_bool() {
+	let expr = r#"[1, 2].map(x, llm.streaming, x + 1)"#;
+	assert_eq!(json!([]), eval(expr).unwrap());
+}
+
+#[test]
+fn dynamic_bool_in_logical_ops() {
+	assert_eq!(json!(false), eval(r#"false || llm.streaming"#).unwrap());
+	assert_eq!(json!(false), eval(r#"true && llm.streaming"#).unwrap());
+}
+
+#[test]
+fn dynamic_index_key() {
+	let expr = r#"{"bar": 1}[request.headers["foo"]]"#;
+	assert_eq!(json!(1), eval(expr).unwrap());
+}
+
+#[test]
+fn has_on_dynamic_map() {
+	assert_eq!(json!(true), eval(r#"has(request.headers.foo)"#).unwrap());
+}
+
+#[test]
+fn unset_values() {
+	let req = || {
+		::http::Request::builder()
+			.method(Method::GET)
+			.uri("http://example.com")
+			.header("x-example", "value")
+			.body(Body::empty())
+			.unwrap()
+	};
+	assert_eq!(Value::Null, eval_request("jwt", req()).unwrap());
+	assert_eq!(
+		Value::Bool(true),
+		eval_request("jwt == null", req()).unwrap()
+	);
+	// This is just invalid syntax
+	assert!(eval_request("has(jwt)", req()).is_err());
+	assert_eq!(
+		Value::Bool(false),
+		eval_request("has(jwt.sub)", req()).unwrap()
+	);
 }

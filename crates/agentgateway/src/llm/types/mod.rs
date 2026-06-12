@@ -1,13 +1,16 @@
 pub mod bedrock;
 pub mod completions;
 pub mod count_tokens;
+pub mod detect;
 pub mod embeddings;
 pub mod messages;
+pub mod rerank;
 pub mod responses;
 pub mod vertex;
 
 use agent_core::prelude::Strng;
 use agent_core::strng;
+use serde::Serialize;
 
 use crate::apply;
 use crate::llm::{AIError, LLMRequest, LLMResponse};
@@ -28,6 +31,9 @@ pub trait ResponseType: Send + Sync {
 /// RequestType is an abstraction over provider/endpoint specific request formats that enables
 /// uniform policy enforcement and observability
 pub trait RequestType: Send + Sync {
+	fn supports_model(&self) -> bool {
+		true
+	}
 	fn model(&mut self) -> &mut Option<String>;
 	fn prepend_prompts(&mut self, prompts: Vec<SimpleChatCompletionMessage>);
 	fn append_prompts(&mut self, prompts: Vec<SimpleChatCompletionMessage>);
@@ -58,6 +64,12 @@ pub trait RequestType: Send + Sync {
 		)))
 	}
 
+	fn to_openai_chat_completions(&self) -> Result<Vec<u8>, AIError> {
+		Err(AIError::UnsupportedConversion(strng::literal!(
+			"openai-compatible chat completions"
+		)))
+	}
+
 	fn to_vertex(&self, _provider: &crate::llm::vertex::Provider) -> Result<Vec<u8>, AIError> {
 		Err(AIError::UnsupportedConversion(strng::literal!("vertex")))
 	}
@@ -69,4 +81,8 @@ pub trait RequestType: Send + Sync {
 pub struct SimpleChatCompletionMessage {
 	pub role: Strng,
 	pub content: Strng,
+}
+
+pub fn serialize_str<T: Serialize>(value: &T) -> Option<Strng> {
+	serde_json::to_value(value).ok()?.as_str().map(Into::into)
 }

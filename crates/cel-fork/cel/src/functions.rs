@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::sync::Arc;
 
+use chrono::{SecondsFormat, Timelike};
+
 use crate::context::{Context, VariableResolver};
 use crate::magic::{Argument, FromValue, This};
 use crate::objects::{BytesValue, KeyRef, OpaqueValue, OptionalValue, StringValue, Value};
@@ -9,6 +11,26 @@ use crate::parser::Expression;
 use crate::{ExecutionError, ResolveResult};
 
 type Result<T> = std::result::Result<T, ExecutionError>;
+
+pub fn format_timestamp(dt: &chrono::DateTime<chrono::FixedOffset>) -> String {
+	let utc = dt.with_timezone(&chrono::Utc);
+	let mut s = utc.to_rfc3339_opts(SecondsFormat::Secs, true);
+	let mut nano = dt.nanosecond();
+	// This gets rounded up to a second in to_rfc3339_opts
+	if nano >= 1_000_000_000 {
+		nano -= 1_000_000_000;
+	}
+	// golang format expects to output exactly the right number of decimal seconds. We handle this ourselves
+	if nano != 0 {
+		// Take Z off
+		s.pop();
+		s.push('.');
+		let ns = format!("{nano:09}");
+		s.push_str(ns.trim_end_matches('0'));
+		s.push('Z');
+	}
+	s
+}
 
 /// `FunctionContext` is a context object passed to functions when they are called.
 ///
@@ -234,19 +256,27 @@ pub fn contains<'a>(
 // supported:
 // * `string` - Returns a copy of the target string.
 // * `timestamp` - Returns the timestamp in RFC3339 format.
-// * `duration` - Returns the duration in a string formatted like "72h3m0.5s".
+// * `duration` - Returns the duration in `<seconds>[.<fraction>]s` format,
+//   with up to 9 fractional digits and trailing zeros trimmed.
 // * `int` - Returns the integer value of the target.
 // * `uint` - Returns the unsigned integer value of the target.
 // * `float` - Returns the float value of the target.
 // * `bytes` - Converts bytes to string using from_utf8_lossy.
+// * `type` - Returns the type name.
 pub fn string<'a>(ftx: &mut FunctionContext<'a, '_>) -> ResolveResult<'a> {
 	let this = ftx.this_or_arg_value()?;
 	Ok(match this {
 		Value::String(v) => Value::String(v.clone()),
+		Value::Type(v) => Value::String(v.name().into()),
 
-		Value::Timestamp(t) => Value::String(t.to_rfc3339().into()),
+		Value::Timestamp(t) => Value::String(format_timestamp(&t).into()),
 
-		Value::Duration(v) => Value::String(crate::duration::format_duration(&v).into()),
+		Value::Duration(v) => Value::String(
+			crate::duration::format_duration(&v)
+				.ok_or_else(|| ftx.error("duration too large to convert to string"))?
+				.into(),
+		),
+		Value::Bool(v) => Value::String(v.to_string().into()),
 		Value::Int(v) => Value::String(v.to_string().into()),
 		Value::UInt(v) => Value::String(v.to_string().into()),
 		Value::Float(v) => Value::String(v.to_string().into()),
@@ -256,6 +286,12 @@ pub fn string<'a>(ftx: &mut FunctionContext<'a, '_>) -> ResolveResult<'a> {
 		v => return Err(ftx.error(format!("cannot convert {v:?} to string"))),
 	})
 }
+
+pub fn type_<'a>(ftx: &mut FunctionContext<'a, '_>) -> ResolveResult<'a> {
+	let value = ftx.this_or_arg_value()?;
+	Ok(Value::Type(crate::objects::type_of_value(&value)))
+}
+
 pub fn bytes<'a>(ftx: &mut FunctionContext<'a, '_>) -> ResolveResult<'a> {
 	let value: StringValue = ftx.arg(0)?;
 	Ok(Value::Bytes(BytesValue::Owned(value.as_bytes().into())))
@@ -456,7 +492,7 @@ pub use time::{duration, timestamp};
 use crate::common::ast::Expr;
 
 pub mod time {
-	use chrono::{Datelike, Timelike};
+	use chrono::{Datelike, TimeZone, Timelike};
 
 	use super::{FunctionContext, ResolveResult, Result};
 	use crate::magic::{Argument, This};
@@ -483,13 +519,19 @@ pub mod time {
 		Ok(Value::Duration(_duration(value.as_ref())?))
 	}
 
-	/// Timestamp parses the provided argument into a [`Value::Timestamp`] value.
-	/// The
+	/// Timestamp converts the provided argument into a [`Value::Timestamp`] value.
 	pub fn timestamp<'a>(ftx: &mut FunctionContext<'a, '_>, value: Argument) -> ResolveResult<'a> {
-		let value: StringValue = value.load_value(ftx)?;
-		Ok(Value::Timestamp(
-			chrono::DateTime::parse_from_rfc3339(value.as_ref()).map_err(|e| ftx.error(e.to_string()))?,
-		))
+		let value: Value = value.load_value(ftx)?;
+		Ok(Value::Timestamp(match value {
+			Value::String(value) => _timestamp(value.as_ref())?,
+			Value::Timestamp(value) => value,
+			Value::Int(value) => chrono::FixedOffset::east_opt(0)
+				.unwrap()
+				.timestamp_opt(value, 0)
+				.single()
+				.ok_or_else(|| ftx.error("timestamp out of range"))?,
+			v => return Err(ftx.error(format!("cannot convert {v:?} to timestamp"))),
+		}))
 	}
 
 	/// A wrapper around [`parse_duration`] that converts errors into [`ExecutionError`].
@@ -876,7 +918,27 @@ mod tests {
 			),
 			(
 				"timestamp string",
-				"timestamp('2023-05-28T00:00:00Z').string() == '2023-05-28T00:00:00+00:00'",
+				"timestamp('2023-05-28T00:00:00Z').string() == '2023-05-28T00:00:00Z'",
+			),
+			(
+				"timestamp from unix seconds",
+				"timestamp(1900650294).string() == '2030-03-25T06:24:54Z'",
+			),
+			(
+				"timestamp identity",
+				"timestamp(timestamp('2023-05-28T00:00:00Z')) == timestamp('2023-05-28T00:00:00Z')",
+			),
+			(
+				"timestamp string with 1 decimal",
+				"timestamp('2023-05-28T00:00:00.1Z').string()  == '2023-05-28T00:00:00.1Z'",
+			),
+			(
+				"timestamp string with 2 decimal",
+				"timestamp('2023-05-28T00:00:00.12Z').string() == '2023-05-28T00:00:00.12Z'",
+			),
+			(
+				"timestamp string with 10 decimal",
+				"timestamp('2023-05-28T00:00:00.0123456789Z').string() == '2023-05-28T00:00:00.012345678Z'",
 			),
 			(
 				"timestamp getFullYear",
@@ -1015,10 +1077,14 @@ mod tests {
 	#[test]
 	fn test_chrono_string() {
 		[
-			("duration", "duration('1h30m').string() == '1h30m0s'"),
+			("duration", "duration('1h30m').string() == '5400s'"),
+			(
+				"fractional duration",
+				"string(duration('1m1ms')) == '60.001s'",
+			),
 			(
 				"timestamp",
-				"timestamp('2023-05-29T00:00:00Z').string() == '2023-05-29T00:00:00+00:00'",
+				"timestamp('2023-05-29T00:00:00Z').string() == '2023-05-29T00:00:00Z'",
 			),
 		]
 		.iter()
@@ -1075,6 +1141,8 @@ mod tests {
 	fn test_string() {
 		[
 			("string", "'foo'.string() == 'foo'"),
+			("bool", "true.string() == 'true'"),
+			("global bool", "string(true) == 'true'"),
 			("int", "10.string() == '10'"),
 			("float", "10.5.string() == '10.5'"),
 			("bytes", "b'foo'.string() == 'foo'"),

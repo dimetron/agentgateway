@@ -8,11 +8,10 @@ import (
 
 	"istio.io/istio/pilot/pkg/config/kube/crd"
 	"istio.io/istio/pkg/config/schema/gvk"
-	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/agentgatewaysyncer/status"
+	"github.com/agentgateway/agentgateway/controller/pkg/syncer/status"
 )
 
 var _ status.WorkerQueue = &TestStatusQueue{}
@@ -32,7 +31,7 @@ func (t *TestStatusQueue) Push(target status.Resource, data any) {
 func (t *TestStatusQueue) Run(ctx context.Context) {
 }
 
-func (t *TestStatusQueue) Dump() []any {
+func (t *TestStatusQueue) dump() []crd.IstioKind {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	objs := []crd.IstioKind{}
@@ -51,7 +50,7 @@ func (t *TestStatusQueue) Dump() []any {
 				Namespace: k.Namespace,
 			},
 			Spec:   nil,
-			Status: ptr.Of(json.RawMessage(statusj)),
+			Status: new(json.RawMessage(statusj)),
 		}
 		objs = append(objs, obj)
 	}
@@ -68,7 +67,12 @@ func (t *TestStatusQueue) Dump() []any {
 		}
 		return gocmp.Compare(a.Name, b.Name)
 	})
-	return slices.Map(objs, func(e crd.IstioKind) any {
+	return objs
+}
+
+// Dump returns all objects that had status written
+func (t *TestStatusQueue) Dump() []any {
+	return slices.Map(t.dump(), func(e crd.IstioKind) any {
 		return e
 	})
 }

@@ -1,5 +1,4 @@
 use std::io;
-use std::io::Cursor;
 use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -10,13 +9,15 @@ use ::http::uri::Authority;
 use agent_xds::ClientTrait;
 use anyhow::Error;
 use rustls::ClientConfig;
+use rustls::pki_types::CertificateDer;
+use rustls_pki_types::pem::PemObject;
 use secrecy::{ExposeSecret, SecretString};
 use tonic::body::Body;
 use tower::Service;
 
 use crate::client::{ApplicationTransport, Transport};
 use crate::http::HeaderValue;
-use crate::http::backendtls::{BackendTLS, PerAlpnConfig, SYSTEM_TRUST};
+use crate::http::backendtls::{BackendTLS, BackendTLSInfo, PerAlpnConfig, SYSTEM_TRUST};
 use crate::types::agent::Target;
 use crate::*;
 
@@ -31,18 +32,22 @@ pub enum RootCert {
 
 impl RootCert {
 	pub async fn to_client_config(&self) -> anyhow::Result<BackendTLS> {
+		let mut metadata = BackendTLSInfo {
+			alpn: Some(vec!["h2".to_string()]),
+			..Default::default()
+		};
 		let roots = match self {
 			RootCert::File(f) => {
 				let certfile = tokio::fs::read(f).await?;
-				let mut reader = std::io::BufReader::new(Cursor::new(certfile));
-				let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+				metadata.root = Some(String::from_utf8_lossy(&certfile).into());
+				let certs = CertificateDer::pem_slice_iter(&certfile).collect::<Result<Vec<_>, _>>()?;
 				let mut roots = rustls::RootCertStore::empty();
 				roots.add_parsable_certificates(certs);
 				roots
 			},
 			RootCert::Static(b) => {
-				let mut reader = std::io::BufReader::new(Cursor::new(b));
-				let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+				metadata.root = Some(String::from_utf8_lossy(b).into());
+				let certs = CertificateDer::pem_slice_iter(b).collect::<Result<Vec<_>, _>>()?;
 				let mut roots = rustls::RootCertStore::empty();
 				roots.add_parsable_certificates(certs);
 				roots
@@ -53,10 +58,12 @@ impl RootCert {
 			.with_protocol_versions(transport::tls::ALL_TLS_VERSIONS)?
 			.with_root_certificates(roots)
 			.with_no_client_auth();
+		ccb.key_log = transport::tls::key_log();
 		ccb.alpn_protocols = vec![b"h2".to_vec()];
 		Ok(BackendTLS {
 			hostname_override: None,
 			config: PerAlpnConfig::new(Arc::new(ccb), false),
+			metadata,
 		})
 	}
 }
@@ -208,6 +215,7 @@ pub async fn grpc_connector(
 	url: String,
 	auth: AuthSource,
 	root: RootCert,
+	headers: Vec<(http::header::HeaderName, http::HeaderValue)>,
 ) -> anyhow::Result<GrpcChannel> {
 	let root = root.to_client_config().await?;
 	let (target, transport) = get_target(&url, root)?;
@@ -217,6 +225,7 @@ pub async fn grpc_connector(
 		transport,
 		client,
 		auth: Arc::new(AuthSourceLoader::new(auth).await?),
+		headers,
 	})
 }
 
@@ -226,6 +235,7 @@ pub struct GrpcChannel {
 	transport: Transport,
 	client: client::Client,
 	auth: Arc<AuthSourceLoader>,
+	headers: Vec<(http::header::HeaderName, http::HeaderValue)>,
 }
 
 impl tower::Service<::http::Request<tonic::body::Body>> for GrpcChannel {
@@ -242,9 +252,13 @@ impl tower::Service<::http::Request<tonic::body::Body>> for GrpcChannel {
 		let auth = self.auth.clone();
 		let target = self.target.clone();
 		let transport = self.transport.clone();
+		let ca_headers = self.headers.clone();
 		let mut req = req.map(http::Body::new);
 
 		Box::pin(async move {
+			ca_headers.iter().for_each(|(k, v)| {
+				req.headers_mut().insert(k.clone(), v.clone());
+			});
 			auth.insert_headers(req.headers_mut())?;
 			http::modify_req_uri(&mut req, |uri| {
 				uri.authority = Some(Authority::try_from(target.to_string())?);

@@ -2,12 +2,14 @@ use std::path::{Path, PathBuf, absolute};
 use std::time::Duration;
 
 use agent_core::prelude::*;
+use agent_core::readiness;
 use notify::{EventKind, RecursiveMode};
 use tokio::fs;
 
 use crate::client::Client;
 use crate::store::Stores;
 use crate::types::agent::ListenerTarget;
+use crate::types::discovery::SelfIdentitySource;
 use crate::types::proto::agent::Resource as ADPResource;
 use crate::types::proto::workload::Address as XdsAddress;
 use crate::{ConfigSource, client, control, store};
@@ -31,17 +33,22 @@ impl StateManager {
 	pub async fn new(
 		config: Arc<crate::Config>,
 		client: client::Client,
-		xds_metrics: agent_xds::Metrics,
+		config_metrics: Arc<agent_xds::Metrics>,
 		awaiting_ready: tokio::sync::watch::Sender<()>,
 	) -> anyhow::Result<Self> {
 		let xds = &config.xds;
-		let stores = Stores::with_ipv6_enabled(config.ipv6_enabled);
+		let stores = Stores::new_with_dynamic_ca_cert_cache(
+			config.ipv6_enabled,
+			config.threading_mode,
+			config.dynamic_ca_cert_cache.clone(),
+		);
 		let xds_client = if let Some(addr) = &xds.address {
 			let connector = control::grpc_connector(
 				client.clone(),
 				addr.clone(),
 				xds.auth.clone(),
 				xds.ca_cert.clone(),
+				vec![],
 			)
 			.await?;
 			Some(
@@ -53,7 +60,7 @@ impl StateManager {
 				.with_watched_handler::<XdsAddress>(ADDRESS_TYPE, stores.clone().discovery.clone())
 				.with_watched_handler::<ADPResource>(ADP_TYPE, stores.clone().binds.clone())
 				// .with_watched_handler::<XdsAuthorization>(AUTHORIZATION_TYPE, state)
-				.build(xds_metrics, awaiting_ready),
+				.build(config_metrics.clone(), awaiting_ready),
 			)
 		} else {
 			None
@@ -68,7 +75,9 @@ impl StateManager {
 					gateway_name: xds.gateway.clone(),
 					gateway_namespace: xds.namespace.clone(),
 					listener_name: None,
+					port: None,
 				},
+				metrics: config_metrics,
 			};
 			Box::pin(local_client.run()).await?;
 		}
@@ -95,6 +104,7 @@ pub struct LocalClient {
 	pub stores: Stores,
 	pub client: Client,
 	pub gateway: ListenerTarget,
+	pub metrics: Arc<agent_xds::Metrics>,
 }
 
 impl LocalClient {
@@ -117,19 +127,42 @@ impl LocalClient {
 		let mut watcher =
 			notify_debouncer_full::new_debouncer(Duration::from_millis(250), None, move |res| {
 				futures::executor::block_on(async {
-					tx.send(res).await.unwrap();
+					let _ = tx.send(res).await;
 				})
 			})
 			.map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
 
-		// Watch the config file
 		let abspath = absolute(path)?;
 		let parent = abspath.parent().ok_or(anyhow::anyhow!(
 			"Failed to get the parent of the config file"
 		))?;
-		watcher
-			.watch(parent, RecursiveMode::NonRecursive)
-			.map_err(|e| anyhow::anyhow!("Failed to watch config file: {}", e))?;
+		// Watch both the file and its parent. A normal editor or Kubernetes-style update may replace
+		// the directory entry, which only the parent sees. A Docker single-file bind mount can behave
+		// more like an independent mount point, where the useful change event comes from the file itself.
+		let mut watched = Vec::new();
+		let mut watch_errors = Vec::new();
+		for watch_path in [abspath.as_path(), parent] {
+			if watched.iter().any(|p: &PathBuf| p == watch_path) {
+				continue;
+			}
+			match watcher.watch(watch_path, RecursiveMode::NonRecursive) {
+				Ok(()) => watched.push(watch_path.to_path_buf()),
+				Err(e) => {
+					watch_errors.push(format!("{}: {}", watch_path.display(), e));
+					warn!(
+						"Failed to watch config path {}: {}",
+						watch_path.display(),
+						e
+					);
+				},
+			}
+		}
+		if watched.is_empty() {
+			return Err(anyhow::anyhow!(
+				"Failed to watch config file: {}",
+				watch_errors.join(", ")
+			));
+		}
 
 		info!("Watching config file: {}", path.display());
 
@@ -144,20 +177,24 @@ impl LocalClient {
 				let current_config_path = lc.resolve_symlink(&abspath).await.ok();
 
 				// Only process if we have actual content changes
-				if events.iter().any(|e| {
-					matches!(
-						e.kind,
-						EventKind::Modify(_) | EventKind::Create(_) if e.paths.last().is_some_and(|p| p == &abspath)
-						|| (current_config_path.is_some() && current_config_path != real_config_path))
+				if events.iter().any(|event| {
+					should_reload_config(
+						event,
+						&abspath,
+						current_config_path.as_deref(),
+						real_config_path.as_deref(),
+					)
 				}) {
 					real_config_path = current_config_path.clone();
-					info!("Config file changed, reloading...");
+					debug!("Config file changed, reloading...");
 					match lc.reload_config(next_state.clone()).await {
 						Ok(nxt) => {
 							next_state = nxt;
-							info!("Config reloaded successfully")
+							lc.metrics.config_synchronized.set(1);
+							debug!("Config reloaded successfully")
 						},
 						Err(e) => {
+							lc.metrics.config_synchronized.set(0);
 							error!("Failed to reload config: {}", e)
 						},
 					}
@@ -196,11 +233,15 @@ impl LocalClient {
 		info!("loaded config from {:?}", self.cfg);
 
 		// Sync the state
-		let next_binds =
-			self
-				.stores
-				.binds
-				.sync_local(config.binds, config.policies, config.backends, prev.binds);
+		let next_binds = self.stores.binds.sync_local(
+			config.binds,
+			config.listener_routes,
+			config.listener_tcp_routes,
+			config.policies,
+			config.backends,
+			config.route_groups,
+			prev.binds,
+		);
 		let next_discovery =
 			self
 				.stores
@@ -214,8 +255,273 @@ impl LocalClient {
 	}
 }
 
+fn should_reload_config(
+	event: &notify::Event,
+	abspath: &Path,
+	current_config_path: Option<&Path>,
+	previous_config_path: Option<&Path>,
+) -> bool {
+	let target_changed = current_config_path.is_some() && current_config_path != previous_config_path;
+	if target_changed {
+		return true;
+	}
+	if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+		return false;
+	}
+	event
+		.paths
+		.iter()
+		.any(|path| path == abspath || current_config_path.is_some_and(|current| path == current))
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PreviousState {
 	pub binds: store::BindPreviousState,
 	pub discovery: store::DiscoveryPreviousState,
+}
+
+const SELF_WORKLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Populates the discovery store's self_workload according to `config.self_identity`.
+///
+/// For `Static`, sets the cached workload synchronously and rebuckets.
+/// For `Wds`, blocks readiness until WDS delivers the workload or timeout expires.
+pub fn start_self_workload_resolution(
+	config: &crate::Config,
+	stores: Stores,
+	ready: &readiness::Ready,
+) {
+	match &config.self_identity {
+		Some(SelfIdentitySource::Static(w)) => {
+			let store = stores.discovery.read();
+			store.self_workload.set((**w).clone());
+			store.rebucket_all();
+		},
+		Some(SelfIdentitySource::Wds {
+			name,
+			namespace,
+			cluster_id,
+		}) => {
+			let task = ready.register_task("self workload");
+			let name = name.clone();
+			let namespace = namespace.clone();
+			let cluster_id = cluster_id.clone();
+			let has_xds = config.xds.address.is_some();
+			tokio::spawn(async move {
+				watch_self_workload(stores, name, namespace, cluster_id, Some(task), has_xds).await;
+			});
+		},
+		None => {},
+	}
+}
+
+async fn watch_self_workload(
+	stores: Stores,
+	name: Strng,
+	namespace: Strng,
+	cluster_id: Strng,
+	mut ready_task: Option<readiness::BlockReady>,
+	has_xds: bool,
+) {
+	let mut inserts = stores.discovery.read().workloads.subscribe_inserts();
+
+	// allow a cluster id mismatch as a very common misconfiguration is that the control plane and
+	// dataplane mismatch on this but if we do hit a conflict (should be rare) we use the cluster_id
+	// as a tiebreaker
+	let lookup = || {
+		let store = stores.discovery.read();
+		store
+			.workloads
+			.find_by_name(&name, &namespace)
+			.max_by_key(|w| w.cluster_id == cluster_id)
+			.cloned()
+	};
+
+	{
+		let store = stores.discovery.read();
+		if let Some(w) = lookup() {
+			store.self_workload.set((*w).clone());
+			store.rebucket_all();
+			return;
+		}
+	}
+
+	// Without XDS nothing will ever insert workloads; drop the task and stop.
+	if !has_xds {
+		return;
+	}
+
+	// wait for any change before starting our timeout if the control plane is down, or xDS is
+	// otherwise slow we don't want to bail early without locality info
+	if inserts.changed().await.is_err() {
+		return;
+	}
+
+	let deadline = tokio::time::sleep(SELF_WORKLOAD_TIMEOUT);
+	tokio::pin!(deadline);
+	loop {
+		{
+			let store = stores.discovery.read();
+			if let Some(w) = lookup() {
+				store.self_workload.set((*w).clone());
+				store.rebucket_all();
+				return;
+			}
+		}
+		tokio::select! {
+			_ = &mut deadline, if ready_task.is_some() => {
+				warn!(
+					%namespace, %name,
+					"timed out waiting for own workload in WDS after {:?}; unblocking readiness, still watching",
+					SELF_WORKLOAD_TIMEOUT
+				);
+				// drop the task, but keep looping so we can still populate the self_workload if it shows up later
+				ready_task = None;
+			}
+			r = inserts.changed() => {
+				if r.is_err() {
+					return;
+				}
+			}
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use agent_core::readiness::Ready;
+	use notify::event::{CreateKind, ModifyKind};
+
+	use super::*;
+	use crate::store::{DiscoveryPreviousState, LocalWorkload, Stores};
+	use crate::types::discovery::Workload;
+
+	const TASK_NAME: &str = "self workload";
+
+	fn test_config() -> crate::Config {
+		crate::config::parse_config("{}".to_string(), None).expect("parse default config")
+	}
+
+	fn test_stores() -> Stores {
+		Stores::new(false, crate::ThreadingMode::Multithreaded)
+	}
+
+	fn wds_identity(name: &str, ns: &str, cluster: &str) -> SelfIdentitySource {
+		SelfIdentitySource::Wds {
+			name: name.into(),
+			namespace: ns.into(),
+			cluster_id: cluster.into(),
+		}
+	}
+
+	async fn wait_task_dropped(ready: &Ready) {
+		while ready.pending().contains(TASK_NAME) {
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+	}
+
+	#[tokio::test]
+	async fn wds_without_xds_must_not_block_readiness_forever() {
+		let mut config = test_config();
+		assert!(
+			config.xds.address.is_none(),
+			"precondition violated — XDS_ADDRESS leaked from env"
+		);
+		config.self_identity = Some(wds_identity("gw", "ns", "c"));
+
+		let stores = test_stores();
+		let ready = Ready::new();
+		start_self_workload_resolution(&config, stores, &ready);
+
+		assert!(ready.pending().contains(TASK_NAME));
+
+		tokio::time::timeout(Duration::from_secs(5), wait_task_dropped(&ready))
+			.await
+			.expect("'self workload' readiness task blocked forever without XDS");
+	}
+
+	#[tokio::test]
+	async fn wds_populates_self_workload_when_matching_workload_is_inserted() {
+		let mut config = test_config();
+		config.xds.address = Some("http://example.invalid:15010".to_string());
+		config.self_identity = Some(wds_identity("gw", "ns", "c"));
+
+		let stores = test_stores();
+		let ready = Ready::new();
+		start_self_workload_resolution(&config, stores.clone(), &ready);
+
+		let workload = Workload {
+			uid: "uid-1".into(),
+			name: "gw".into(),
+			namespace: "ns".into(),
+			cluster_id: "c".into(),
+			..Default::default()
+		};
+		stores
+			.discovery
+			.sync_local(
+				vec![],
+				vec![LocalWorkload {
+					workload,
+					services: Default::default(),
+				}],
+				DiscoveryPreviousState::default(),
+			)
+			.expect("sync_local");
+
+		tokio::time::timeout(Duration::from_secs(5), wait_task_dropped(&ready))
+			.await
+			.expect("task should clear once matching workload is inserted");
+		assert!(stores.discovery.read().self_workload.get().is_some());
+	}
+
+	#[test]
+	fn config_reload_matches_any_reported_config_path() {
+		let abspath = Path::new("/config.yaml");
+		let event = notify::Event::new(EventKind::Modify(ModifyKind::Data(
+			notify::event::DataChange::Any,
+		)))
+		.add_path(PathBuf::from("/tmp"))
+		.add_path(abspath.to_path_buf());
+
+		assert!(should_reload_config(
+			&event,
+			abspath,
+			Some(abspath),
+			Some(abspath)
+		));
+	}
+
+	#[test]
+	fn config_reload_matches_resolved_symlink_target() {
+		let abspath = Path::new("/config.yaml");
+		let target = Path::new("/var/lib/config/current.yaml");
+		let event = notify::Event::new(EventKind::Modify(ModifyKind::Data(
+			notify::event::DataChange::Any,
+		)))
+		.add_path(target.to_path_buf());
+
+		assert!(should_reload_config(
+			&event,
+			abspath,
+			Some(target),
+			Some(target)
+		));
+	}
+
+	#[test]
+	fn config_reload_matches_symlink_target_change_even_without_path_match() {
+		let abspath = Path::new("/config.yaml");
+		let old_target = Path::new("/var/lib/config/old.yaml");
+		let new_target = Path::new("/var/lib/config/new.yaml");
+		let event =
+			notify::Event::new(EventKind::Create(CreateKind::Any)).add_path(PathBuf::from("/tmp"));
+
+		assert!(should_reload_config(
+			&event,
+			abspath,
+			Some(new_target),
+			Some(old_target),
+		));
+	}
 }

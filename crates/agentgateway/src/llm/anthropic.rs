@@ -16,9 +16,17 @@ impl super::Provider for Provider {
 pub const DEFAULT_HOST_STR: &str = "api.anthropic.com";
 pub const DEFAULT_HOST: Strng = strng::literal!(DEFAULT_HOST_STR);
 
-pub fn path(route: RouteType) -> &'static str {
+pub const OAUTH_TOKEN_PREFIX: &str = "sk-ant-oat";
+
+pub const DEFAULT_BASE_PATH: &str = "/v1";
+
+pub fn path_suffix(route: RouteType) -> &'static str {
 	match route {
-		RouteType::AnthropicTokenCount => "/v1/messages/count_tokens",
-		_ => "/v1/messages",
+		RouteType::AnthropicTokenCount => "/messages/count_tokens",
+		_ => "/messages",
 	}
 }
+
+#[cfg(test)]
+#[path = "anthropic_tests.rs"]
+mod tests;

@@ -42,6 +42,11 @@
           "type": "string",
           "default": ""
         },
+        "pathAndQuery": {
+          "description": "The path and query of the request URI. For example, `/path?foo=bar`.",
+          "type": "string",
+          "default": "/"
+        },
         "version": {
           "description": "The version of the request. For example, `HTTP/1.1`.",
           "type": "string",
@@ -94,6 +99,16 @@
           "maximum": 65535,
           "default": 0
         },
+        "grpcStatus": {
+          "description": "The gRPC status code of the response, when present.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
         "headers": {
           "description": "The headers of the response.",
           "type": "object",
@@ -112,12 +127,156 @@
       },
       "additionalProperties": false
     },
+    "proxy": {
+      "description": "`proxy` contains proxy timing information for the request.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "bind": {
+          "description": "The bind that accepted the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gateway": {
+          "description": "The selected Gateway.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "namespace": {
+              "description": "The namespace of the selected Gateway.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "The name of the selected Gateway.",
+              "type": "string",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        },
+        "listener": {
+          "description": "The selected listener.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "name": {
+              "description": "The name of the selected listener.",
+              "type": "string",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        },
+        "route": {
+          "description": "The selected route.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "namespace": {
+              "description": "The namespace of the selected route.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "The name of the selected route.",
+              "type": "string",
+              "default": ""
+            },
+            "kind": {
+              "description": "The kind of the selected route.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rule": {
+              "description": "The selected route rule name, when available.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestProcessingDuration": {
+          "description": "Time spent processing the request before sending the primary outbound call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upstreamDuration": {
+          "description": "Time spent waiting for the primary outbound call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "responseProcessingDuration": {
+          "description": "Time spent processing the primary outbound response before sending the downstream response.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "env": {
+      "description": "`env` contains selected process environment attributes exposed to CEL.\nThis does NOT expose raw environment variables, but rather a subset of well-known variables.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "podName": {
+          "description": "The name of the pod (when running on Kubernetes)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "The namespace of the pod (when running on Kubernetes)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gateway": {
+          "description": "The Gateway we are running as (when running on Kubernetes)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "jwt": {
       "description": "`jwt` contains the claims from a verified JWT token. This is only present if the JWT policy is enabled.",
       "type": [
         "object",
         "null"
       ],
+      "properties": {
+        "rawToken": {
+          "description": "The raw bearer token. Redacted by default; use `jwt.rawToken.unredacted()` to access the actual value.",
+          "type": "string"
+        }
+      },
       "additionalProperties": true
     },
     "apiKey": {
@@ -128,6 +287,7 @@
       ],
       "properties": {
         "key": {
+          "description": "The API key value. Redacted by default; use `apiKey.key.unredacted()` to access the actual value.",
           "type": "string"
         }
       },
@@ -160,7 +320,7 @@
       ],
       "properties": {
         "streaming": {
-          "description": "Whether the LLM response is streamed.",
+          "description": "Whether the LLM response is streamed. If it is streamed some fields may be inconsistent based on when accessed during the response flow.",
           "type": "boolean"
         },
         "requestModel": {
@@ -180,6 +340,33 @@
         },
         "inputTokens": {
           "description": "The number of tokens in the input/prompt.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inputImageTokens": {
+          "description": "The number of image tokens in the input/prompt.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inputTextTokens": {
+          "description": "The number of text tokens in the input/prompt.\nNote: this field is only set in multi-modal calls where the total token count is split out by\ntext/image/audio; for standard all-text calls, this is unset.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inputAudioTokens": {
+          "description": "The number of audio tokens in the input/prompt.",
           "type": [
             "integer",
             "null"
@@ -214,6 +401,33 @@
           "format": "uint64",
           "minimum": 0
         },
+        "outputImageTokens": {
+          "description": "The number of image tokens in the output/completion.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "outputTextTokens": {
+          "description": "The number of text tokens in the output/completion.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "outputAudioTokens": {
+          "description": "The number of audio tokens in the output/completion.\nNote: this field is only set in multi-modal calls where the total token count is split out by\ntext/image/audio; for standard all-text calls, this is unset.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "reasoningTokens": {
           "description": "The number of reasoning tokens in the output/completion.",
           "type": [
@@ -231,6 +445,27 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "serviceTier": {
+          "description": "The service tier the provider served the request under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeToFirstToken": {
+          "description": "Time from request start until the first response token is received.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timePerOutputToken": {
+          "description": "Average time from first response token to response completion per output token.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "countTokens": {
           "description": "The number of tokens in the request, when using the token counting endpoint\nThese are not counted as 'input tokens' since they do not consume input tokens.",
@@ -347,6 +582,9 @@
         "params"
       ]
     },
+    "llmRequest": {
+      "description": "`llmRequest` contains the raw LLM request before processing. This is only present *during* LLM policies;\npolicies occurring after the LLM policy, such as logs, will not have this field present even for LLM requests."
+    },
     "source": {
       "description": "`source` contains attributes about the source of the request.",
       "type": [
@@ -362,6 +600,20 @@
         },
         "port": {
           "description": "The port of the downstream connection.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0
+        },
+        "rawAddress": {
+          "description": "The original TCP peer IP address of the downstream connection.\nThis can differ from the `address` when using tunneling protocols like PROXY.",
+          "type": "string",
+          "format": "ip",
+          "default": "0.0.0.0"
+        },
+        "rawPort": {
+          "description": "The original TCP peer port of the downstream connection.\nThis can differ from the `port` when using tunneling protocols like PROXY.",
           "type": "integer",
           "format": "uint16",
           "minimum": 0,
@@ -421,96 +673,133 @@
             "null"
           ],
           "default": null
+        },
+        "certificate": {
+          "description": "PEM of the downstream client certificate. Present only when the client presented a certificate during the TLS handshake.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "unverifiedWorkload": {
+          "description": "The workload context of the downstream connection, resolved from the\nworkload discovery store by source IP. Available when the source pod is\nknown to the controller's workload discovery store.\n\nFields are nested under `unverified` to signal that they are derived\nfrom the source IP (not cryptographically authenticated). Policy\nauthors should prefer `source.identity.*` for trust-sensitive checks.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "name": {
+              "description": "The pod name of the source workload.",
+              "type": "string",
+              "default": ""
+            },
+            "namespace": {
+              "description": "The namespace of the source workload.",
+              "type": "string",
+              "default": ""
+            },
+            "serviceAccount": {
+              "description": "The service account of the source workload.",
+              "type": "string",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
     },
     "mcp": {
-      "description": "`mcp` contains attributes about the MCP request.",
-      "anyOf": [
-        {
-          "oneOf": [
-            {
-              "description": "The tool being accessed",
-              "type": "object",
-              "properties": {
-                "tool": {
-                  "type": "object",
-                  "properties": {
-                    "target": {
-                      "description": "The target of the resource",
-                      "type": "string",
-                      "default": ""
-                    },
-                    "name": {
-                      "description": "The name of the resource",
-                      "type": "string",
-                      "default": ""
-                    }
-                  }
-                }
-              },
-              "required": [
-                "tool"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "description": "The prompt being accessed",
-              "type": "object",
-              "properties": {
-                "prompt": {
-                  "type": "object",
-                  "properties": {
-                    "target": {
-                      "description": "The target of the resource",
-                      "type": "string",
-                      "default": ""
-                    },
-                    "name": {
-                      "description": "The name of the resource",
-                      "type": "string",
-                      "default": ""
-                    }
-                  }
-                }
-              },
-              "required": [
-                "prompt"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "description": "The resource being accessed",
-              "type": "object",
-              "properties": {
-                "resource": {
-                  "type": "object",
-                  "properties": {
-                    "target": {
-                      "description": "The target of the resource",
-                      "type": "string",
-                      "default": ""
-                    },
-                    "name": {
-                      "description": "The name of the resource",
-                      "type": "string",
-                      "default": ""
-                    }
-                  }
-                }
-              },
-              "required": [
-                "resource"
-              ],
-              "additionalProperties": false
-            }
+      "description": "`mcp` contains attributes about the MCP request.\nRequest-time CEL only includes identity fields such as `tool`, `prompt`, or `resource`.\nPost-request CEL may also include fields like `methodName`, `sessionId`, and tool payloads.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "methodName": {
+          "type": [
+            "string",
+            "null"
           ]
         },
-        {
-          "type": "null"
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "target": {
+              "description": "The target handling the tool call after multiplexing resolution.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The resolved tool name sent to the upstream target.",
+              "type": "string"
+            },
+            "arguments": {
+              "description": "The JSON arguments passed to the tool call.",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "result": {
+              "description": "The terminal tool result payload, if available."
+            },
+            "error": {
+              "description": "The terminal JSON-RPC error payload, if available."
+            }
+          },
+          "required": [
+            "target",
+            "name"
+          ]
+        },
+        "prompt": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "target": {
+              "description": "The target of the resource",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "The name of the resource",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
+        "resource": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "target": {
+              "description": "The target of the resource",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "The name of the resource",
+              "type": "string",
+              "default": ""
+            }
+          }
         }
-      ]
+      }
     },
     "backend": {
       "description": "`backend` contains information about the backend being used.",
@@ -525,7 +814,7 @@
           "default": ""
         },
         "type": {
-          "description": "The type of backend. For example, `ai`, `mcp`, `static`, `dynamic`, or `service`.",
+          "description": "The type of backend.",
           "type": "string",
           "enum": [
             "ai",
@@ -538,7 +827,7 @@
           "default": "unknown"
         },
         "protocol": {
-          "description": "The protocol of backend. For example, `http`, `tcp`, `a2a`, `mcp`, or `llm`.",
+          "description": "The protocol of backend.",
           "type": "string",
           "enum": [
             "http",
@@ -562,6 +851,22 @@
     },
     "extproc": {
       "description": "`extproc` contains dynamic metadata from ext_proc filters",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "mcpGuardrails": {
+      "description": "`mcpGuardrails` contains dynamic metadata returned by mcpGuardrails policy processors.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "metadata": {
+      "description": "`metadata` contains values set by transformation metadata expressions.",
       "type": [
         "object",
         "null"

@@ -1,26 +1,51 @@
 mod binds;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use binds::{
-	BackendPolicies, FrontendPolices, GatewayPolicies, LLMRequestPolicies, LLMResponsePolicies,
-	RoutePath, RoutePolicies, Store as BindStore,
+	BackendPolicies, BindEvent, BindListeners, FrontendPolices, GatewayPolicies, LLMRequestPolicies,
+	LLMResponsePolicies, RoutePath, RoutePolicies, Store as BindStore,
+	StoreUpdater as BindStoreUpdater,
 };
 use serde::{Serialize, Serializer};
 mod discovery;
+mod policy;
+
 use std::sync::RwLock;
 
 pub use binds::PreviousState as BindPreviousState;
 pub use discovery::{
-	LocalWorkload, PreviousState as DiscoveryPreviousState, Store as DiscoveryStore, WorkloadStore,
+	LocalWorkload, PreviousState as DiscoveryPreviousState, Store as DiscoveryStore,
+	StoreUpdater as DiscoveryStoreUpdater, WorkloadStore,
+};
+pub use policy::{
+	BackendPolicy, BackendPolicyTrait, HasExpressions, PolicyExpressions, RequestPolicy,
+	RequestPolicyTrait, ResponsePolicy, ResponsePolicyTrait,
 };
 
 use crate::store;
+use crate::types::discovery::Workload;
 
-#[derive(Clone, Debug)]
-pub enum Event<T> {
-	Add(T),
-	Remove(T),
+/// Set-once holder for the gateway's own Workload (locality-aware LB reads this).
+/// Populated at startup in Static mode, or when WDS delivers a matching workload in Wds mode.
+/// TODO ArcSwap or something to support updates after startup
+#[derive(Clone, Debug, Default)]
+pub struct SelfWorkload(Arc<OnceLock<Workload>>);
+
+impl SelfWorkload {
+	pub fn new() -> Self {
+		Self::default()
+	}
+	pub fn get(&self) -> Option<&Workload> {
+		self.0.get()
+	}
+	/// First call wins; later calls are no-ops.
+	pub fn set(&self, w: Workload) {
+		let _ = self.0.set(w);
+	}
+	pub fn is_resolved(&self) -> bool {
+		self.0.get().is_some()
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -37,10 +62,24 @@ impl Default for Stores {
 
 impl Stores {
 	pub fn with_ipv6_enabled(ipv6_enabled: bool) -> Stores {
+		Self::new(ipv6_enabled, crate::ThreadingMode::Multithreaded)
+	}
+
+	pub fn new(ipv6_enabled: bool, threading_mode: crate::ThreadingMode) -> Stores {
+		Self::new_with_dynamic_ca_cert_cache(ipv6_enabled, threading_mode, Default::default())
+	}
+
+	pub fn new_with_dynamic_ca_cert_cache(
+		ipv6_enabled: bool,
+		threading_mode: crate::ThreadingMode,
+		dynamic_ca_cert_cache: crate::DynamicCaCertCacheConfig,
+	) -> Stores {
 		Stores {
 			discovery: discovery::StoreUpdater::new(Arc::new(RwLock::new(discovery::Store::new()))),
-			binds: binds::StoreUpdater::new(Arc::new(RwLock::new(binds::Store::with_ipv6_enabled(
+			binds: binds::StoreUpdater::new(Arc::new(RwLock::new(binds::Store::new(
 				ipv6_enabled,
+				threading_mode,
+				dynamic_ca_cert_cache,
 			)))),
 		}
 	}

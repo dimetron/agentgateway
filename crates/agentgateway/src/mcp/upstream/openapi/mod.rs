@@ -1,5 +1,7 @@
 use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use ::http::header::{HeaderName, HeaderValue};
@@ -15,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
+use crate::client::ResolvedDestination;
+use crate::http::sessionpersistence;
 use crate::mcp::mergestream;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
@@ -49,8 +53,44 @@ pub enum ParseError {
 
 pub(crate) fn get_server_prefix(server: &OpenAPI) -> Result<String, ParseError> {
 	match server.servers.len() {
-		0 => Ok("".to_string()), // Return empty string instead of "/" to avoid double slash
-		1 => Ok(server.servers[0].url.clone()),
+		0 => Ok("".to_string()),
+		1 => {
+			let raw = &server.servers[0].url;
+
+			let extract_path = |after_scheme: &str| -> String {
+				if let Some(path_idx) = after_scheme.find('/') {
+					let path = &after_scheme[path_idx..];
+					let path = path.split('?').next().unwrap_or(path);
+					let path = path.split('#').next().unwrap_or(path);
+					let path = path.trim_end_matches('/');
+					if path.is_empty() || path == "/" {
+						"".to_string()
+					} else {
+						path.to_string()
+					}
+				} else {
+					"".to_string()
+				}
+			};
+
+			if let Some(idx) = raw.find("://") {
+				Ok(extract_path(&raw[idx + 3..]))
+			} else if let Some(stripped) = raw.strip_prefix("//") {
+				Ok(extract_path(stripped))
+			} else {
+				// Not an absolute URL -- treat as a relative path prefix (existing behavior)
+				if let Ok(parsed) = url::Url::parse(raw) {
+					let path = parsed.path().trim_end_matches('/').to_string();
+					if path.is_empty() || path == "/" {
+						Ok("".to_string())
+					} else {
+						Ok(path)
+					}
+				} else {
+					Ok(raw.clone())
+				}
+			}
+		},
 		_ => Err(ParseError::UnsupportedReference(format!(
 			"multiple servers are not supported: {:?}",
 			server.servers
@@ -238,6 +278,25 @@ fn resolve_request_body<'a>(
 	}
 }
 
+fn parameter_type(parameter: &Parameter) -> Result<ParameterType, ParseError> {
+	match parameter {
+		Parameter::Header { .. } => Ok(ParameterType::Header),
+		Parameter::Query { .. } => Ok(ParameterType::Query),
+		Parameter::Path { .. } => Ok(ParameterType::Path),
+		_ => Err(ParseError::UnsupportedReference(
+			"parameter type COOKIE is not supported".to_string(),
+		)),
+	}
+}
+
+fn parameter_merge_name(parameter: &Parameter) -> String {
+	let name = &parameter.parameter_data_ref().name;
+	match parameter {
+		Parameter::Header { .. } => name.to_ascii_lowercase(),
+		_ => name.clone(),
+	}
+}
+
 /// We need to rework this and I don't want to forget.
 ///
 /// We need to be able to handle data which can end up in multiple destinations:
@@ -303,39 +362,45 @@ pub(crate) fn parse_openapi_schema(
 								final_schema.properties.insert(name.clone(), schema.clone());
 							}
 
+							let mut parameters: Vec<&Parameter> = Vec::new();
+							let mut parameter_indexes: HashMap<(String, ParameterType), usize> = HashMap::new();
+							for parameter_ref in item.parameters.iter() {
+								let parameter = resolve_parameter(parameter_ref, open_api)?;
+								let Ok(param_type) = parameter_type(parameter) else {
+									continue;
+								};
+								let key = (parameter_merge_name(parameter), param_type);
+								match parameter_indexes.entry(key) {
+									Entry::Occupied(e) => parameters[*e.get()] = parameter,
+									Entry::Vacant(e) => {
+										e.insert(parameters.len());
+										parameters.push(parameter);
+									},
+								}
+							}
+							for parameter_ref in op.parameters.iter() {
+								let parameter = resolve_parameter(parameter_ref, open_api)?;
+								let key = (parameter_merge_name(parameter), parameter_type(parameter)?);
+								match parameter_indexes.entry(key) {
+									Entry::Occupied(e) => parameters[*e.get()] = parameter,
+									Entry::Vacant(e) => {
+										e.insert(parameters.len());
+										parameters.push(parameter);
+									},
+								}
+							}
+
 							let mut param_schemas: HashMap<ParameterType, Vec<(String, JsonObject, bool)>> =
 								HashMap::new();
-							op.parameters
+							parameters
 								.iter()
-								.try_for_each(|p| -> Result<(), ParseError> {
-									let item = resolve_parameter(p, open_api)?;
-									let (name, schema, required) = build_schema_property(open_api, item)?;
-									match item {
-										Parameter::Header { .. } => {
-											param_schemas
-												.entry(ParameterType::Header)
-												.or_insert_with(Vec::new)
-												.push((name, schema, required));
-											Ok(())
-										},
-										Parameter::Query { .. } => {
-											param_schemas
-												.entry(ParameterType::Query)
-												.or_insert_with(Vec::new)
-												.push((name, schema, required));
-											Ok(())
-										},
-										Parameter::Path { .. } => {
-											param_schemas
-												.entry(ParameterType::Path)
-												.or_insert_with(Vec::new)
-												.push((name, schema, required));
-											Ok(())
-										},
-										_ => Err(ParseError::UnsupportedReference(
-											"parameter type COOKIE is not supported".to_string(),
-										)),
-									}
+								.try_for_each(|parameter| -> Result<(), ParseError> {
+									let (name, schema, required) = build_schema_property(open_api, parameter)?;
+									param_schemas
+										.entry(parameter_type(parameter)?)
+										.or_insert_with(Vec::new)
+										.push((name, schema, required));
+									Ok(())
 								})?;
 
 							// Extract allowed header names before consuming param_schemas
@@ -373,23 +438,16 @@ pub(crate) fn parse_openapi_schema(
 									"final schema is not an object".to_string(),
 								))?
 								.clone();
-							let tool = Tool {
-								execution: None,
-								meta: None,
-								annotations: None,
-								name: Cow::Owned(name.clone()),
-								description: Some(Cow::Owned(
+							let tool = Tool::new_with_raw(
+								Cow::Owned(name.clone()),
+								Some(Cow::Owned(
 									op.description
 										.as_ref()
 										.unwrap_or_else(|| op.summary.as_ref().unwrap_or(&name))
 										.to_string(),
 								)),
-								input_schema: Arc::new(final_json),
-								// TODO: support output_schema
-								output_schema: None,
-								icons: None,
-								title: None,
-							};
+								Arc::new(final_json),
+							);
 							let upstream = UpstreamOpenAPICall {
 								// method: Method::from_bytes(method.as_ref()).expect("todo"),
 								method: method.to_string(),
@@ -568,6 +626,20 @@ impl Handler {
 		}
 	}
 
+	pub fn get_session_state(&self) -> sessionpersistence::MCPSession {
+		sessionpersistence::MCPSession {
+			target_name: Some(self.http_client.target_name().to_string()),
+			session: None,
+			backend: self.http_client.pinned_backend(),
+		}
+	}
+
+	pub fn set_session_id(&self, _: Option<&str>, pinned: Option<SocketAddr>) {
+		if let Some(pinned) = pinned {
+			self.http_client.pin_backend(ResolvedDestination(pinned));
+		}
+	}
+
 	pub async fn send_message(
 		&self,
 		request: JsonRpcRequest<ClientRequest>,
@@ -579,18 +651,9 @@ impl Handler {
 		let res = match request.request {
 			ClientRequest::InitializeRequest(_) => Messages::from_result(
 				id,
-				ServerInfo {
-					capabilities: ServerCapabilities::builder().enable_tools().build(),
-					..Default::default()
-				},
+				ServerInfo::new(ServerCapabilities::builder().enable_tools().build()),
 			),
-			ClientRequest::GetPromptRequest(_) => Messages::from_result(
-				id,
-				GetPromptResult {
-					description: None,
-					messages: vec![],
-				},
-			),
+			ClientRequest::GetPromptRequest(_) => Messages::from_result(id, GetPromptResult::new(vec![])),
 			ClientRequest::ListPromptsRequest(_) => Messages::from_result(
 				id,
 				ListPromptsResult {
@@ -615,14 +678,7 @@ impl Handler {
 					resource_templates: vec![],
 				},
 			),
-			ClientRequest::ListTasksRequest(_) => Messages::from_result(
-				id,
-				ListTasksResult {
-					next_cursor: None,
-					tasks: vec![],
-					total: None,
-				},
-			),
+			ClientRequest::ListTasksRequest(_) => Messages::from_result(id, ListTasksResult::new(vec![])),
 			ClientRequest::GetTaskInfoRequest(_) => Messages::from_result(
 				id,
 				GetTaskResult {
@@ -635,10 +691,10 @@ impl Handler {
 			},
 			ClientRequest::CancelTaskRequest(_) => Messages::empty(),
 			ClientRequest::ReadResourceRequest(_) => {
-				Messages::from_result(id, ReadResourceResult { contents: vec![] })
+				Messages::from_result(id, ReadResourceResult::new(vec![]))
 			},
-			ClientRequest::PingRequest(_)
-			| ClientRequest::CustomRequest(_)
+			ClientRequest::PingRequest(_) => Messages::from_result(id, ServerResult::empty(())),
+			ClientRequest::CustomRequest(_)
 			| ClientRequest::SetLevelRequest(_)
 			| ClientRequest::SubscribeRequest(_)
 			| ClientRequest::UnsubscribeRequest(_) => Messages::empty(),
@@ -657,15 +713,9 @@ impl Handler {
 				let serialized_content = serde_json::to_string(&res)
 					.map_err(|e| anyhow::anyhow!("Failed to serialize tool response: {}", e))?;
 
-				Messages::from_result(
-					id,
-					CallToolResult {
-						content: vec![Content::text(serialized_content)],
-						structured_content: Some(res),
-						is_error: None,
-						meta: None,
-					},
-				)
+				let mut result = CallToolResult::success(vec![Content::text(serialized_content)]);
+				result.structured_content = Some(res);
+				Messages::from_result(id, result)
 			},
 			ClientRequest::ListToolsRequest(_) => Messages::from_result(
 				id,
@@ -803,7 +853,7 @@ impl Handler {
 			.body(body.into())
 			.map_err(|e| anyhow::anyhow!("Failed to build request: {}", e))?;
 
-		ctx.apply(&mut request);
+		ctx.apply(&mut request)?;
 
 		// First header set wins including headers set by ctx.apply or the gateway
 		for (key, value) in &header_params {
@@ -861,8 +911,12 @@ impl Handler {
 
 		// Read response body
 		let status = response.status();
-		// Check if the request was successful
-		if status.is_success() {
+
+		// per https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+		// Clients MAY provide protocol errors to language models which are mainly caught up higher.
+		// However we contend that server errors on the tool call should also count as protocol
+		// Everything else should be treated as a success from an http perspective and wrapped in the json-rpc format.
+		if !status.is_server_error() {
 			let lim = crate::http::response_buffer_limit(&response);
 			let content_encoding = response.headers().typed_get::<headers::ContentEncoding>();
 			let body_bytes = crate::http::compression::to_bytes_with_decompression(
@@ -873,14 +927,17 @@ impl Handler {
 			.await
 			.map_err(|e| UpstreamError::OpenAPIError(e.into()))?
 			.1;
-
-			// Wrap responses that are not structuredContent compliant in object
-			Ok(json!({ "data":
-				match serde_json::from_slice::<serde_json::Value>(&body_bytes).map_err(|e| UpstreamError::OpenAPIError(e.into()))? {
-					Value::Object(obj) => return Ok(Value::Object(obj)),
-					Value::Null => return Ok(Value::Null),
-					data => data,
-			}}))
+			match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+				Ok(Value::Object(obj)) => Ok(Value::Object(obj)),
+				Ok(Value::Null) => Ok(Value::Null),
+				Ok(data) => Ok(json!({ "data": data })),
+				Err(_) => {
+					// We should probably record a metric here as this means despite requesting json we got back non-json
+					// This would be fine if it was a 5XX but its not so we help a little.
+					// There is a consideration that we could put is_error in here based on the status but dont know if that makes sense for now
+					Ok(json!({ "code": status.as_u16(), "message": String::from_utf8_lossy(&body_bytes) }))
+				},
+			}
 		} else {
 			let lim = crate::http::response_buffer_limit(&response);
 			let body = String::from_utf8(

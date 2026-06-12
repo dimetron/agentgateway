@@ -118,7 +118,7 @@ Also in `examples/mcp-authentication/config.yaml`:
 ### Scenario C: Adapting a vendor Authorization Server (e.g., Keycloak)
 
 When your Authorization Server doesn’t implement the spec as-is, agentgateway can fill in the gaps.
-Currently, only two providers are supported: Keycloak and Auth0.
+Currently, three providers are supported: Keycloak, Auth0, and Okta.
 
 Excerpt from `examples/mcp-authentication/config.yaml`:
 
@@ -164,6 +164,7 @@ What setting a provider does (high level):
 - If `jwksUrl` is omitted, the gateway derives it from the provider:
   - Auth0 → `<issuer>/.well-known/jwks.json`
   - Keycloak → `<issuer>/protocol/openid-connect/certs`
+  - Okta → `<issuer>/.well-known/jwks.json`
 
 Auth0-specific notes:
 - Gateway appends `?audience=...` to the authorization endpoint it exposes.
@@ -171,6 +172,12 @@ Auth0-specific notes:
 Keycloak-specific notes:
 - No RFC 8707 support; use a fixed audience in config.
 - Client registration is proxied by the gateway at `.../client-registration` to forward to Keycloak’s `clients-registrations/openid-connect`.
+
+Okta-specific notes:
+- Okta supports RFC 8414 (like Auth0), so the gateway uses standard AS metadata discovery.
+- No RFC 8707 support; gateway appends `?audience=...` to the authorization endpoint (same workaround as Auth0).
+- Client registration is proxied by the gateway at `.../client-registration` to forward to Okta's `oauth2/v1/clients`.
+- Okta DCR requires an SSWS API token; the gateway proxies the request and the MCP client must provide the token.
 
 Notes:
 - Omit the `provider` block for spec-compliant servers. Use it only when adaptation is needed.
@@ -192,6 +199,44 @@ Notes:
   Set transport to "Streamable" and URL to `http://localhost:3000/stdio/mcp` (`/remote/mcp` or `/keycloak/mcp`).
 
   The MCP Authorization flow starts after the initial unauthorized request. The mock server redirects back to the MCP client automatically, meanwhile for Keycloak use the credentials `testuser` and `testpass` to authenticate.
+
+---
+
+### Customizing required claims
+
+By default, the `exp` (expiration) claim is required. You can customize which
+claims must be present via `jwtValidationOptions.requiredClaims`. Only the
+five RFC 7519 registered claims are recognized: `exp`, `nbf`, `aud`, `iss`,
+`sub`. Any other value is silently ignored by the underlying library. This
+only enforces **presence**; standard claims like `exp` have their values
+validated independently.
+
+```yaml
+# Allow tokens without exp (e.g., enterprise IDPs that omit it)
+mcpAuthentication:
+  issuer: https://enterprise-idp.example.com
+  audiences:
+    - https://api.mycompany.com/mcp
+  jwks:
+    url: https://enterprise-idp.example.com/.well-known/jwks.json
+  jwtValidationOptions:
+    requiredClaims: []
+
+# Require both exp and nbf
+mcpAuthentication:
+  issuer: https://strict-idp.example.com
+  audiences:
+    - https://api.mycompany.com/mcp
+  jwks:
+    url: https://strict-idp.example.com/.well-known/jwks.json
+  jwtValidationOptions:
+    requiredClaims: ["exp", "nbf"]
+```
+
+Claims present in the token are still validated even if not listed as required.
+For example, an expired `exp` is rejected regardless of `requiredClaims`.
+
+> **Note:** Tokens without `exp` remain valid until the signing key is rotated.
 
 ---
 

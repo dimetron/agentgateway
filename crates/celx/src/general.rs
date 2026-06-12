@@ -1,28 +1,38 @@
 use std::sync::Arc;
 
 use ::cel::extractors::{Argument, This};
-use ::cel::objects::{MapValue, StringValue, ValueType};
+use ::cel::objects::{Key, MapValue, StringValue, ValueType};
 use ::cel::{Context, FunctionContext, ResolveResult, Value};
+use base64::alphabet;
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use cel::ExecutionError;
 use cel::context::{SingleVarResolver, VariableResolver};
-use cel::objects::KeyRef;
+use md5::Md5;
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
 use rand::random_range;
 use serde::Deserializer;
+use sha1::Sha1;
+use sha2::Sha256;
+use sha2::digest::Digest;
+use url::form_urlencoded;
 use uuid::Uuid;
 
 pub fn insert_all(ctx: &mut Context) {
 	// Custom to agentgateway
 	ctx.add_function("json", json_parse);
 	ctx.add_function("jsonField", json_parse_field);
+	ctx.add_function("unvalidatedJwtPayload", unvalidated_jwt_payload);
 	ctx.add_function("to_json", to_json);
 	// Keep old and new name for compatibility
 	ctx.add_function("toJson", to_json);
 	ctx.add_function("with", with);
 	ctx.add_function("mapValues", map_values);
+	ctx.add_function("filterKeys", filter_keys);
 	ctx.add_function("merge", map_merge);
 	ctx.add_function("variables", variables);
 	ctx.add_function("random", random);
 	ctx.add_function("default", default);
+	ctx.add_function("coalesce", coalesce);
 	ctx.add_function("regexReplace", regex_replace);
 	ctx.add_function("fail", fail);
 	ctx.add_function("uuid", uuid_generate);
@@ -32,27 +42,179 @@ pub fn insert_all(ctx: &mut Context) {
 	ctx.add_function("base64Decode", base64_decode);
 	ctx.add_qualified_function("base64", "encode", base64_encode);
 	ctx.add_qualified_function("base64", "decode", base64_decode);
+	ctx.add_qualified_function("url", "encode", url_encode);
+	ctx.add_qualified_function("url", "decode", url_decode);
+	ctx.add_qualified_function("form", "decode", form_decode);
+	ctx.add_qualified_function("form", "encode", form_encode);
+	ctx.add_qualified_function("sha1", "encode", sha1_encode);
+	ctx.add_qualified_function("sha256", "encode", sha256_encode);
+	ctx.add_qualified_function("md5", "encode", md5_encode);
 }
 
 pub fn base64_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
 	// The Go library requires bytes, but we accept strings too.
-	let v = v.load(ftx)?;
+	let v = v.load(ftx)?.always_materialize_owned();
 	use base64::Engine;
 	Ok(
 		base64::prelude::BASE64_STANDARD
-			.encode(v.as_bytes()?)
+			.encode(v.as_bytes_pre_materialized()?)
+			.into(),
+	)
+}
+pub const STANDARD_MAYBE_PADDED: GeneralPurpose = GeneralPurpose::new(
+	&alphabet::STANDARD,
+	GeneralPurposeConfig::new()
+		.with_encode_padding(true)
+		.with_decode_allow_trailing_bits(false)
+		.with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+pub const URL_SAFE_MAYBE_PADDED: GeneralPurpose = GeneralPurpose::new(
+	&alphabet::URL_SAFE,
+	GeneralPurposeConfig::new()
+		.with_encode_padding(true)
+		.with_decode_allow_trailing_bits(false)
+		.with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+pub fn base64_decode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	// The Go library requires strings, but we accept bytes too.
+	let v = v.load(ftx)?.always_materialize_owned();
+	use base64::Engine;
+	STANDARD_MAYBE_PADDED
+		.decode(v.as_bytes_pre_materialized()?)
+		.map(|v| v.into())
+		.map_err(|e| ftx.error(e))
+}
+
+const URL_COMPONENT_ENCODE_SET: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'$')
+	.add(b'%')
+	.add(b'&')
+	.add(b'\'')
+	.add(b'(')
+	.add(b')')
+	.add(b'*')
+	.add(b'+')
+	.add(b',')
+	.add(b'/')
+	.add(b':')
+	.add(b';')
+	.add(b'<')
+	.add(b'=')
+	.add(b'>')
+	.add(b'?')
+	.add(b'@')
+	.add(b'[')
+	.add(b'\\')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}')
+	.add(b'!');
+
+pub fn url_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	let v = v.load(ftx)?.always_materialize_owned();
+	Ok(
+		percent_encode(v.as_bytes_pre_materialized()?, URL_COMPONENT_ENCODE_SET)
+			.to_string()
 			.into(),
 	)
 }
 
-pub fn base64_decode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
-	// The Go library requires strings, but we accept bytes too.
-	let v = v.load(ftx)?;
-	use base64::Engine;
-	base64::prelude::BASE64_STANDARD
-		.decode(v.as_bytes()?)
-		.map(|v| v.into())
+pub fn url_decode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	let v = v.load(ftx)?.always_materialize_owned();
+	let v = v
+		.as_str()
+		.map_err(|e| ftx.error(format!("invalid url-encoded value: {e}")))?;
+	percent_decode_str(v.as_ref())
+		.decode_utf8()
+		.map(|v| v.into_owned().into())
 		.map_err(|e| ftx.error(e))
+}
+
+fn hash_encode<'a, D>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a>
+where
+	D: Digest,
+{
+	let v = v.load(ftx)?.always_materialize_owned();
+	Ok(hex::encode(D::digest(v.as_bytes_pre_materialized()?)).into())
+}
+
+pub fn sha256_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	hash_encode::<Sha256>(ftx, v)
+}
+
+pub fn sha1_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	hash_encode::<Sha1>(ftx, v)
+}
+
+pub fn md5_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	hash_encode::<Md5>(ftx, v)
+}
+
+pub fn form_decode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	let v = v.load(ftx)?.always_materialize_owned();
+	let bytes = v.as_bytes_pre_materialized()?;
+	let pairs = form_urlencoded::parse(bytes);
+	let mut map = hashbrown::HashMap::<Key, Value<'static>>::new();
+	for (key, value) in pairs {
+		let key = Key::from(key.into_owned());
+		let value = Value::from(value.into_owned());
+		match map.entry(key) {
+			hashbrown::hash_map::Entry::Vacant(entry) => {
+				entry.insert(value);
+			},
+			hashbrown::hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
+				Value::List(values) => {
+					let mut values = values.as_ref().to_vec();
+					values.push(value);
+					entry.insert(Value::from(values));
+				},
+				existing => {
+					let first = std::mem::replace(existing, Value::Null);
+					entry.insert(Value::from(vec![first, value]));
+				},
+			},
+		}
+	}
+
+	Ok(Value::Map(MapValue::Owned(Arc::new(map))))
+}
+
+pub fn form_encode<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResult<'a> {
+	let v = v.load_value(ftx)?;
+	let map = must_map(v)?;
+	let mut fields = map
+		.iter_owned()
+		.map(|(key, value)| (key.to_string(), value.always_materialize_owned()))
+		.collect::<Vec<_>>();
+	fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+	let mut serializer = form_urlencoded::Serializer::new(String::new());
+	for (key, value) in fields {
+		match value {
+			Value::List(values) => {
+				for value in values.as_ref() {
+					let value = value
+						.as_str()
+						.map_err(|e| ftx.error(format!("invalid form value for key {key}: {e}")))?;
+					serializer.append_pair(&key, value.as_ref());
+				}
+			},
+			Value::Null => {},
+			value => {
+				let value = value
+					.as_str()
+					.map_err(|e| ftx.error(format!("invalid form value for key {key}: {e}")))?;
+				serializer.append_pair(&key, value.as_ref());
+			},
+		}
+	}
+	Ok(serializer.finish().into())
 }
 
 fn with<'a, 'rf, 'b>(
@@ -71,27 +233,11 @@ fn with<'a, 'rf, 'b>(
 	Ok(v)
 }
 pub fn variables<'a, 'rf>(ftx: &mut FunctionContext<'a, 'rf>) -> ResolveResult<'a> {
-	// Not ideal; we should find a way to dynamically expose
-	let keys = [
-		"request",
-		"response",
-		"jwt",
-		"apiKey",
-		"basicAuth",
-		"llm",
-		"source",
-		"mcp",
-		"backend",
-		"extauthz",
-		"extproc",
-	];
-	let mut res = vector_map::VecMap::with_capacity(keys.len());
-	for k in keys {
-		if let Some(v) = ftx.variables.resolve(k) {
-			res.insert(KeyRef::String((*k).into()), v);
-		}
+	if let Some(variables) = ftx.variables.variables() {
+		return Ok(variables);
 	}
-	Value::Map(MapValue::Borrow(res)).into()
+
+	Value::Map(MapValue::Borrow(vector_map::VecMap::new())).into()
 }
 
 fn map_values<'a, 'rf, 'b>(
@@ -114,6 +260,39 @@ fn map_values<'a, 'rf, 'b>(
 				res.insert(k.clone(), value.as_static());
 			}
 
+			Value::Map(MapValue::Borrow(res))
+		},
+		_ => return Err(this.error_expected_type(ValueType::Map)),
+	}
+	.into()
+}
+
+fn filter_keys<'a, 'rf, 'b>(
+	ftx: &'b mut FunctionContext<'a, 'rf>,
+	this: This,
+	ident: Argument,
+	expr: Argument,
+) -> ResolveResult<'a> {
+	if ftx.args.len() != 2 {
+		return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+	}
+	let this: Value<'a> = this.load_value(ftx)?;
+	let ident = ident.load_identifier(ftx)?;
+	let expr = expr.load_expression(ftx)?;
+	let x: &'rf dyn VariableResolver<'a> = ftx.vars();
+	match this {
+		Value::Map(map) => {
+			let mut res = vector_map::VecMap::with_capacity(map.len());
+			for (k, v) in map.iter() {
+				let resolver = SingleVarResolver::<'a, 'rf>::new(x, ident, k.clone().into());
+				let keep = match Value::resolve(expr, ftx.ptx, &resolver)? {
+					Value::Bool(b) => b,
+					_ => return Err(ExecutionError::NoSuchOverload),
+				};
+				if keep {
+					res.insert(k.clone(), v.clone().as_static());
+				}
+			}
 			Value::Map(MapValue::Borrow(res))
 		},
 		_ => return Err(this.error_expected_type(ValueType::Map)),
@@ -154,6 +333,27 @@ fn json_parse<'a>(ftx: &mut FunctionContext<'a, '_>, v: Argument) -> ResolveResu
 		_ => return Err(ftx.error(format!("invalid type {}", v.type_of()))),
 	};
 	let sv: serde_json::Value = sv.map_err(|e| ftx.error(e))?;
+	cel::to_value(sv).map_err(|e| ftx.error(e))
+}
+
+fn unvalidated_jwt_payload<'a>(
+	ftx: &mut FunctionContext<'a, '_>,
+	v: Argument,
+) -> ResolveResult<'a> {
+	let v: StringValue = v.load_value(ftx)?;
+	let parts: Vec<&str> = v.as_ref().split('.').collect();
+	if parts.len() != 3 {
+		return Err(ftx.error(format!(
+			"invalid JWT: expected 3 segments, got {}",
+			parts.len()
+		)));
+	}
+
+	use base64::Engine;
+	let payload = URL_SAFE_MAYBE_PADDED
+		.decode(parts[1].as_bytes())
+		.map_err(|e| ftx.error(e))?;
+	let sv: serde_json::Value = serde_json::from_slice(&payload).map_err(|e| ftx.error(e))?;
 	cel::to_value(sv).map_err(|e| ftx.error(e))
 }
 
@@ -209,6 +409,30 @@ fn default<'a>(ftx: &mut FunctionContext<'a, '_>, exp: Argument, d: Argument) ->
 		Some(v) => Ok(v),
 		None => Ok(d.load_unmaterialized(ftx)?),
 	}
+}
+
+fn coalesce<'a>(ftx: &mut FunctionContext<'a, '_>) -> ResolveResult<'a> {
+	if ftx.args.is_empty() {
+		return Err(ExecutionError::invalid_argument_count(1, 0));
+	}
+
+	let mut last_error = None;
+	let mut saw_null = false;
+	for exp in ftx.expr_iter() {
+		match Value::resolve(exp, ftx.ptx, ftx.vars()) {
+			Ok(Value::Null) => {
+				saw_null = true;
+			},
+			Ok(v) => return Ok(v),
+			Err(err) => last_error = Some(err),
+		}
+	}
+
+	if saw_null {
+		return Ok(Value::Null);
+	}
+
+	Err(last_error.unwrap_or_else(|| ExecutionError::invalid_argument_count(1, 0)))
 }
 
 mod json_field {

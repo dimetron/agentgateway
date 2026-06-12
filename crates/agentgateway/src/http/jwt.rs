@@ -1,25 +1,25 @@
 // Inspired by https://github.com/cdriehuys/axum-jwks/blob/main/axum-jwks/src/jwks.rs (MIT license)
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use ::cel::types::dynamic::DynamicType;
-use axum_core::RequestExt;
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm};
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use secrecy::SecretString;
 use serde_json::{Map, Value};
 
 use crate::client::Client;
 use crate::http::Request;
+use crate::http::auth::AuthorizationLocation;
+use crate::proxy::dtrace::{self};
 use crate::telemetry::log::RequestLog;
 use crate::*;
 
 #[cfg(test)]
 #[path = "jwt_tests.rs"]
 mod tests;
+
+const TRACE_POLICY_KIND: &str = "jwt";
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum TokenError {
@@ -37,6 +37,9 @@ pub enum TokenError {
 
 	#[error("token uses the unknown key {0:?}")]
 	UnknownKeyId(String),
+
+	#[error("failed to strip validated credentials from the request: {0}")]
+	CredentialRemoval(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -52,10 +55,17 @@ pub enum JwkError {
 		key_id: String,
 		error: jsonwebtoken::errors::Error,
 	},
-	#[error("the key {key_id:?} uses a non-RSA algorithm {algorithm:?}")]
+	#[error(
+		"the key {key_id:?} uses an unsupported algorithm {algorithm:?} (supported: RSA, EC, OKP[Ed25519])"
+	)]
 	UnexpectedAlgorithm {
 		algorithm: AlgorithmParameters,
 		key_id: String,
+	},
+	#[error("the key {key_id:?} uses unsupported OKP curve {curve:?} (supported: Ed25519)")]
+	UnsupportedCurve {
+		key_id: String,
+		curve: EllipticCurve,
 	},
 }
 
@@ -63,6 +73,7 @@ pub enum JwkError {
 pub struct Jwt {
 	mode: Mode,
 	providers: Vec<Provider>,
+	location: AuthorizationLocation,
 }
 
 #[derive(Clone)]
@@ -78,13 +89,16 @@ impl serde::Serialize for Jwt {
 		S: serde::Serializer,
 	{
 		#[derive(serde::Serialize)]
+		#[serde(rename_all = "camelCase")]
 		pub struct Serde<'a> {
 			mode: Mode,
 			providers: &'a Vec<Provider>,
+			location: &'a AuthorizationLocation,
 		}
 		Serde {
 			mode: self.mode,
 			providers: &self.providers,
+			location: &self.location,
 		}
 		.serialize(serializer)
 	}
@@ -114,63 +128,145 @@ impl Debug for Jwt {
 	}
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_de!)]
+#[serde(untagged)]
 pub enum LocalJwtConfig {
+	/// Validate JWTs against one or more trusted token issuers.
+	#[serde(rename_all = "camelCase")]
 	Multi {
+		/// Controls whether requests must include a JWT and how validation failures are handled.
 		#[serde(default)]
 		mode: Mode,
+		/// Where to read the JWT from in incoming requests.
+		#[serde(default)]
+		location: AuthorizationLocation,
+		/// Trusted issuers and their signing keys.
 		providers: Vec<ProviderConfig>,
 	},
+	/// Validate JWTs against a single trusted token issuer.
+	#[serde(rename_all = "camelCase")]
 	Single {
+		/// Controls whether requests must include a JWT and how validation failures are handled.
 		#[serde(default)]
 		mode: Mode,
+		/// Where to read the JWT from in incoming requests.
+		#[serde(default)]
+		location: AuthorizationLocation,
+		/// Expected token issuer, matched against the JWT `iss` claim.
 		issuer: String,
+		/// Accepted token audiences, matched against the JWT `aud` claim when set.
 		audiences: Option<Vec<String>>,
+		/// JSON Web Key Set used to verify token signatures. Can be inline, from a file, or fetched remotely.
 		jwks: serdes::FileInlineOrRemote,
+		/// Claim requirements to enforce after the token signature is verified.
+		#[serde(default)]
+		jwt_validation_options: JWTValidationOptions,
 	},
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[apply(schema_de!)]
 pub struct ProviderConfig {
+	/// Expected token issuer, matched against the JWT `iss` claim.
 	pub issuer: String,
+	/// Accepted token audiences, matched against the JWT `aud` claim when set.
 	pub audiences: Option<Vec<String>>,
+	/// JSON Web Key Set used to verify token signatures. Can be inline, from a file, or fetched remotely.
 	pub jwks: serdes::FileInlineOrRemote,
+	/// Claim requirements to enforce after the token signature is verified.
+	#[serde(default)]
+	pub jwt_validation_options: JWTValidationOptions,
 }
 
 #[apply(schema_enum!)]
 #[derive(Default)]
 pub enum Mode {
-	/// A valid token, issued by a configured issuer, must be present.
+	/// Require a valid JWT from a configured issuer.
 	Strict,
-	/// If a token exists, validate it.
+	/// Validate the JWT when present.
 	/// This is the default option.
-	/// Warning: this allows requests without a JWT token!
+	/// Warning: this allows requests without a JWT.
 	#[default]
 	Optional,
-	/// Requests are never rejected. This is useful for usage of claims in later steps (authorization, logging, etc).
-	/// Warning: this allows requests without a JWT token!
+	/// Decode valid JWTs for later policy use.
+	/// Warning: this allows requests with missing or invalid JWTs.
 	Permissive,
+}
+
+/// JWT validation options controlling which claims must be present in a token.
+///
+/// The `required_claims` set specifies which RFC 7519 registered claims must
+/// exist in the token payload before validation proceeds. Only the following
+/// values are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered
+/// claims such as `iat` and `jti` are **not** enforced by the underlying
+/// `jsonwebtoken` library and will be silently ignored.
+///
+/// This only enforces **presence**. Standard claims like `exp` and `nbf`
+/// have their values validated independently (e.g., expiry is always checked
+/// when the `exp` claim is present, regardless of this setting).
+///
+/// Defaults to `["exp"]`.
+#[derive(Eq, PartialEq)]
+#[apply(schema_de!)]
+pub struct JWTValidationOptions {
+	/// Claims that must be present in the token before validation.
+	/// Only "exp", "nbf", "aud", "iss", "sub" are enforced; others
+	/// (including "iat" and "jti") are ignored.
+	/// Defaults to ["exp"]. Use an empty list to require no claims.
+	#[serde(default = "default_required_claims")]
+	pub required_claims: HashSet<String>,
+}
+
+fn default_required_claims() -> HashSet<String> {
+	HashSet::from(["exp".to_owned()])
+}
+
+/// The only claim names the jsonwebtoken library actually enforces.
+const SUPPORTED_REQUIRED_CLAIMS: &[&str] = &["exp", "nbf", "aud", "iss", "sub"];
+
+/// Log a warning for each claim in `required_claims` that the library silently ignores.
+fn warn_unsupported_claims(required_claims: &HashSet<String>) {
+	for claim in required_claims {
+		if !SUPPORTED_REQUIRED_CLAIMS.contains(&claim.as_str()) {
+			tracing::warn!(
+				claim = %claim,
+				supported = ?SUPPORTED_REQUIRED_CLAIMS,
+				"ignoring unrecognized required claim"
+			);
+		}
+	}
+}
+
+impl Default for JWTValidationOptions {
+	fn default() -> Self {
+		Self {
+			required_claims: default_required_claims(),
+		}
+	}
 }
 
 impl LocalJwtConfig {
 	pub async fn try_into(self, client: Client) -> Result<Jwt, JwkError> {
-		let (mode, providers_cfg) = match self {
-			LocalJwtConfig::Multi { mode, providers } => (mode, providers),
+		let (mode, authorization_location, providers_cfg) = match self {
+			LocalJwtConfig::Multi {
+				mode,
+				location: authorization_location,
+				providers,
+			} => (mode, authorization_location, providers),
 			LocalJwtConfig::Single {
 				mode,
+				location: authorization_location,
 				issuer,
 				audiences,
 				jwks,
+				jwt_validation_options,
 			} => (
 				mode,
+				authorization_location,
 				vec![ProviderConfig {
 					issuer,
 					audiences,
 					jwks,
+					jwt_validation_options,
 				}],
 			),
 		};
@@ -182,10 +278,14 @@ impl LocalJwtConfig {
 				.load::<JwkSet>(client.clone())
 				.await
 				.map_err(JwkError::JwkLoadError)?;
-			let provider = Provider::from_jwks(jwks, pc.issuer, pc.audiences)?;
+			let provider = Provider::from_jwks(jwks, pc.issuer, pc.audiences, pc.jwt_validation_options)?;
 			providers.push(provider);
 		}
-		Ok(Jwt { mode, providers })
+		Ok(Jwt {
+			mode,
+			providers,
+			location: authorization_location,
+		})
 	}
 }
 
@@ -194,7 +294,10 @@ impl Provider {
 		jwks: JwkSet,
 		issuer: String,
 		audiences: Option<Vec<String>>,
+		jwt_validation_options: JWTValidationOptions,
 	) -> Result<Provider, JwkError> {
+		warn_unsupported_claims(&jwt_validation_options.required_claims);
+
 		let mut keys = HashMap::new();
 		let to_supported_alg = |key_algorithm: Option<KeyAlgorithm>| match key_algorithm {
 			Some(key_alg) => jsonwebtoken::Algorithm::from_str(key_alg.to_string().as_str()).ok(),
@@ -216,6 +319,20 @@ impl Provider {
 						key_id: kid.clone(),
 						error: err,
 					})?,
+					AlgorithmParameters::OctetKeyPair(okp) => match &okp.curve {
+						EllipticCurve::Ed25519 => {
+							DecodingKey::from_ed_components(&okp.x).map_err(|err| JwkError::DecodingError {
+								key_id: kid.clone(),
+								error: err,
+							})?
+						},
+						other => {
+							return Err(JwkError::UnsupportedCurve {
+								key_id: kid,
+								curve: other.clone(),
+							});
+						},
+					},
 					other => {
 						return Err(JwkError::UnexpectedAlgorithm {
 							key_id: kid,
@@ -234,7 +351,17 @@ impl Provider {
 							vec![Algorithm::ES256, Algorithm::ES384]
 						},
 						AlgorithmParameters::RSA(_) => {
-							vec![Algorithm::RS256, Algorithm::RS384, Algorithm::RS512]
+							vec![
+								Algorithm::RS256,
+								Algorithm::RS384,
+								Algorithm::RS512,
+								Algorithm::PS256,
+								Algorithm::PS384,
+								Algorithm::PS512,
+							]
+						},
+						AlgorithmParameters::OctetKeyPair(_) => {
+							vec![Algorithm::EdDSA]
 						},
 						_ => unreachable!(),
 					}
@@ -255,6 +382,10 @@ impl Provider {
 			}
 			validation.set_issuer(std::slice::from_ref(&issuer));
 
+			// Override required_spec_claims with the user-configured set.
+			// validate_exp remains true, so exp is still validated if present.
+			validation.required_spec_claims = jwt_validation_options.required_claims.clone();
+
 			keys.insert(
 				kid,
 				Jwk {
@@ -269,8 +400,16 @@ impl Provider {
 }
 
 impl Jwt {
-	pub fn from_providers(providers: Vec<Provider>, mode: Mode) -> Jwt {
-		Jwt { mode, providers }
+	pub fn from_providers(
+		providers: Vec<Provider>,
+		mode: Mode,
+		authorization_location: AuthorizationLocation,
+	) -> Jwt {
+		Jwt {
+			mode,
+			providers,
+			location: authorization_location,
+		}
 	}
 }
 
@@ -281,12 +420,29 @@ struct Jwk {
 }
 
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "schema", derive(JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(with = "Map<String, Value>"))]
 pub struct Claims {
 	pub inner: Map<String, Value>,
-	#[cfg_attr(feature = "schema", schemars(skip))]
 	pub jwt: SecretString,
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Claims {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"JwtClaims".into()
+	}
+
+	fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({
+			"type": "object",
+			"properties": {
+				"rawToken": {
+					"description": "The raw bearer token. Redacted by default; use `jwt.rawToken.unredacted()` to access the actual value.",
+					"type": "string"
+				}
+			},
+			"additionalProperties": true
+		})
+	}
 }
 
 impl DynamicType for Claims {
@@ -295,7 +451,10 @@ impl DynamicType for Claims {
 	}
 
 	fn field(&self, field: &str) -> Option<cel::Value<'_>> {
-		self.inner.field(field)
+		match field {
+			"rawToken" => Some(crate::cel::secret_string_to_value(&self.jwt)),
+			_ => self.inner.field(field),
+		}
 	}
 }
 
@@ -322,38 +481,70 @@ impl<'de> Deserialize<'de> for Claims {
 }
 
 impl Jwt {
+	pub fn expressions(&self) -> impl Iterator<Item = &crate::cel::Expression> {
+		self.location.expression().into_iter()
+	}
+
 	pub async fn apply(
 		&self,
 		log: Option<&mut RequestLog>,
 		req: &mut Request,
 	) -> Result<(), TokenError> {
-		let Ok(TypedHeader(Authorization(bearer))) = req
-			.extract_parts::<TypedHeader<Authorization<Bearer>>>()
-			.await
-		else {
+		let Some(token) = self.location.extract(req) else {
 			// In strict mode, we require a token
 			if self.mode == Mode::Strict {
+				dtrace::pol_result!(
+					dtrace::Error,
+					Apply,
+					"rejected request because JWT is required but missing"
+				);
 				return Err(TokenError::Missing);
 			}
 			// Otherwise with no, don't attempt to authenticate.
+			dtrace::pol_result!(
+				dtrace::Info,
+				Skip,
+				"request has no bearer token and JWT mode is not strict"
+			);
 			return Ok(());
 		};
-		let claims = match self.validate_claims(bearer.token()) {
+		let claims = match self.validate_claims(&token) {
 			Ok(claims) => claims,
 			Err(e) if self.mode == Mode::Permissive => {
-				debug!("token verification failed ({e}), continue due to permissive mode");
+				dtrace::pol_result!(
+					dtrace::Warn,
+					Skip,
+					"token verification failed ({e}), continue due to permissive mode"
+				);
 				return Ok(());
 			},
-			Err(e) => return Err(e),
+			Err(e) => {
+				dtrace::pol_result!(
+					dtrace::Severity::Error,
+					Apply,
+					"rejected request because JWT validation failed: {e}"
+				);
+				return Err(e);
+			},
 		};
+
 		if let Some(serde_json::Value::String(sub)) = claims.inner.get("sub")
 			&& let Some(log) = log
 		{
 			log.jwt_sub = Some(sub.to_string());
 		};
 		// Remove the token.
-		req.headers_mut().remove(http::header::AUTHORIZATION);
+		self
+			.location
+			.remove(req)
+			.map_err(|e| TokenError::CredentialRemoval(e.to_string()))?;
 		// Insert the claims into extensions so we can reference it later
+		dtrace::pol_result!(
+			dtrace::Severity::Info,
+			Apply,
+			"authenticated request with JWT claims {}",
+			serde_json::to_string(&claims).unwrap_or_else(|_| "invalid claims".to_string())
+		);
 		req.extensions_mut().insert(claims);
 		Ok(())
 	}

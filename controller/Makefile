@@ -106,7 +106,11 @@ fmt:  ## Format the code with golangci-lint
 
 .PHONY: fmt-changed
 fmt-changed: ## Format only the changed code with golangci-lint (skip deleted files)
-	git status -s -uno | awk '{print $$2}' | grep '.*.go$$' | xargs -r -I{} bash -lc '[ -f "{}" ] && $(CUSTOM_GOLANGCI_LINT_FMT) "{}" || true'
+	@if git -C .. rev-parse --show-toplevel >/dev/null 2>&1; then \
+		git -C .. status -s -uno | awk '{print $$2}'; \
+	else \
+		jj -R .. diff --name-only 2>/dev/null; \
+	fi | sed 's#^controller/##' | awk '/.*\.go$$/' | xargs -r -I{} bash -lc '[ -f "{}" ] && $(CUSTOM_GOLANGCI_LINT_FMT) "{}" || true'
 
 # must be a separate target so that make waits for it to complete before moving on
 .PHONY: mod-download
@@ -117,7 +121,6 @@ mod-download:  ## Download the dependencies
 .PHONY: mod-tidy-nested
 mod-tidy-nested:  ## Tidy go mod files in nested modules
 	@echo "Tidying tools..." && cd ../tools && go mod tidy
-	@echo "Tidying test/e2e/defaults/extproc..." && cd test/e2e/defaults/extproc && go mod tidy
 
 .PHONY: mod-tidy
 mod-tidy: mod-download mod-tidy-nested ## Tidy the go mod file
@@ -128,11 +131,18 @@ mod-tidy: mod-download mod-tidy-nested ## Tidy the go mod file
 #----------------------------------------------------------------------------
 
 .PHONY: analyze
-analyze: $(CUSTOM_GOLANGCI_LINT_BIN)  ## Run golangci-lint. Override options with ANALYZE_ARGS.
+analyze: ensure-custom-golangci-lint  ## Run golangci-lint. Override options with ANALYZE_ARGS.
 	$(CUSTOM_GOLANGCI_LINT_RUN) $(ANALYZE_ARGS) ./...
 
-$(CUSTOM_GOLANGCI_LINT_BIN): ../go.mod ../go.sum .custom-gcl.yml
-	golangci-lint custom
+.PHONY: ensure-custom-golangci-lint
+ensure-custom-golangci-lint:
+	@expected_go_version="$$(go env GOVERSION)"; \
+	current_go_version="$$( $(CUSTOM_GOLANGCI_LINT_BIN) version 2>/dev/null | sed -n 's/.* built with \(go[0-9.]*\).*/\1/p' )"; \
+	if [ ! -x "$(CUSTOM_GOLANGCI_LINT_BIN)" ] || [ "$$current_go_version" != "$$expected_go_version" ]; then \
+		echo "Rebuilding golangci-lint custom with $$expected_go_version..."; \
+		rm -f "$(CUSTOM_GOLANGCI_LINT_BIN)"; \
+		golangci-lint custom; \
+	fi
 
 .PHONY: lint-actions
 lint-actions: ## Lint the GitHub Actions workflows
@@ -175,10 +185,11 @@ test: ## Run all tests with ginkgo, or only run the test package at {TEST_PKG} i
 # will still have e2e tests run by Github Actions once they publish a pull
 # request.
 .PHONY: e2e-test
-e2e-test: extproc-server-docker kind-load-extproc-server
+e2e-test: testbox-docker kind-load-testbox
 e2e-test: go-test
 e2e-test: TEST_TAG = e2e
 e2e-test: GO_TEST_ARGS = $(E2E_GO_TEST_ARGS)
+e2e-test: export VERSION := $(VERSION)
 
 
 # https://go.dev/blog/cover#heat-maps
@@ -356,13 +367,13 @@ $(STAMP_DIR)/mod-tidy: $(MOD_FILES) | $(STAMP_DIR)
 # License generation with dependency tracking
 $(STAMP_DIR)/generate-licenses: $(MOD_FILES) | $(STAMP_DIR)
 	@echo "Generating licenses..."
-	GO111MODULE=on go run hack/utils/oss_compliance/oss_compliance.go osagen -c "GNU General Public License v2.0,GNU General Public License v3.0,GNU Lesser General Public License v2.1,GNU Lesser General Public License v3.0,GNU Affero General Public License v3.0"
-	GO111MODULE=on go run hack/utils/oss_compliance/oss_compliance.go osagen -s "Mozilla Public License 2.0,GNU General Public License v2.0,GNU General Public License v3.0,GNU Lesser General Public License v2.1,GNU Lesser General Public License v3.0,GNU Affero General Public License v3.0"> hack/utils/oss_compliance/osa_provided.md
-	GO111MODULE=on go run hack/utils/oss_compliance/oss_compliance.go osagen -i "Mozilla Public License 2.0"> hack/utils/oss_compliance/osa_included.md
+	../tools/oss_compliance osagen -c "GNU General Public License v2.0,GNU General Public License v3.0,GNU Lesser General Public License v2.1,GNU Lesser General Public License v3.0,GNU Affero General Public License v3.0"
+	../tools/oss_compliance osagen -s "Mozilla Public License 2.0,GNU General Public License v2.0,GNU General Public License v3.0,GNU Lesser General Public License v2.1,GNU Lesser General Public License v3.0,GNU Affero General Public License v3.0"> hack/utils/oss_compliance/osa_provided.md
+	../tools/oss_compliance osagen -i "Mozilla Public License 2.0"> hack/utils/oss_compliance/osa_included.md
 	@touch $@
 
 # Formatting - only runs if generation steps changed
-$(STAMP_DIR)/fmt: $(STAMP_DIR)/go-generate-all $(CUSTOM_GOLANGCI_LINT_BIN)
+$(STAMP_DIR)/fmt: $(STAMP_DIR)/go-generate-all ensure-custom-golangci-lint
 	@echo "Formatting code..."
 	$(CUSTOM_GOLANGCI_LINT_FMT) ./...
 	@touch $@
@@ -411,6 +422,35 @@ export AGENTGATEWAY_IMAGE_REPO ?= agentgateway-controller
 agentgateway-controller:
 	 $(GO_BUILD_FLAGS) GOOS=linux go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(CONTROLLER_OUTPUT_DIR)/agentgateway-linux-$(GOARCH) ./cmd/agentgateway
 
+#----------------------------------------------------------------------------------
+# agctl CLI
+#----------------------------------------------------------------------------------
+
+AGCTL_OUTPUT_DIR=$(OUTPUT_DIR)/pkg/agctl
+
+.PHONY: agctl
+agctl: ## Build agctl for the host OS/arch
+	CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(AGCTL_OUTPUT_DIR)/agctl-$(GOOS)-$(GOARCH) ./cmd/agctl
+
+.PHONY: agctl-linux-amd64
+agctl-linux-amd64: ## Build agctl for linux/amd64
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(AGCTL_OUTPUT_DIR)/agctl-linux-amd64 ./cmd/agctl
+
+.PHONY: agctl-linux-arm64
+agctl-linux-arm64: ## Build agctl for linux/arm64
+	CGO_ENABLED=0 GOARCH=arm64 GOOS=linux go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(AGCTL_OUTPUT_DIR)/agctl-linux-arm64 ./cmd/agctl
+
+.PHONY: agctl-darwin-arm64
+agctl-darwin-arm64: ## Build agctl for darwin/arm64
+	CGO_ENABLED=0 GOARCH=arm64 GOOS=darwin go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(AGCTL_OUTPUT_DIR)/agctl-darwin-arm64 ./cmd/agctl
+
+.PHONY: agctl-windows-amd64
+agctl-windows-amd64: ## Build agctl for windows/amd64
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=windows go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(AGCTL_OUTPUT_DIR)/agctl-windows-amd64.exe ./cmd/agctl
+
+.PHONY: agctl-release
+agctl-release: agctl-linux-amd64 agctl-linux-arm64 agctl-darwin-arm64 agctl-windows-amd64 ## Build agctl for all release targets
+
 $(CONTROLLER_OUTPUT_DIR)/Dockerfile.agentgateway: cmd/agentgateway/Dockerfile.agentgateway
 	cp $< $@
 
@@ -420,6 +460,10 @@ agentgateway-controller-docker: agentgateway-controller $(CONTROLLER_OUTPUT_DIR)
 		--build-arg GOARCH=$(GOARCH) \
 		-t $(IMAGE_REGISTRY)/$(AGENTGATEWAY_IMAGE_REPO):$(VERSION)
 
+.PHONY: agentgateway-docker
+agentgateway-docker: ## Build the proxy Docker image from the root Makefile
+	$(MAKE) -C .. docker IMAGE_TAG=$(VERSION)
+
 .PHONY: agentgateway-controller-docker-local
 agentgateway-controller-docker-local: agentgateway-controller $(CONTROLLER_OUTPUT_DIR)/Dockerfile.agentgateway
 	docker buildx build --push $(PLATFORM) $(CONTROLLER_OUTPUT_DIR) -f $(CONTROLLER_OUTPUT_DIR)/Dockerfile.agentgateway \
@@ -427,67 +471,42 @@ agentgateway-controller-docker-local: agentgateway-controller $(CONTROLLER_OUTPU
 		-t localhost:5000/$(AGENTGATEWAY_IMAGE_REPO):$(TAG)
 
 #----------------------------------------------------------------------------------
-# dummy idp (used in e2e tests)
+# testbox (used in e2e tests)
 #----------------------------------------------------------------------------------
 
-DUMMY_IDP_DIR=hack/dummy-idp
-DUMMY_IDP_OUTPUT_DIR=$(OUTPUT_DIR)/$(DUMMY_IDP_DIR)
-export DUMMY_IDP_IMAGE_REPO ?= dummy-idp
-DUMMY_IDP_VERSION=0.0.1
+TESTBOX_DIR=hack/testbox
+TESTBOX_OUTPUT_DIR=$(OUTPUT_DIR)/$(TESTBOX_DIR)
+export TESTBOX_IMAGE_REPO ?= testbox
+TESTBOX_VERSION=0.0.1
 
-.PHONY: dummy-idp
-dummy-idp:
-	$(GO_BUILD_FLAGS) GOOS=linux go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(DUMMY_IDP_OUTPUT_DIR)/dummy-idp-linux-$(GOARCH) ./hack/dummy-idp...
+.PHONY: testbox
+testbox:
+	$(GO_BUILD_FLAGS) GOOS=linux go build -ldflags='$(LDFLAGS)' -gcflags='$(GCFLAGS)' -o $(TESTBOX_OUTPUT_DIR)/testbox-linux-$(GOARCH) ./hack/testbox...
 
-$(DUMMY_IDP_OUTPUT_DIR)/Dockerfile.dummy-idp: ./hack/dummy-idp/Dockerfile
+$(TESTBOX_OUTPUT_DIR)/Dockerfile.testbox: ./hack/testbox/Dockerfile
 	cp $< $@
 
-.PHONY: dummy-idp-docker
-dummy-idp-docker: dummy-idp $(DUMMY_IDP_OUTPUT_DIR)/Dockerfile.dummy-idp
-	$(BUILDX_BUILD) --load $(PLATFORM) $(DUMMY_IDP_OUTPUT_DIR) -f $(DUMMY_IDP_OUTPUT_DIR)/Dockerfile.dummy-idp \
+.PHONY: testbox-docker
+testbox-docker: testbox $(TESTBOX_OUTPUT_DIR)/Dockerfile.testbox
+	$(BUILDX_BUILD) --load $(PLATFORM) $(TESTBOX_OUTPUT_DIR) -f $(TESTBOX_OUTPUT_DIR)/Dockerfile.testbox \
 		--build-arg GOARCH=$(GOARCH) \
-		--build-arg BASE_IMAGE=$(ALPINE_BASE_IMAGE) \
-		-t $(IMAGE_REGISTRY)/$(DUMMY_IDP_IMAGE_REPO):$(DUMMY_IDP_VERSION)
+		-t $(IMAGE_REGISTRY)/$(TESTBOX_IMAGE_REPO):$(TESTBOX_VERSION)
 
-.PHONY: kind-load-dummy-idp
-kind-load-dummy-idp:
-	kind load docker-image $(IMAGE_REGISTRY)/$(DUMMY_IDP_IMAGE_REPO):$(DUMMY_IDP_VERSION) --name $(CLUSTER_NAME)
-
-#----------------------------------------------------------------------------------
-# extproc-server (used in e2e tests)
-#----------------------------------------------------------------------------------
-
-EXTPROC_SERVER_DIR=test/e2e/defaults/extproc
-EXTPROC_SERVER_OUTPUT_DIR=$(OUTPUT_DIR)/$(EXTPROC_SERVER_DIR)
-export EXTPROC_SERVER_IMAGE_REPO ?= extproc-server
-EXTPROC_SERVER_VERSION=0.0.1
-
-$(EXTPROC_SERVER_OUTPUT_DIR)/.docker-stamp-$(EXTPROC_SERVER_VERSION)-$(GOARCH): $(shell find $(EXTPROC_SERVER_DIR) -name '*.go') $(EXTPROC_SERVER_DIR)/Dockerfile
-	$(BUILDX_BUILD) --load $(PLATFORM) $(EXTPROC_SERVER_DIR) -f $(EXTPROC_SERVER_DIR)/Dockerfile \
-		-t $(IMAGE_REGISTRY)/$(EXTPROC_SERVER_IMAGE_REPO):$(EXTPROC_SERVER_VERSION)
-	@mkdir -p $(dir $@)
-	@touch $@
-
-.PHONY: extproc-server-docker
-extproc-server-docker: $(EXTPROC_SERVER_OUTPUT_DIR)/.docker-stamp-$(EXTPROC_SERVER_VERSION)-$(GOARCH)
-
-.PHONY: kind-load-extproc-server
-kind-load-extproc-server:
-	kind load docker-image $(IMAGE_REGISTRY)/$(EXTPROC_SERVER_IMAGE_REPO):$(EXTPROC_SERVER_VERSION) --name $(CLUSTER_NAME)
+.PHONY: kind-load-testbox
+kind-load-testbox:
+	kind load docker-image $(IMAGE_REGISTRY)/$(TESTBOX_IMAGE_REPO):$(TESTBOX_VERSION) --name $(CLUSTER_NAME)
 
 #----------------------------------------------------------------------------------
 # Helm
 #----------------------------------------------------------------------------------
 
 HELM ?= helm
-# It would be nice to use actual semver '--version', as Helm docs clearly state
-# is intended (and yet is not enforced by 'helm lint'). Here we say '--version
-# v2.0.0', not '--version 2.0.0', e.g. To do it cleanly, you'd probably
-# repackage all published versions' charts and republish as vA.B.C and A.B.C
-# both. Users would be surprised if their installation recipes had to change on
-# some patch or minor version release. ('--app-version v2.0.0' is acceptable
-# and in fact preferred since it matches our git tags and OCI image tags.)
-HELM_PACKAGE_ARGS ?= --version $(VERSION) --app-version $(VERSION)
+# Publish charts with both semver variants to preserve compatibility.
+# Keep VERSION as-is for image tags and other release identifiers.
+HELM_CHART_VERSION_NO_V ?= $(patsubst v%,%,$(VERSION))
+HELM_CHART_VERSION_V ?= v$(HELM_CHART_VERSION_NO_V)
+HELM_PACKAGE_ARGS ?= --version $(HELM_CHART_VERSION_NO_V) --app-version $(HELM_CHART_VERSION_NO_V)
+EXTRA_HELM_TAG ?=
 HELM_CHART_DIR_AGW=install/helm/agentgateway
 HELM_CHART_DIR_AGW_CRD=install/helm/agentgateway-crds
 HELM_ADDITIONAL_VALUES ?= hack/helm/dev.yaml
@@ -507,26 +526,39 @@ package-agentgateway-crd-chart: ## Package the agentgateway crd chart
 	$(HELM) package $(HELM_PACKAGE_ARGS) --destination $(TEST_ASSET_DIR) $(HELM_CHART_DIR_AGW_CRD); \
 	$(HELM) repo index $(TEST_ASSET_DIR);
 
-# VERSION_NO_V strips the leading 'v' from VERSION (e.g., v2.0.0 -> 2.0.0)
-VERSION_NO_V := $(patsubst v%,%,$(VERSION))
 CHART_NAMES := agentgateway agentgateway-crds
 
 .PHONY: release-charts
-release-charts: ## Release the agentgateway charts (publishes both vX.Y.Z and X.Y.Z tags)
-	@for v in $(VERSION) $(VERSION_NO_V); do \
-		$(MAKE) package-agentgateway-charts VERSION=$$v; \
-		for chart in $(CHART_NAMES); do \
-			$(HELM) push $(TEST_ASSET_DIR)/$$chart-$$v.tgz oci://$(IMAGE_REGISTRY)/charts; \
-		done; \
-	done
+release-charts: package-agentgateway-charts
+	mkdir -p $(TEST_ASSET_DIR); \
+	$(HELM) package --version $(HELM_CHART_VERSION_V) --app-version $(HELM_CHART_VERSION_V) --destination $(TEST_ASSET_DIR) $(HELM_CHART_DIR_AGW); \
+	$(HELM) repo index $(TEST_ASSET_DIR);
+	mkdir -p $(TEST_ASSET_DIR); \
+	$(HELM) package --version $(HELM_CHART_VERSION_V) --app-version $(HELM_CHART_VERSION_V) --destination $(TEST_ASSET_DIR) $(HELM_CHART_DIR_AGW_CRD); \
+	$(HELM) repo index $(TEST_ASSET_DIR);
+	@if [ -n "$(EXTRA_HELM_TAG)" ]; then \
+		mkdir -p $(TEST_ASSET_DIR); \
+		$(HELM) package --version $(EXTRA_HELM_TAG) --app-version $(VERSION) --destination $(TEST_ASSET_DIR) $(HELM_CHART_DIR_AGW); \
+		$(HELM) repo index $(TEST_ASSET_DIR); \
+		mkdir -p $(TEST_ASSET_DIR); \
+		$(HELM) package --version $(EXTRA_HELM_TAG) --app-version $(VERSION) --destination $(TEST_ASSET_DIR) $(HELM_CHART_DIR_AGW_CRD); \
+		$(HELM) repo index $(TEST_ASSET_DIR); \
+	fi
+	@for chart in $(CHART_NAMES); do \
+		$(HELM) push $(TEST_ASSET_DIR)/$$chart-$(HELM_CHART_VERSION_NO_V).tgz oci://$(IMAGE_REGISTRY)/charts; \
+		$(HELM) push $(TEST_ASSET_DIR)/$$chart-$(HELM_CHART_VERSION_V).tgz oci://$(IMAGE_REGISTRY)/charts; \
+		if [ -n "$(EXTRA_HELM_TAG)" ]; then \
+			$(HELM) push $(TEST_ASSET_DIR)/$$chart-$(EXTRA_HELM_TAG).tgz oci://$(IMAGE_REGISTRY)/charts; \
+		fi; \
+	done;
 
 .PHONY: deploy-agentgateway-crd-chart
 deploy-agentgateway-crd-chart: ## Deploy the agentgateway crd chart
-	$(HELM) upgrade --install agentgateway-crds $(TEST_ASSET_DIR)/agentgateway-crds-$(VERSION).tgz --namespace $(INSTALL_NAMESPACE) --create-namespace
+	$(HELM) upgrade --install agentgateway-crds $(TEST_ASSET_DIR)/agentgateway-crds-$(HELM_CHART_VERSION_NO_V).tgz --namespace $(INSTALL_NAMESPACE) --create-namespace
 
 .PHONY: deploy-agentgateway-chart
 deploy-agentgateway-chart: ## Deploy the agentgateway chart
-	$(HELM) upgrade --install agentgateway $(TEST_ASSET_DIR)/agentgateway-$(VERSION).tgz \
+	$(HELM) upgrade --install agentgateway $(TEST_ASSET_DIR)/agentgateway-$(HELM_CHART_VERSION_NO_V).tgz \
 	--namespace $(INSTALL_NAMESPACE) --create-namespace \
 	--set image.registry=$(IMAGE_REGISTRY) \
 	--set image.tag=$(VERSION) \
@@ -554,15 +586,15 @@ CLUSTER_NAME ?= kind
 INSTALL_NAMESPACE ?= agentgateway-system
 
 # The version of the Node Docker image to use for booting the kind cluster: https://hub.docker.com/r/kindest/node/tags
-# This version should stay in sync with `hack/kind/setup-kind.sh`.
-CLUSTER_NODE_VERSION ?= v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+# This version should stay in sync with the default node version in (controller)`test/setup/setup-kind-ci.sh`.
+CLUSTER_NODE_VERSION ?= v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
 
 .PHONY: kind-create
 kind-create: ## Create a KinD cluster
 	kind get clusters | grep $(CLUSTER_NAME) || kind create cluster --name $(CLUSTER_NAME) --image kindest/node:$(CLUSTER_NODE_VERSION)
 
 CONFORMANCE_CHANNEL ?= experimental
-CONFORMANCE_VERSION ?= v1.4.1
+CONFORMANCE_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/gateway-api)
 .PHONY: gw-api-crds
 gw-api-crds: ## Install the Gateway API CRDs. HACK: Use SSA to avoid the issue with the CRD annotations being too long.
 ifeq ($(shell echo $(CONFORMANCE_VERSION) | grep -q '^v[0-9]' && echo yes),yes)
@@ -576,10 +608,7 @@ endif
 endif
 
 # The version of the k8s gateway api inference extension CRDs to install.
-# Managed by `make bump-gie`.
-GIE_CRD_VERSION ?= v1.3.0
-# When we are back on a release version instead of `main`, we can do this
-#GIE_CRD_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/gateway-api-inference-extension)
+GIE_CRD_VERSION ?= $(shell go list -m -f '{{.Version}}' sigs.k8s.io/gateway-api-inference-extension)
 
 .PHONY: gie-crds
 gie-crds: ## Install the Gateway API Inference Extension CRDs
@@ -589,20 +618,33 @@ else
 	kubectl apply --kustomize "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=$(GIE_CRD_VERSION)"
 endif
 
-.PHONY: kind-metallb
+# Source the Istio CRDs from the vendored istio.io/istio module so the CRD
+# version always matches the API version agentgateway is compiled against.
+# The controller consumes Istio's ambient collections (WorkloadEntry,
+# ServiceEntry, AuthorizationPolicy...) so these CRDs must exist for those
+# informers to receive objects.
+ISTIO_CRDS_FILE := $(shell go list -m -f '{{.Dir}}' istio.io/istio)/manifests/charts/base/files/crd-all.gen.yaml
+
+.PHONY: istio-crds
+istio-crds: ## Install Istio CRDs (WorkloadEntry, ServiceEntry, etc.) from the vendored istio module
+	kubectl apply --server-side -f "$(ISTIO_CRDS_FILE)"
+
+.PHONY: metallb
 metallb: ## Install the MetalLB load balancer
-	./hack/kind/setup-metalllb-on-kind.sh
+	kubectl apply -f ./test/setup/metallb.yaml
+	kubectl rollout status -n metallb-system deployment/controller --timeout=120s
+	kubectl rollout status -n metallb-system daemonset/speaker --timeout=120s
 
 .PHONY: deploy-agentgateway
 deploy-agentgateway: package-agentgateway-charts deploy-agentgateway-crd-chart deploy-agentgateway-chart ## Deploy the agentgateway chart and CRDs
 
 .PHONY: setup-base
-setup-base: kind-create gw-api-crds gie-crds metallb ## Setup the base infrastructure (kind cluster, CRDs, and MetalLB)
+setup-base: kind-create gw-api-crds gie-crds istio-crds metallb ## Setup the base infrastructure (kind cluster, CRDs, and MetalLB)
 
 # Creates a functional kind cluster, builds and loads all images, and packages charts
 # Does NOT deploy anything to the cluster
 .PHONY: setup
-setup: setup-base kind-build-and-load package-agentgateway-charts dummy-idp-docker kind-load-dummy-idp  ## Setup the complete infrastructure (base setup plus images and charts)
+setup: setup-base kind-build-and-load package-agentgateway-charts  ## Setup base infra, build/load images, and package charts (without deployment)
 
 .PHONY: run
 run: setup deploy-agentgateway ## Set up complete development environment
@@ -642,11 +684,12 @@ kind-reload-%: kind-build-and-load-% kind-set-image-% ; ## Use to build specifie
 
 .PHONY: kind-build-and-load ## Use to build all images and load them into kind
 kind-build-and-load: kind-build-and-load-agentgateway-controller
-kind-build-and-load: kind-build-and-load-dummy-idp
+kind-build-and-load: kind-build-and-load-agentgateway
+kind-build-and-load: kind-build-and-load-testbox
 
 .PHONY: kind-load ## Use to load all images into kind
 kind-load: kind-load-agentgateway-controller
-kind-load: kind-load-dummy-idp
+kind-load: kind-load-testbox
 
 #----------------------------------------------------------------------------------
 # Targets for running Agent Gateway conformance tests

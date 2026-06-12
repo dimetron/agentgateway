@@ -15,8 +15,8 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/wellknown"
 	"github.com/agentgateway/agentgateway/controller/pkg/pluginsdk/reporter"
+	"github.com/agentgateway/agentgateway/controller/pkg/wellknown"
 )
 
 // Status message constants
@@ -30,12 +30,12 @@ const (
 	ValidRefsMessage             = "Successfully resolved all references"
 	ListenerProgrammedMessage    = "Successfully programmed Listener"
 	RouteAcceptedMessage         = "Successfully accepted Route"
-	GatewayClassAcceptedMessage  = "GatewayClass accepted by kgateway controller"
+	GatewayClassAcceptedMessage  = "GatewayClass accepted by agentgateway controller"
 )
 
 // TODO: refactor this struct + methods to better reflect the usage now in proxy_syncer
 
-func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attachedRoutes map[string]uint) *gwv1.GatewayStatus {
+func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attachedListeners int32) *gwv1.GatewayStatus {
 	gwReport := r.Gateway(&gw)
 	if gwReport == nil {
 		return nil
@@ -44,16 +44,15 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 	finalListeners := make([]gwv1.ListenerStatus, 0, len(gw.Spec.Listeners))
 	var invalidListeners []string
 	var invalidMessages []string
+	invalidListenerNames := map[string]struct{}{}
+	acceptedListeners := 0
+	var resolvedRefsReason gwv1.GatewayConditionReason
+	var resolvedRefsMessage string
 
 	for _, lis := range gw.Spec.Listeners {
 		lisReport := gwReport.listener(string(lis.Name))
 		AddMissingListenerConditions(lisReport)
 		// Get attached routes for this listener
-		if attachedRoutes != nil {
-			if count, exists := attachedRoutes[string(lis.Name)]; exists {
-				lisReport.Status.AttachedRoutes = int32(count) //nolint:gosec // G115: route count is always non-negative
-			}
-		}
 
 		finalConditions := make([]metav1.Condition, 0, len(lisReport.Status.Conditions))
 		oldLisStatusIndex := slices.IndexFunc(gw.Status.Listeners, func(l gwv1.ListenerStatus) bool {
@@ -70,12 +69,37 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 			}
 			meta.SetStatusCondition(&finalConditions, lisCondition)
 
+			if lisCondition.Type == string(gwv1.ListenerConditionAccepted) {
+				if lisCondition.Status == metav1.ConditionTrue {
+					acceptedListeners++
+				} else if lisCondition.Status == metav1.ConditionFalse {
+					if _, alreadyInvalid := invalidListenerNames[string(lis.Name)]; !alreadyInvalid {
+						invalidListenerNames[string(lis.Name)] = struct{}{}
+						invalidListeners = append(invalidListeners, string(lis.Name))
+					}
+					if lisCondition.Message != "" {
+						invalidMessages = append(invalidMessages, fmt.Sprintf("%s: %s", lis.Name, lisCondition.Message))
+					}
+				}
+			}
+
 			// Check if this is the Programmed condition and it's False
 			if lisCondition.Type == string(gwv1.ListenerConditionProgrammed) && lisCondition.Status == metav1.ConditionFalse {
-				invalidListeners = append(invalidListeners, string(lis.Name))
+				if _, alreadyInvalid := invalidListenerNames[string(lis.Name)]; !alreadyInvalid {
+					invalidListenerNames[string(lis.Name)] = struct{}{}
+					invalidListeners = append(invalidListeners, string(lis.Name))
+				}
 				if lisCondition.Message != "" {
 					invalidMessages = append(invalidMessages, fmt.Sprintf("%s: %s", lis.Name, lisCondition.Message))
 				}
+			}
+
+			if lisCondition.Type == string(gwv1.ListenerConditionResolvedRefs) &&
+				lisCondition.Status == metav1.ConditionFalse &&
+				isGatewayBackendTLSResolvedRefsCondition(lisCondition.Reason, lisCondition.Message) &&
+				resolvedRefsReason == "" {
+				resolvedRefsReason = gwv1.GatewayConditionReason(lisCondition.Reason)
+				resolvedRefsMessage = lisCondition.Message
 			}
 		}
 		lisReport.Status.Conditions = finalConditions
@@ -83,24 +107,63 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 		finalListeners = append(finalListeners, lisReport.Status)
 	}
 
-	// If any listeners have Programmed=False, set Gateway Accepted=True with ListenersNotValid reason
+	// If any listeners are invalid, Gateway Accepted depends on whether at least one
+	// listener remains accepted.
 	if len(invalidListeners) > 0 {
-		message := fmt.Sprintf("Some listeners are not programmed: %s", strings.Join(invalidMessages, "; "))
+		message := fmt.Sprintf("Some listeners are not accepted: %s", strings.Join(invalidMessages, "; "))
 		if len(invalidMessages) == 0 {
-			message = fmt.Sprintf("Some listeners are not programmed: %s", strings.Join(invalidListeners, ", "))
+			message = fmt.Sprintf("Some listeners are not accepted: %s", strings.Join(invalidListeners, ", "))
+		}
+		status := metav1.ConditionFalse
+		if acceptedListeners > 0 {
+			status = metav1.ConditionTrue
 		}
 
 		gwReport.SetCondition(reporter.GatewayCondition{
 			Type:    gwv1.GatewayConditionAccepted,
-			Status:  metav1.ConditionTrue,
+			Status:  status,
 			Reason:  gwv1.GatewayReasonListenersNotValid,
 			Message: message,
 		})
+	}
+	if resolvedRefsReason != "" {
+		gwReport.SetCondition(reporter.GatewayCondition{
+			Type:    gwv1.GatewayConditionResolvedRefs,
+			Status:  metav1.ConditionFalse,
+			Reason:  resolvedRefsReason,
+			Message: resolvedRefsMessage,
+		})
+	} else if gw.Spec.TLS != nil && gw.Spec.TLS.Backend != nil {
+		gwReport.SetCondition(reporter.GatewayCondition{
+			Type:    gwv1.GatewayConditionResolvedRefs,
+			Status:  metav1.ConditionTrue,
+			Reason:  gwv1.GatewayReasonResolvedRefs,
+			Message: "All references were resolved",
+		})
+	}
+
+	if gw.Spec.TLS != nil && gw.Spec.TLS.Frontend != nil {
+		fe := gw.Spec.TLS.Frontend
+		hasInsecure := fe.Default.Validation != nil && fe.Default.Validation.Mode == gwv1.AllowInsecureFallback
+		for _, p := range fe.PerPort {
+			if p.TLS.Validation != nil && p.TLS.Validation.Mode == gwv1.AllowInsecureFallback {
+				hasInsecure = true
+			}
+		}
+		if hasInsecure {
+			gwReport.SetCondition(reporter.GatewayCondition{
+				Type:    gwv1.GatewayConditionInsecureFrontendValidationMode,
+				Status:  metav1.ConditionTrue,
+				Reason:  gwv1.GatewayReasonConfigurationChanged,
+				Message: "Insecure fallback mode enabled",
+			})
+		}
 	}
 
 	handleInvalidAddresses(gwReport, &gw)
 
 	addMissingGatewayConditions(r.Gateway(&gw), &gw)
+	setInvalidGatewayParametersCondition(gwReport, &gw)
 
 	finalConditions := make([]metav1.Condition, 0)
 	for _, gwCondition := range gwReport.GetConditions() {
@@ -124,7 +187,16 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 	finalGwStatus.Addresses = gw.Status.Addresses
 	finalGwStatus.Conditions = finalConditions
 	finalGwStatus.Listeners = finalListeners
+	finalGwStatus.AttachedListenerSets = &attachedListeners
 	return &finalGwStatus
+}
+
+func isGatewayBackendTLSResolvedRefsCondition(reason, message string) bool {
+	if reason == string(gwv1.GatewayReasonInvalidClientCertificateRef) {
+		return true
+	}
+	return reason == string(gwv1.GatewayReasonRefNotPermitted) &&
+		strings.Contains(message, "clientCertificateRef")
 }
 
 func handleInvalidAddresses(report *GatewayReport, g *gwv1.Gateway) {
@@ -200,7 +272,7 @@ func (r *ReportMap) BuildRouteStatusWithParentRefDefaulting(
 		if len(parentRefs) == 0 {
 			parentRefs = append(parentRefs, routeReport.parentRefs()...)
 		}
-	case *gwv1a2.TLSRoute:
+	case *gwv1.TLSRoute:
 		existingStatus = route.Status.RouteStatus
 		parentRefs = append(parentRefs, route.Spec.ParentRefs...)
 		if len(parentRefs) == 0 {
@@ -296,10 +368,10 @@ func ensureParentRefNamespaces(parentRefs []gwv1.ParentReference, routeNamespace
 			e.Namespace = &routeNs
 		}
 		if e.Group == nil {
-			e.Group = ptr.Of(gwv1.Group(wellknown.GatewayGVK.Group))
+			e.Group = new(gwv1.Group(wellknown.GatewayGVK.Group))
 		}
 		if e.Kind == nil {
-			e.Kind = ptr.Of(gwv1.Kind(wellknown.GatewayGVK.Kind))
+			e.Kind = new(gwv1.Kind(wellknown.GatewayGVK.Kind))
 		}
 		return e
 	})
@@ -343,6 +415,26 @@ func addMissingGatewayConditions(gwReport *GatewayReport, gw *gwv1.Gateway) {
 			Message: GatewayProgrammedMessage,
 		})
 	}
+}
+
+func setInvalidGatewayParametersCondition(gwReport *GatewayReport, gw *gwv1.Gateway) {
+	if gw.Spec.Infrastructure == nil || gw.Spec.Infrastructure.ParametersRef == nil {
+		return
+	}
+	ref := gw.Spec.Infrastructure.ParametersRef
+	// This is only an approximate report-side check. The deployer controller
+	// resolves the reference and reports exact missing/unsupported parameter
+	// errors; here we just avoid marking clearly compatible parameter kinds as
+	// invalid before the deployer has reconciled.
+	if strings.Contains(string(ref.Kind), "AgentgatewayParameters") {
+		return
+	}
+	gwReport.SetCondition(reporter.GatewayCondition{
+		Type:    gwv1.GatewayConditionAccepted,
+		Status:  metav1.ConditionFalse,
+		Reason:  gwv1.GatewayReasonInvalidParameters,
+		Message: fmt.Sprintf("infrastructure.parametersRef on Gateway %s/%s references unsupported type", gw.GetNamespace(), gw.GetName()),
+	})
 }
 
 // Reports will initially only contain negative conditions found during translation,

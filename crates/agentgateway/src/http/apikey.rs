@@ -1,16 +1,20 @@
 use std::hash::Hash;
 
 use ::cel::Value;
-use axum_core::RequestExt;
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use headers::authorization::Bearer;
 use macro_rules_attribute::apply;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::http::Request;
-use crate::proxy::ProxyError;
+use crate::http::auth::AuthorizationLocation;
+use crate::proxy::dtrace::{self, pol_result};
+use crate::proxy::{ProxyError, ProxyResponse};
 use crate::*;
+
+#[cfg(test)]
+#[path = "apikey_tests.rs"]
+mod tests;
+
+const TRACE_POLICY_KIND: &str = "api_key";
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -21,17 +25,20 @@ pub enum Error {
 	InvalidCredentials,
 }
 
-/// Validation mode for API Key authentication
+/// Validation mode for API key authentication.
 #[apply(schema!)]
 #[derive(Copy, PartialEq, Eq, Default)]
 pub enum Mode {
-	/// A valid API Key must be present.
+	/// Require a valid API key.
 	Strict,
-	/// If credentials exist, validate them.
+	/// Validate the API key when present.
 	/// This is the default option.
-	/// Warning: this allows requests without credentials!
+	/// Warning: this allows requests without an API key.
 	#[default]
 	Optional,
+	/// Decode valid API keys for later policy use.
+	/// Warning: this allows requests with missing or invalid API keys.
+	Permissive,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -39,7 +46,8 @@ pub enum Mode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(::cel::DynamicType)]
 pub struct Claims {
-	#[dynamic(with_value = "redact_key")]
+	/// The API key value. Redacted by default; use `apiKey.key.unredacted()` to access the actual value.
+	#[dynamic(with_value = "api_key_to_value")]
 	pub key: APIKey,
 	#[serde(default, flatten)]
 	#[dynamic(flatten)]
@@ -52,14 +60,15 @@ pub struct APIKey(
 	#[serde(serialize_with = "ser_redact", deserialize_with = "deser_key")]
 	SecretString,
 );
-pub fn redact_key<'a>(_: &'a APIKey) -> Value<'a> {
-	Value::String("<redacted>".into())
-}
 
 impl APIKey {
 	pub fn new(s: impl Into<Box<str>>) -> Self {
 		APIKey(SecretString::new(s.into()))
 	}
+}
+
+pub fn api_key_to_value<'a>(key: &'a APIKey) -> Value<'a> {
+	crate::cel::secret_string_to_value(&key.0)
 }
 
 type UserMetadata = serde_json::Value;
@@ -79,7 +88,6 @@ impl PartialEq for APIKey {
 impl Eq for APIKey {}
 
 #[apply(schema_ser!)]
-#[cfg_attr(feature = "schema", schemars(with = "LocalAPIKeys"))]
 pub struct APIKeyAuthentication {
 	// A map of API keys to the metadata for that key
 	#[serde(serialize_with = "ser_redact")]
@@ -87,69 +95,116 @@ pub struct APIKeyAuthentication {
 
 	/// Validation mode for API Key authentication
 	pub mode: Mode,
+
+	#[serde(default)]
+	pub location: AuthorizationLocation,
 }
 
 impl APIKeyAuthentication {
-	pub fn new(keys: impl IntoIterator<Item = (APIKey, UserMetadata)>, mode: Mode) -> Self {
+	pub fn new(
+		keys: impl IntoIterator<Item = (APIKey, UserMetadata)>,
+		mode: Mode,
+		location: AuthorizationLocation,
+	) -> Self {
 		Self {
 			users: Arc::new(keys.into_iter().collect()),
 			mode,
+			location,
 		}
 	}
-
 	async fn verify(&self, req: &mut Request) -> Result<Option<Claims>, ProxyError> {
-		// Extract Bearer authorization header
-		// TODO: allow extracting from other places
-		let Ok(TypedHeader(Authorization(bearer))) = req
-			.extract_parts::<TypedHeader<Authorization<Bearer>>>()
-			.await
-		else {
+		let Some(key) = self.location.extract(req) else {
 			// In strict mode, we require credentials
 			if self.mode == Mode::Strict {
+				pol_result!(
+					dtrace::Error,
+					Apply,
+					"rejected request because API key is required but missing"
+				);
 				return Err(ProxyError::APIKeyAuthenticationFailure(Error::Missing));
 			}
 			// Otherwise without credentials, don't attempt to authenticate
+			pol_result!(
+				dtrace::Info,
+				Skip,
+				"request has no API key and auth mode is not strict"
+			);
 			return Ok(None);
 		};
 
-		let key = APIKey::new(bearer.token());
+		let key = APIKey::new(key);
 		if let Some(meta) = self.users.get(&key) {
+			pol_result!(
+				dtrace::Info,
+				Apply,
+				"authenticated request with API key with metadata {}",
+				serde_json::to_string(meta).unwrap_or_default()
+			);
 			let claims = Claims {
 				key,
 				metadata: meta.clone(),
 			};
 			Ok(Some(claims))
+		} else if self.mode == Mode::Permissive {
+			pol_result!(
+				dtrace::Warn,
+				Skip,
+				"API key verification failed, continue due to permissive mode"
+			);
+			Ok(None)
 		} else {
+			pol_result!(
+				dtrace::Error,
+				Apply,
+				"rejected request because API key credentials are invalid"
+			);
 			Err(ProxyError::APIKeyAuthenticationFailure(
 				Error::InvalidCredentials,
 			))
 		}
 	}
+}
 
-	pub async fn apply(&self, req: &mut Request) -> Result<(), ProxyError> {
-		let res = self.verify(req).await?;
+impl crate::store::RequestPolicyTrait for APIKeyAuthentication {
+	async fn apply(
+		&self,
+		_client: &crate::proxy::httpproxy::PolicyClient,
+		_log: &mut crate::telemetry::log::RequestLog,
+		req: &mut Request,
+	) -> Result<crate::http::PolicyResponse, ProxyResponse> {
+		let res = self.verify(req).await.map_err(ProxyResponse::from)?;
 		if let Some(claims) = res {
-			req.headers_mut().remove(http::header::AUTHORIZATION);
+			self.location.remove(req).map_err(ProxyResponse::from)?;
 			// Insert the claims into extensions so we can reference it later
 			req.extensions_mut().insert(claims);
 		}
-		Ok(())
+		Ok(crate::http::PolicyResponse::default())
+	}
+
+	fn expressions(&self) -> impl Iterator<Item = &crate::cel::Expression> {
+		self.location.expression().into_iter()
 	}
 }
 
 #[apply(schema_de!)]
 pub struct LocalAPIKeys {
-	/// List of API keys
+	/// API keys that are accepted by this policy.
 	pub keys: Vec<LocalAPIKey>,
 
-	/// Validation mode for API keys
+	/// Controls whether requests must include a valid API key.
 	#[serde(default)]
 	pub mode: Mode,
+
+	/// Where to read the API key from in incoming requests.
+	#[serde(default)]
+	pub location: AuthorizationLocation,
 }
 
 #[apply(schema_de!)]
 pub struct LocalAPIKey {
+	/// API key value to accept.
 	pub key: APIKey,
+	/// Optional metadata attached to requests authenticated with this key.
 	pub metadata: Option<UserMetadata>,
 }
 
@@ -161,6 +216,7 @@ impl LocalAPIKeys {
 				.into_iter()
 				.map(|k| (k.key, k.metadata.unwrap_or_default())),
 			self.mode,
+			self.location,
 		)
 	}
 }

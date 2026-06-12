@@ -66,6 +66,14 @@ fn with() {
 }
 
 #[test]
+fn variables_includes_resolver_variables() {
+	assert(
+		json!({"vars": {"foo": "hello", "bar": "world"}}),
+		"variables()",
+	);
+}
+
+#[test]
 fn json() {
 	let expr = r#"json('{"hi":1}').hi"#;
 	assert(json!(1), expr);
@@ -79,6 +87,19 @@ fn json_field() {
 	assert(json!(1), expr);
 	let expr = r#"jsonField('{"hi":1}', "unknown")"#;
 	assert_fails(expr);
+}
+
+#[test]
+fn unvalidated_jwt_payload() {
+	let expr = r#"unvalidatedJwtPayload("eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjMiLCJhZG1pbiI6dHJ1ZX0.")"#;
+	assert(json!({"sub": "123", "admin": true}), expr);
+	// This payload contains a `-` in the encoded JWT segment, so it verifies we use
+	// base64url decoding rather than standard base64.
+	let expr = r#"unvalidatedJwtPayload("eyJhbGciOiJub25lIn0.eyJkYXRhIjoifn5-In0.").data"#;
+	assert(json!("~~~"), expr);
+
+	assert_fails(r#"unvalidatedJwtPayload("not-a-jwt")"#);
+	assert_fails(r#"unvalidatedJwtPayload("a.b.c")"#);
 }
 
 #[test]
@@ -97,8 +118,205 @@ fn random() {
 fn base64() {
 	let expr = r#"base64.encode('hello')"#;
 	assert(json!("aGVsbG8="), expr);
+	// Test old format
+	let expr = r#"base64Encode('hello')"#;
+	assert(json!("aGVsbG8="), expr);
+
+	let expr = r#"string(base64.decode("aGVsbG8="))"#;
+	assert(json!("hello"), expr);
+
 	let expr = r#"string(base64.decode(base64.encode("hello")))"#;
 	assert(json!("hello"), expr);
+	// Test old format as well
+	let expr = r#"string(base64Decode(base64Encode("hello")))"#;
+	assert(json!("hello"), expr);
+
+	// Unadded
+	let expr = r#"string(base64.decode('Zg=='))"#;
+	assert(json!("f"), expr);
+	// Padded
+	let expr = r#"string(base64.decode('Zg'))"#;
+	assert(json!("f"), expr);
+}
+
+#[test]
+fn url() {
+	assert(
+		json!("hello%20world%2F%3Fx%3D1%26y%3D2"),
+		r#"url.encode("hello world/?x=1&y=2")"#,
+	);
+	assert(json!("abc-._~"), r#"url.encode("abc-._~")"#);
+	assert(json!("%21"), r#"url.encode("!")"#);
+	assert(
+		json!("hello world/?x=1&y=2"),
+		r#"url.decode("hello%20world%2F%3Fx%3D1%26y%3D2")"#,
+	);
+	assert(json!("a+b"), r#"url.decode("a+b")"#);
+	assert(
+		json!("hello world"),
+		r#"url.decode(url.encode("hello world"))"#,
+	);
+
+	assert(json!("hello"), r#"url.encode("hello")"#);
+	assert_fails(r#"url.decode("%FF")"#);
+}
+
+#[test]
+fn form() {
+	assert(
+		json!({"client_id": "abc", "scope": "openid profile"}),
+		r#"form.decode("client_id=abc&scope=openid+profile")"#,
+	);
+	assert(json!({"a": ["1", "2"]}), r#"form.decode("a=1&a=2")"#);
+	assert(
+		json!("scope=openid+profile"),
+		r#"form.encode({"scope": "openid profile"})"#,
+	);
+	assert(
+		json!({"client_id": "app id", "scope": "openid profile"}),
+		r#"form.decode(form.encode({"client_id": "app id", "scope": "openid profile"}))"#,
+	);
+	assert(
+		json!({
+			"client_id": "app-id",
+			"scope": "openid profile api://app-id/access_as_user",
+		}),
+		r#"form.decode(form.encode(form.decode("").merge({"client_id": "app-id", "scope": "openid profile api://app-id/access_as_user"})))"#,
+	);
+	assert(
+		json!({
+			"client_id": "app-id",
+			"device_code": "abc",
+			"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+		}),
+		r#"form.decode(form.encode(form.decode("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=abc").merge({"client_id": "app-id"})))"#,
+	);
+
+	assert_fails(r#"form.decode({})"#);
+	assert_fails(r#"form.encode([])"#);
+	assert_fails(r#"form.encode({"bad": {}})"#);
+}
+
+#[test]
+fn hashes() {
+	assert(
+		json!("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+		r#"sha1.encode("hello")"#,
+	);
+	assert(
+		json!("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"),
+		r#"sha256.encode("hello")"#,
+	);
+	assert(
+		json!("5d41402abc4b2a76b9719d911017c592"),
+		r#"md5.encode("hello")"#,
+	);
+}
+
+#[test]
+fn math() {
+	assert(json!(1), "math.least(1)");
+	assert(json!(2), "math.greatest(1, 2)");
+	assert(json!(-100.0), "math.least([-42.0, -21.5, -100.0])");
+	assert(json!(-21.5), "math.greatest(-42.0, -21.5, -100.0)");
+	assert(json!(true), "math.least(1, -2.0) == -2.0");
+	assert(json!(true), "math.least(2, 1u) == 1u");
+	assert(json!(true), "math.least(1.5, -2) == -2");
+	assert(json!(true), "math.least(1u, -2) == -2");
+	assert(json!(true), "math.greatest(1, -2.0) == 1");
+	assert(json!(true), "math.greatest(1.5, 2) == 2");
+	assert(json!(true), "math.greatest(1u, -2) == 1u");
+	assert(json!(true), "math.greatest(2u, 2.5) == 2.5");
+	assert(json!(true), "math.greatest([1u, 0.0, 0u]) == 1");
+	assert_fails("math.least()");
+	assert_fails("math.greatest([])");
+	assert_fails(r#"math.least("string")"#);
+
+	assert(json!(2.0), "math.ceil(1.2)");
+	assert(json!(-2.0), "math.floor(-1.2)");
+	assert(json!(2.0), "math.round(1.5)");
+	assert(json!(-2.0), "math.round(-1.5)");
+	assert(json!(true), "math.isNaN(math.round(0.0 / 0.0))");
+	assert(json!(-1.0), "math.trunc(-1.3)");
+
+	assert(json!(1), "math.abs(-1)");
+	assert(json!(1u64), "math.abs(1u)");
+	assert(json!(1.5), "math.abs(-1.5)");
+	assert_fails("math.abs(-9223372036854775808)");
+	assert(json!(-1), "math.sign(-42)");
+	assert(json!(0), "math.sign(0)");
+	assert(json!(1), "math.sign(42)");
+	assert(json!(1u64), "math.sign(42u)");
+	assert(json!(-1.0), "math.sign(-0.3)");
+	assert(json!(0.0), "math.sign(0.0)");
+	assert(json!(1.0), "math.sign(1.0 / 0.0)");
+	assert(json!(-1.0), "math.sign(-1.0 / 0.0)");
+	assert(json!(true), "math.isNaN(math.sign(0.0 / 0.0))");
+
+	assert(json!(true), "math.isInf(1.0 / 0.0)");
+	assert(json!(true), "math.isNaN(0.0 / 0.0)");
+	assert(json!(false), "math.isFinite(0.0 / 0.0)");
+	assert(json!(true), "math.isFinite(1.2)");
+	assert(json!(9.0), "math.sqrt(81)");
+	assert(json!(9.055385138137417), "math.sqrt(82)");
+	assert(json!(true), "math.isNaN(math.sqrt(-15.34))");
+
+	assert(json!(3u64), "math.bitOr(1u, 2u)");
+	assert(json!(-2), "math.bitOr(-2, -4)");
+	assert(json!(2u64), "math.bitAnd(3u, 2u)");
+	assert(json!(-7), "math.bitAnd(-3, -5)");
+	assert(json!(6u64), "math.bitXor(3u, 5u)");
+	assert(json!(2), "math.bitXor(1, 3)");
+	assert(
+		json!("AQ=="),
+		r#"base64.encode(math.bitAnd(base64.decode("BQ=="), base64.decode("Aw==")))"#,
+	);
+	assert(
+		json!("Bw=="),
+		r#"base64.encode(math.bitOr(base64.decode("BQ=="), base64.decode("Aw==")))"#,
+	);
+	assert(
+		json!("Bg=="),
+		r#"base64.encode(math.bitXor(base64.decode("BQ=="), base64.decode("Aw==")))"#,
+	);
+	assert(
+		json!("AAE="),
+		r#"base64.encode(math.bitAnd(base64.decode("AAE="), base64.decode("AQ==")))"#,
+	);
+	assert(json!(4), r#"math.bitAnd(0x4, base64.decode("BQ=="))"#);
+	assert(json!(0), r#"math.bitAnd(0x2, base64.decode("BQ=="))"#);
+	assert(json!(4), r#"math.bitAnd(base64.decode("BQ=="), 0x4)"#);
+	assert(json!(4u64), r#"math.bitAnd(0x4u, base64.decode("BQ=="))"#);
+	assert(json!(4), r#"math.bitAnd(0x4, base64.decode("AQAF"))"#);
+	assert(
+		json!(true),
+		r#"base64.decode("BQ==").with(user, {
+			"read": 0x4,
+			"rwx": 0x5,
+			"rw": 0x7,
+		}.with(tools, tools.filter(x, math.bitAnd(tools[x], user) == tools[x]).with(allowed,
+			allowed.size() == 2 && allowed.contains("read") && allowed.contains("rwx")
+		)))"#,
+	);
+	assert(json!(-2), "math.bitNot(1)");
+	assert(json!(u64::MAX), "math.bitNot(0u)");
+	assert(json!(4), "math.bitShiftLeft(1, 2)");
+	assert(json!(-4), "math.bitShiftLeft(-1, 2)");
+	assert(json!(0u64), "math.bitShiftLeft(1u, 200)");
+	assert(json!(256), "math.bitShiftRight(1024, 2)");
+	assert(json!(0u64), "math.bitShiftRight(1024u, 64)");
+	assert(
+		json!(2305843009213693824i64),
+		"math.bitShiftRight(-1024, 3)",
+	);
+	assert(json!(0), "math.bitShiftRight(-1024, 64)");
+	assert_fails("math.bitShiftLeft(1, -1)");
+	assert_fails("math.bitAnd(1, 2u)");
+	assert_fails(&format!(
+		r#"math.bitAnd(base64.decode("{}"), b"\x01")"#,
+		base64::Engine::encode(&base64::prelude::BASE64_STANDARD, vec![0u8; 33])
+	));
+	assert_fails(r#"math.bitAnd(-1, base64.decode("BQ=="))"#);
 }
 
 #[test]
@@ -107,6 +325,59 @@ fn map_values() {
 	assert(json!({"a": 2, "b": 4}), expr);
 	let expr = r#"vars.mapValues(v, v +  ' hi')"#;
 	assert(json!({"bar": "world hi", "foo": "hello hi"}), expr);
+}
+
+#[test]
+fn filter_keys() {
+	// Basic: keep only key "a"
+	assert(
+		json!({"a": 1}),
+		r#"{"a": 1, "b": 2}.filterKeys(k, k == "a")"#,
+	);
+	// Prefix allowlist (primary use case)
+	assert(
+		json!({"model": "gpt", "messages": []}),
+		r#"{"model": "gpt", "messages": [], "secret": "x"}.filterKeys(k, k == "model" || k == "messages")"#,
+	);
+	// Prefix removal via inverted predicate (replaces removeKeys)
+	assert(
+		json!({"model": "y"}),
+		r#"{"anthropic_ver": "x", "model": "y"}.filterKeys(k, !k.startsWith("anthropic_"))"#,
+	);
+	// No keys match — empty result
+	assert(json!({}), r#"{"a": 1}.filterKeys(k, k == "z")"#);
+	// All keys match — all kept
+	assert(
+		json!({"a": 1, "b": 2}),
+		r#"{"a": 1, "b": 2}.filterKeys(k, true)"#,
+	);
+	// None match (false) — empty result
+	assert(json!({}), r#"{"a": 1, "b": 2}.filterKeys(k, false)"#);
+	// Nested values preserved
+	assert(
+		json!({"a": {"x": 1}}),
+		r#"{"a": {"x": 1}, "b": 2}.filterKeys(k, k != "b")"#,
+	);
+	// Chaining filterKeys with itself
+	assert(
+		json!({"a": 1}),
+		r#"{"a": 1, "b": 2, "c": 3}.filterKeys(k, k != "c").filterKeys(k, k == "a")"#,
+	);
+	// Chaining with mapValues
+	assert(
+		json!({"a": 2}),
+		r#"{"a": 1, "secret": 99}.filterKeys(k, k != "secret").mapValues(v, v * 2)"#,
+	);
+	// Empty map input
+	assert(json!({}), r#"{}.filterKeys(k, true)"#);
+	// Predicate that errors propagates failure
+	assert_fails(r#"{"a": 1}.filterKeys(k, k / 0)"#);
+	// Dynamic variable receiver
+	assert(json!({"bar": "world"}), r#"vars.filterKeys(k, k != "foo")"#);
+	// Non-bool predicate fails
+	assert_fails(r#"{"a": 1}.filterKeys(k, 42)"#);
+	// Non-map receiver fails
+	assert_fails(r#"[1, 2].filterKeys(k, true)"#);
 }
 
 #[test]
@@ -122,6 +393,28 @@ fn default() {
 
 	// default() should not materialize
 	eval_non_static("default(a.b, vars)", |r| {
+		assert_matches!(r, Value::Dynamic(_));
+	})
+	.unwrap();
+}
+
+#[test]
+fn coalesce() {
+	let expr = r#"coalesce(a, "b")"#;
+	assert(json!("b"), expr);
+	let expr = r#"coalesce({"a":1}["b"], {"a":2}["a"], 3)"#;
+	assert(json!(2), expr);
+	let expr = r#"coalesce(fail("bad"), 1 / 0, "fallback")"#;
+	assert(json!("fallback"), expr);
+	let expr = r#"coalesce(null, "fallback")"#;
+	assert(json!("fallback"), expr);
+	let expr = r#"coalesce(null)"#;
+	assert(json!(null), expr);
+	assert_fails(r#"coalesce(fail("bad"), 1 / 0)"#);
+	assert_fails(r#"coalesce()"#);
+
+	// coalesce() should not materialize the selected value
+	eval_non_static("coalesce(fail('bad'), vars)", |r| {
 		assert_matches!(r, Value::Dynamic(_));
 	})
 	.unwrap();
@@ -336,7 +629,7 @@ fn assert(want: serde_json::Value, expr: &str) {
 	assert_eq!(
 		want,
 		eval(expr)
-			.unwrap_or_else(|_| panic!("{expr}"))
+			.unwrap_or_else(|e| panic!("{expr}: {e}"))
 			.json()
 			.unwrap(),
 		"expression: {expr}"

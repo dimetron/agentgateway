@@ -58,7 +58,7 @@ fn test_cases() -> Vec<TestCase> {
 						.uri("http://example.com")
 						.header("content-type", "application/json")
 						.body(Body::from(
-							include_bytes!("../llm/tests/request_full.json").to_vec(),
+							include_bytes!("../llm/tests/requests/completions/full.json").to_vec(),
 						))
 						.unwrap(),
 				)
@@ -176,8 +176,8 @@ fn test_benchmark_cases_snapshot() {
 		let expr = Expression::new_strict(tc.expression)
 			.unwrap_or_else(|e| panic!("Failed to compile expression '{}': {}", tc.expression, e));
 		let mut req = (tc.request_builder)();
-		let ss = crate::cel::snapshot_request(&mut req);
-		let exec = crate::cel::Executor::new_logger(Some(&ss), None, None, None, None);
+		let ss = crate::cel::snapshot_request(&mut req, true);
+		let exec = crate::cel::Executor::new_logger(Some(&ss), None, None, None, None, None);
 		let result = exec
 			.eval(&expr)
 			.unwrap_or_else(|e| panic!("Failed to eval expression '{}': {}", tc.expression, e));
@@ -219,8 +219,8 @@ fn bench_execute_snapshot(b: Bencher, case_name: &str) {
 	// Pre-compile and build context
 	let expr = Expression::new_strict(tc.expression).unwrap();
 	let mut req = (tc.request_builder)();
-	let ss = crate::cel::snapshot_request(&mut req);
-	let exec = crate::cel::Executor::new_logger(Some(&ss), None, None, None, None);
+	let ss = crate::cel::snapshot_request(&mut req, true);
+	let exec = crate::cel::Executor::new_logger(Some(&ss), None, None, None, None, None);
 
 	b.bench(|| {
 		let _ = divan::black_box(exec.eval(&expr).unwrap());

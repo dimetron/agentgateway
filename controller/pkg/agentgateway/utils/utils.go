@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"istio.io/istio/pkg/kube/krt"
-	"istio.io/istio/pkg/ptr"
 	"k8s.io/apimachinery/pkg/types"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/agentgateway/agentgateway/api"
 	"github.com/agentgateway/agentgateway/controller/pkg/utils/kubeutils"
@@ -30,11 +30,16 @@ func InternalGatewayName(gwNamespace, gwName, lName string) string {
 // InternalRouteRuleKey returns the name of the internal Route Rule corresponding to the
 // specified route. If ruleName is not specified, returns the internal name without the route rule.
 // Format: routeNs/routeName.ruleName
-func InternalRouteRuleKey(routeNamespace, routeName, ruleName string) string {
-	if ruleName == "" {
-		return fmt.Sprintf("%s/%s", routeNamespace, routeName)
-	}
-	return fmt.Sprintf("%s/%s.%s", routeNamespace, routeName, ruleName)
+func InternalRouteRuleKey(routeNamespace, routeName string, ruleName int) string {
+	// Pad the number format, as this is used for sorting order on conflicts within the same rule
+	// Routes can only have 16 rules, so we only need 2 digits.
+	return fmt.Sprintf("%s/%s.%02d", routeNamespace, routeName, ruleName)
+}
+
+// InternalRouteGroupKey returns the internal key for a delegated HTTP route group selector.
+// Format: sourceNamespace/sourceName/routeNamespace/routeSelector
+func InternalRouteGroupKey(sourceNamespace, sourceName, routeNamespace, routeSelector string) string {
+	return fmt.Sprintf("%s/%s/%s/%s", sourceNamespace, sourceName, routeNamespace, routeSelector)
 }
 
 // InternalMCPStaticBackendName returns the name of the internal MCP Static Backend corresponding to the
@@ -55,19 +60,19 @@ func InternalBackendKey(backendNamespace, backendName, targetName string) string
 	return name
 }
 
-func ListenerName(namespace, name string, listener string) *api.ListenerName {
+func ListenerName(namespace, name, listener string, listenerSet *api.ResourceName) *api.ListenerName {
 	return &api.ListenerName{
 		GatewayName:      name,
 		GatewayNamespace: namespace,
 		ListenerName:     listener,
-		ListenerSet:      nil,
+		ListenerSet:      listenerSet,
 	}
 }
 
 func RouteName[T ~string](kind string, namespace, name string, routeRule *T) *api.RouteName {
 	var ls *string
 	if routeRule != nil {
-		ls = ptr.Of((string)(*routeRule))
+		ls = new((string)(*routeRule))
 	}
 	return &api.RouteName{
 		Name:      name,
@@ -81,7 +86,7 @@ func ServiceTarget[T ~string](namespace, name string, port *T) *api.PolicyTarget
 	hostname := fmt.Sprintf("%s.%s.svc.%s", name, namespace, kubeutils.GetClusterDomainName())
 	var ls *string
 	if port != nil {
-		ls = ptr.Of((string)(*port))
+		ls = new((string)(*port))
 	}
 	return ServiceTargetWithHostname(namespace, hostname, ls)
 }
@@ -101,7 +106,7 @@ func InferencePoolTarget[T ~string](namespace, name string, port *T) *api.Policy
 	hostname := fmt.Sprintf("%s.%s.inference.%s", name, namespace, kubeutils.GetClusterDomainName())
 	var ls *string
 	if port != nil {
-		ls = ptr.Of((string)(*port))
+		ls = new((string)(*port))
 	}
 	return ServiceTargetWithHostname(namespace, hostname, ls)
 }
@@ -110,7 +115,7 @@ func ServiceTargetWithHostname(namespace, hostname string, port *string) *api.Po
 	var portNum *uint32
 	if port != nil {
 		parsed, _ := strconv.Atoi(*port)
-		portNum = ptr.Of(uint32(parsed)) // nolint:gosec // G115: kubebuilder validation ensures safe for uint32
+		portNum = new(uint32(parsed)) // nolint:gosec // G115: kubebuilder validation ensures safe for uint32
 	}
 	return &api.PolicyTarget_Service{
 		Service: &api.PolicyTarget_ServiceTarget{
@@ -124,7 +129,7 @@ func ServiceTargetWithHostname(namespace, hostname string, port *string) *api.Po
 func GatewayTarget[T ~string](namespace, name string, listener *T) *api.PolicyTarget_Gateway {
 	var ls *string
 	if listener != nil {
-		ls = ptr.Of((string)(*listener))
+		ls = new((string)(*listener))
 	}
 	return &api.PolicyTarget_Gateway{
 		Gateway: &api.PolicyTarget_GatewayTarget{
@@ -135,10 +140,25 @@ func GatewayTarget[T ~string](namespace, name string, listener *T) *api.PolicyTa
 	}
 }
 
+func ListenerSetTarget[T ~string](namespace, name string, section *T) *api.PolicyTarget_ListenerSet {
+	var s *string
+	if section != nil {
+		s = new(string)
+		*s = string(*section)
+	}
+	return &api.PolicyTarget_ListenerSet{
+		ListenerSet: &api.PolicyTarget_ListenerSetTarget{
+			Name:      name,
+			Namespace: namespace,
+			Section:   s,
+		},
+	}
+}
+
 func RouteTarget[T ~string](namespace, name, kind string, ruleName *T) *api.PolicyTarget_Route {
 	var ls *string
 	if ruleName != nil {
-		ls = ptr.Of((string)(*ruleName))
+		ls = new((string)(*ruleName))
 	}
 	return &api.PolicyTarget_Route{
 		Route: &api.PolicyTarget_RouteTarget{
@@ -153,7 +173,7 @@ func RouteTarget[T ~string](namespace, name, kind string, ruleName *T) *api.Poli
 func BackendTarget[T ~string](backendNamespace, backendName string, section *T) *api.PolicyTarget_Backend {
 	var ls *string
 	if section != nil {
-		ls = ptr.Of((string)(*section))
+		ls = new((string)(*section))
 	}
 	return &api.PolicyTarget_Backend{
 		Backend: &api.PolicyTarget_BackendTarget{
@@ -185,6 +205,29 @@ type TypedNamespacedName struct {
 
 func (n TypedNamespacedName) String() string {
 	return n.Kind + "/" + n.NamespacedName.String()
+}
+
+var SectionedNamespacedNameIndexCollectionFunc = krt.WithIndexCollectionFromString(func(s string) SectionedNamespacedName {
+	parts := strings.Split(s, "/")
+	if len(parts) != 3 {
+		panic("invalid SectionedNamespacedName: " + s)
+	}
+	return SectionedNamespacedName{
+		NamespacedName: types.NamespacedName{
+			Namespace: parts[0],
+			Name:      parts[1],
+		},
+		SectionName: gwv1.SectionName(parts[2]),
+	}
+})
+
+type SectionedNamespacedName struct {
+	types.NamespacedName
+	SectionName gwv1.SectionName
+}
+
+func (n SectionedNamespacedName) String() string {
+	return n.NamespacedName.String() + "/" + string(n.SectionName)
 }
 
 type AncestorBackend struct {

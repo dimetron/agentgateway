@@ -27,6 +27,16 @@ pub struct NamespacedHostname {
 	pub hostname: Strng,
 }
 
+impl NamespacedHostname {
+	pub fn as_policy_target_ref(&self) -> super::agent::PolicyTargetRef {
+		super::agent::PolicyTargetRef::Backend(super::agent::BackendTargetRef::Service {
+			hostname: &self.hostname,
+			namespace: &self.namespace,
+			port: None,
+		})
+	}
+}
+
 impl FromStr for NamespacedHostname {
 	type Err = ProtoError;
 
@@ -81,6 +91,55 @@ impl<'de> Deserialize<'de> for NamespacedHostname {
 impl fmt::Display for NamespacedHostname {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		write!(f, "{}/{}", self.namespace, self.hostname)
+	}
+}
+
+/// Structured identity for a waypoint proxy, used for self-verification
+/// when routing HBONE waypoint traffic.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WaypointIdentity {
+	pub gateway: Strng,
+	pub namespace: Strng,
+}
+
+impl WaypointIdentity {
+	/// Returns the default full Kubernetes FQDN for this waypoint.
+	/// TODO: we don't know the cluster domain, so we potentially return the wrong hostname for this waypoint.
+	pub fn hostname(&self) -> Strng {
+		strng::format!("{}.{}.svc.cluster.local", self.gateway, self.namespace)
+	}
+
+	/// Checks whether this waypoint identity matches a NamespacedHostname waypoint destination.
+	/// Assumes the hostname from xDS always starts with `{gateway name}.{namespace}` but the suffix
+	/// may be customized.
+	pub fn matches_hostname(&self, nh: &NamespacedHostname) -> bool {
+		nh.namespace == self.namespace
+			&& nh
+				.hostname
+				.strip_prefix(self.gateway.as_str())
+				.and_then(|s| s.strip_prefix('.'))
+				.and_then(|s| s.strip_prefix(self.namespace.as_str()))
+				.is_some_and(|s| s.starts_with('.') && s.len() > 1)
+	}
+
+	/// Checks whether this waypoint identity matches an Address-based waypoint destination
+	/// by resolving the service at `addr` and comparing its (name, namespace) to this waypoint's
+	/// (gateway, namespace).
+	pub fn matches_address(
+		&self,
+		addr: &NetworkAddress,
+		get_service_at: impl FnOnce(&NetworkAddress) -> Option<(Strng, Strng)>,
+	) -> bool {
+		match get_service_at(addr) {
+			Some((name, ns)) => name == self.gateway && ns == self.namespace,
+			None => {
+				warn!(
+					"waypoint {}.{} cannot resolve service at {} for address verification",
+					self.gateway, self.namespace, addr
+				);
+				false
+			},
+		}
 	}
 }
 
@@ -149,7 +208,23 @@ impl<'de> Deserialize<'de> for NetworkAddress {
 	}
 }
 
-#[derive(Debug, Default, Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+/// Identifies the agentgateway's own workload for locality-aware load balancing.
+///
+/// `Static`: all fields come directly from env/config. Ready immediately.
+/// `Wds`: the gateway's own pod is resolved out of the WDS workload store using
+/// `(namespace, name)`. Readiness blocks until it resolves (or times out).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SelfIdentitySource {
+	Static(Arc<Workload>),
+	Wds {
+		name: Strng,
+		namespace: Strng,
+		cluster_id: Strng,
+	},
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Workload {
 	pub workload_ips: Vec<IpAddr>,
@@ -204,14 +279,50 @@ pub struct Workload {
 	pub locality: Locality,
 
 	#[serde(default, skip_serializing_if = "is_default")]
-	pub services: Vec<NamespacedHostname>,
+	pub services: HashMap<NamespacedHostname, HashMap<u16, u16>>,
+
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub hbone_mtls_port: u16,
 
 	#[serde(default = "default_capacity")]
 	pub capacity: u32,
 }
 
-fn default_capacity() -> u32 {
+pub fn default_capacity() -> u32 {
 	1
+}
+
+impl Default for Workload {
+	fn default() -> Self {
+		Self {
+			workload_ips: Default::default(),
+			waypoint: Default::default(),
+			network_gateway: Default::default(),
+			protocol: Default::default(),
+			network_mode: Default::default(),
+			uid: Default::default(),
+			name: Default::default(),
+			namespace: Default::default(),
+			trust_domain: Default::default(),
+			service_account: Default::default(),
+			network: Default::default(),
+			workload_name: Default::default(),
+			workload_type: Default::default(),
+			canonical_name: Default::default(),
+			canonical_revision: Default::default(),
+			hostname: Default::default(),
+			node: Default::default(),
+			authorization_policies: Default::default(),
+			status: Default::default(),
+			cluster_id: Default::default(),
+			locality: Default::default(),
+			services: Default::default(),
+			hbone_mtls_port: Default::default(),
+
+			// default capacity to 1, as 0 means this workload should not receive traffic
+			capacity: default_capacity(),
+		}
+	}
 }
 
 impl Workload {
@@ -245,6 +356,16 @@ impl serde::Serialize for Identity {
 		S: serde::Serializer,
 	{
 		self.to_string().serialize(serializer)
+	}
+}
+
+impl<'de> serde::Deserialize<'de> for Identity {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		let s = String::deserialize(deserializer)?;
+		Identity::from_str(&s).map_err(serde::de::Error::custom)
 	}
 }
 
@@ -368,6 +489,18 @@ pub struct Locality {
 	pub subzone: Strng,
 }
 
+impl Locality {
+	/// Parse an Istio-style locality string "region/zone/subzone" (trailing parts optional).
+	pub fn parse(s: &str) -> Self {
+		let mut parts = s.splitn(3, '/');
+		Locality {
+			region: parts.next().unwrap_or_default().into(),
+			zone: parts.next().unwrap_or_default().into(),
+			subzone: parts.next().unwrap_or_default().into(),
+		}
+	}
+}
+
 #[derive(Debug, Hash, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayAddress {
@@ -421,7 +554,7 @@ pub struct Service {
 	#[serde(default, skip_deserializing)]
 	pub endpoints: loadbalancer::EndpointSet<Endpoint>,
 	#[serde(default)]
-	pub subject_alt_names: Vec<Strng>,
+	pub subject_alt_names: Vec<Identity>,
 
 	#[serde(default, skip_serializing_if = "is_default")]
 	pub waypoint: Option<GatewayAddress>,
@@ -431,6 +564,11 @@ pub struct Service {
 
 	#[serde(default, skip_serializing_if = "is_default")]
 	pub ip_families: Option<IpFamily>,
+
+	/// When true, ingress gateways should send traffic destined for this service
+	/// through the service's waypoint proxy.
+	#[serde(default, skip_serializing_if = "is_default")]
+	pub ingress_use_waypoint: bool,
 }
 
 impl Service {
@@ -442,6 +580,15 @@ impl Service {
 	}
 	pub fn port_is_http1(&self, port: u16) -> bool {
 		matches!(self.app_protocols.get(&port), Some(AppProtocol::Http11))
+	}
+	pub fn port_is_tcp(&self, port: u16) -> bool {
+		matches!(
+			self.app_protocols.get(&port),
+			Some(AppProtocol::Tcp | AppProtocol::Tls)
+		)
+	}
+	pub fn port_is_tls(&self, port: u16) -> bool {
+		matches!(self.app_protocols.get(&port), Some(AppProtocol::Tls))
 	}
 	pub fn namespaced_hostname(&self) -> NamespacedHostname {
 		NamespacedHostname {
@@ -464,6 +611,8 @@ pub enum AppProtocol {
 	Http11,
 	Http2,
 	Grpc,
+	Tls,
+	Tcp,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -570,28 +719,25 @@ impl From<workload::WorkloadStatus> for HealthStatus {
 		}
 	}
 }
-impl From<&PortList> for HashMap<u16, u16> {
-	fn from(value: &PortList) -> Self {
-		value
-			.ports
-			.iter()
-			.map(|p| (p.service_port as u16, p.target_port as u16))
-			.collect()
-	}
+
+pub fn ports_from_xds(value: &PortList) -> HashMap<u16, u16> {
+	value
+		.ports
+		.iter()
+		.map(|p| (p.service_port as u16, p.target_port as u16))
+		.collect()
 }
 
-impl From<HashMap<u16, u16>> for PortList {
-	fn from(value: HashMap<u16, u16>) -> Self {
-		PortList {
-			ports: value
-				.iter()
-				.map(|(k, v)| Port {
-					service_port: *k as u32,
-					app_protocol: 0,
-					target_port: *v as u32,
-				})
-				.collect(),
-		}
+pub fn port_list_from_ports(value: HashMap<u16, u16>) -> PortList {
+	PortList {
+		ports: value
+			.iter()
+			.map(|(k, v)| Port {
+				service_port: *k as u32,
+				app_protocol: 0,
+				target_port: *v as u32,
+			})
+			.collect(),
 	}
 }
 
@@ -622,17 +768,15 @@ impl TryFrom<&XdsGatewayAddress> for GatewayAddress {
 	}
 }
 
-impl TryFrom<XdsWorkload> for Workload {
-	type Error = ProtoError;
-	fn try_from(resource: XdsWorkload) -> Result<Self, Self::Error> {
-		let (w, _): (Workload, HashMap<String, PortList>) = resource.try_into()?;
+impl Workload {
+	pub fn try_from_xds(resource: XdsWorkload) -> Result<Self, ProtoError> {
+		let (w, _) = Self::try_from_xds_with_services(resource)?;
 		Ok(w)
 	}
-}
 
-impl TryFrom<XdsWorkload> for (Workload, HashMap<String, PortList>) {
-	type Error = ProtoError;
-	fn try_from(resource: XdsWorkload) -> Result<Self, Self::Error> {
+	pub fn try_from_xds_with_services(
+		resource: XdsWorkload,
+	) -> Result<(Self, HashMap<String, PortList>), ProtoError> {
 		let wp = match &resource.waypoint {
 			Some(w) => Some(GatewayAddress::try_from(w)?),
 			None => None,
@@ -650,17 +794,23 @@ impl TryFrom<XdsWorkload> for (Workload, HashMap<String, PortList>) {
 			.collect::<Result<Vec<_>, _>>()?;
 
 		let workload_type = resource.workload_type().as_str_name().to_lowercase();
-		let services: Vec<NamespacedHostname> = resource
+		let services: HashMap<NamespacedHostname, HashMap<u16, u16>> = resource
 			.services
-			.keys()
-			.map(|namespaced_host| match namespaced_host.split_once('/') {
-				Some((namespace, hostname)) => Ok(NamespacedHostname {
-					namespace: namespace.into(),
-					hostname: hostname.into(),
-				}),
-				None => Err(ProtoError::NamespacedHostnameParse(namespaced_host.clone())),
+			.iter()
+			.map(|(namespaced_host, ports)| {
+				let (namespace, hostname) = namespaced_host
+					.split_once('/')
+					.ok_or_else(|| ProtoError::NamespacedHostnameParse(namespaced_host.clone()))?;
+
+				Ok((
+					NamespacedHostname {
+						namespace: namespace.into(),
+						hostname: hostname.into(),
+					},
+					ports_from_xds(ports),
+				))
 			})
-			.collect::<Result<_, _>>()?;
+			.collect::<Result<_, ProtoError>>()?;
 		let wl = Workload {
 			workload_ips: addresses,
 			waypoint: wp,
@@ -718,6 +868,7 @@ impl TryFrom<XdsWorkload> for (Workload, HashMap<String, PortList>) {
 			},
 
 			capacity: resource.capacity.unwrap_or(1),
+			hbone_mtls_port: Default::default(),
 			services,
 		};
 		// Return back part we did not use (service) so it can be consumed without cloning
@@ -784,7 +935,7 @@ impl TryFrom<&XdsService> for Service {
 			.iter()
 			.map(|p| {
 				let ap = workload::AppProtocol::try_from(p.app_protocol)?;
-				let ap = <Option<AppProtocol>>::from(ap);
+				let ap = app_protocol_from_xds(ap);
 				Ok(ap.map(|ap| (p.service_port as u16, ap)))
 			})
 			.filter_map(|v| match v {
@@ -793,46 +944,57 @@ impl TryFrom<&XdsService> for Service {
 				Err(e) => Some(Err(e)),
 			})
 			.collect::<Result<HashMap<_, _>, ProtoError>>()?;
-		let ip_families = workload::IpFamilies::try_from(s.ip_families)?.into();
+		let ip_families = ip_family_from_xds(workload::IpFamilies::try_from(s.ip_families)?);
 		let svc = Service {
 			name: Strng::from(&s.name),
 			namespace: Strng::from(&s.namespace),
 			hostname: Strng::from(&s.hostname),
 			vips: nw_addrs,
-			ports: (&PortList {
+			ports: ports_from_xds(&PortList {
 				ports: s.ports.clone(),
-			})
-				.into(),
+			}),
 			app_protocols,
 			endpoints: Default::default(), // Will be populated once inserted into the store.
-			subject_alt_names: s.subject_alt_names.iter().map(strng::new).collect(),
+			subject_alt_names: s
+				.subject_alt_names
+				.iter()
+				.filter_map(|san| match Identity::from_str(san) {
+					Ok(id) => Some(id),
+					Err(err) => {
+						warn!(
+							"service {}/{} SAN {:?} could not be parsed: {err}",
+							s.namespace, s.hostname, san
+						);
+						None
+					},
+				})
+				.collect(),
 			waypoint,
 			load_balancer: lb,
 			ip_families,
+			ingress_use_waypoint: s.ingress_use_waypoint,
 		};
 		Ok(svc)
 	}
 }
 
-impl From<workload::IpFamilies> for Option<IpFamily> {
-	fn from(value: workload::IpFamilies) -> Self {
-		match value {
-			workload::IpFamilies::Automatic => None,
-			workload::IpFamilies::Ipv4Only => Some(IpFamily::IPv4),
-			workload::IpFamilies::Ipv6Only => Some(IpFamily::IPv6),
-			workload::IpFamilies::Dual => Some(IpFamily::Dual),
-		}
+pub fn ip_family_from_xds(value: workload::IpFamilies) -> Option<IpFamily> {
+	match value {
+		workload::IpFamilies::Automatic => None,
+		workload::IpFamilies::Ipv4Only => Some(IpFamily::IPv4),
+		workload::IpFamilies::Ipv6Only => Some(IpFamily::IPv6),
+		workload::IpFamilies::Dual => Some(IpFamily::Dual),
 	}
 }
 
-impl From<workload::AppProtocol> for Option<AppProtocol> {
-	fn from(value: workload::AppProtocol) -> Self {
-		match value {
-			workload::AppProtocol::Unknown => None,
-			workload::AppProtocol::Http11 => Some(AppProtocol::Http11),
-			workload::AppProtocol::Http2 => Some(AppProtocol::Http2),
-			workload::AppProtocol::Grpc => Some(AppProtocol::Grpc),
-		}
+pub fn app_protocol_from_xds(value: workload::AppProtocol) -> Option<AppProtocol> {
+	match value {
+		workload::AppProtocol::Unknown => None,
+		workload::AppProtocol::Http11 => Some(AppProtocol::Http11),
+		workload::AppProtocol::Tls => Some(AppProtocol::Tls),
+		workload::AppProtocol::Http2 => Some(AppProtocol::Http2),
+		workload::AppProtocol::Grpc => Some(AppProtocol::Grpc),
+		workload::AppProtocol::Tcp => Some(AppProtocol::Tcp),
 	}
 }
 

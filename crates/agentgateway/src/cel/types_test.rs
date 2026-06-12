@@ -30,7 +30,10 @@ fn build_test_request() -> crate::http::Request {
 	let source = SourceContext {
 		address: "127.0.0.1".parse().unwrap(),
 		port: 54321,
+		raw_address: "127.0.0.1".parse().unwrap(),
+		raw_port: 54321,
 		tls: None,
+		unverified_workload: None,
 	};
 	req.extensions_mut().insert(source);
 
@@ -41,9 +44,28 @@ fn build_test_request() -> crate::http::Request {
 		protocol: BackendProtocol::http,
 	};
 	req.extensions_mut().insert(backend);
-	req
-		.extensions_mut()
-		.insert(RequestStartTime("now".to_string()));
+	req.extensions_mut().insert(ProxyContext {
+		bind: Some("bind".into()),
+		gateway: Some(ProxyGatewayContext {
+			namespace: "default".into(),
+			name: "gateway".into(),
+		}),
+		listener: Some(ProxyListenerContext {
+			name: "http".into(),
+		}),
+		route: Some(ProxyRouteContext {
+			namespace: "default".into(),
+			name: "route".into(),
+			kind: Some("HTTPRoute".into()),
+			rule: Some("rule".into()),
+		}),
+		request_processing_duration: None,
+		upstream_duration: None,
+		response_processing_duration: None,
+	});
+	req.extensions_mut().insert(RequestTime(
+		chrono::DateTime::parse_from_rfc3339("2000-01-01T12:00:00Z").unwrap(),
+	));
 
 	// Add LLM context
 	let llm = LLMContext {
@@ -52,9 +74,18 @@ fn build_test_request() -> crate::http::Request {
 		response_model: Some("gpt-4-turbo".into()),
 		provider: "openai".into(),
 		input_tokens: Some(100),
+		input_image_tokens: None,
+		input_text_tokens: None,
+		input_audio_tokens: None,
 		output_tokens: Some(50),
+		output_image_tokens: None,
+		output_text_tokens: None,
+		output_audio_tokens: None,
 		total_tokens: Some(150),
+		service_tier: None,
 		first_token: None,
+		time_to_first_token: Some(chrono::Duration::milliseconds(123).into()),
+		time_per_output_token: Some(chrono::Duration::milliseconds(7).into()),
 		count_tokens: None,
 		reasoning_tokens: None,
 		cache_creation_input_tokens: None,
@@ -71,22 +102,78 @@ fn build_test_request() -> crate::http::Request {
 #[test]
 fn test_snapshot_matches_ref() {
 	let mut req = build_test_request();
-	let snapshot = snapshot_request(&mut req);
+	let snapshot = snapshot_request(&mut req, true);
 	let req = build_test_request();
-	let snapshot_exec =
-		Executor::new_logger(Some(&snapshot), None, snapshot.llm.as_ref(), None, None);
+	let snapshot_exec = Executor::new_logger(
+		Some(&snapshot),
+		None,
+		snapshot.llm.as_ref(),
+		None,
+		None,
+		None,
+	);
 	let ref_executor = Executor::new_request(&req);
 
 	assert_eq!(exec_to_json(&ref_executor), exec_to_json(&snapshot_exec));
 }
 
 #[test]
+fn test_request_start_time_is_native_timestamp() {
+	let req = build_test_request();
+	let executor = Executor::new_request(&req);
+	let expr = Expression::new_strict("request.startTime.getFullYear() == 2000").unwrap();
+
+	assert!(executor.eval_bool(&expr));
+}
+
+#[test]
+fn test_route_metadata_context() {
+	let req = build_test_request();
+	let executor = Executor::new_request(&req);
+	let expr = Expression::new_strict(
+		"proxy.bind == 'bind' && \
+		 proxy.gateway.namespace == 'default' && \
+		 proxy.gateway.name == 'gateway' && \
+		 proxy.listener.name == 'http' && \
+		 proxy.route.namespace == 'default' && \
+		 proxy.route.name == 'route' && \
+		 proxy.route.kind == 'HTTPRoute' && \
+		 proxy.route.rule == 'rule'",
+	)
+	.unwrap();
+
+	assert!(executor.eval_bool(&expr));
+}
+
+#[test]
+fn test_proxy_timing_is_native_duration() {
+	let proxy = ProxyContext {
+		bind: None,
+		gateway: None,
+		listener: None,
+		route: None,
+		request_processing_duration: Some(chrono::Duration::milliseconds(12).into()),
+		upstream_duration: Some(chrono::Duration::milliseconds(675).into()),
+		response_processing_duration: Some(chrono::Duration::milliseconds(6).into()),
+	};
+	let executor = Executor::new_logger(None, None, None, None, None, Some(&proxy));
+	let expr = Expression::new_strict(
+		"proxy.requestProcessingDuration == duration('12ms') && \
+		 proxy.upstreamDuration == duration('675ms') && \
+		 proxy.responseProcessingDuration == duration('6ms')",
+	)
+	.unwrap();
+
+	assert!(executor.eval_bool(&expr));
+}
+
+#[test]
 fn test_executor_snapshot_round_trip() {
 	let mut req = build_test_request();
-	let req_snapshot = snapshot_request(&mut req);
+	let req_snapshot = snapshot_request(&mut req, true);
 
 	// Create executor from snapshot
-	let executor1 = Executor::new_logger(Some(&req_snapshot), None, None, None, None);
+	let executor1 = Executor::new_logger(Some(&req_snapshot), None, None, None, None, None);
 
 	// Serialize to JSON
 	let json = exec_to_json(&executor1);
@@ -112,6 +199,11 @@ fn test_executor_round_trip() {
 
 	// Serialize to JSON
 	let json = exec_to_json(&executor1);
+	assert_json_field_coverage(
+		&serde_json::to_value(&exec).expect("failed to serialize ExecutorSerde"),
+		&json,
+		"$",
+	);
 
 	// Deserialize into ExecutorSerde
 	let exec_snapshot: ExecutorSerde =
@@ -127,6 +219,23 @@ fn test_executor_round_trip() {
 	assert_eq!(json, json2, "Round-trip serialization mismatch");
 }
 
+fn assert_json_field_coverage(
+	expected: &serde_json::Value,
+	actual: &serde_json::Value,
+	path: &str,
+) {
+	let (Some(expected), Some(actual)) = (expected.as_object(), actual.as_object()) else {
+		return;
+	};
+	for (key, expected_value) in expected {
+		let child_path = format!("{path}.{key}");
+		let actual_value = actual
+			.get(key)
+			.unwrap_or_else(|| panic!("variables() missing populated field {child_path}"));
+		assert_json_field_coverage(expected_value, actual_value, &child_path);
+	}
+}
+
 #[test]
 fn test_executor_serde_complete() {
 	let exec = full_example_executor();
@@ -137,6 +246,18 @@ fn test_executor_serde_complete() {
 
 	let json3 = exec_to_json(&executor2);
 	assert_eq!(json1, json3, "Round-trip serialization mismatch");
+}
+
+#[test]
+fn test_env() {
+	let exec = full_example_executor();
+	let executor = exec.as_executor();
+	let expr = Expression::new_strict(
+		"env.podName == 'pod-1' && env.namespace == 'ns-1' && env.gateway == 'gw-1'",
+	)
+	.unwrap();
+
+	assert!(executor.eval_bool(&expr));
 }
 
 fn exec_to_json(exec: &Executor) -> serde_json::Value {
@@ -169,10 +290,29 @@ fn test_executor_snapshot_json_to_cel() {
 			"type": "service",
 			"protocol": "http"
 		},
+		"proxy": {
+			"bind": "bind",
+			"gateway": {
+				"namespace": "default",
+				"name": "gateway"
+			},
+			"listener": {
+				"name": "http"
+			},
+			"route": {
+				"namespace": "default",
+				"name": "route",
+				"kind": "HTTPRoute",
+				"rule": "rule"
+			},
+			"requestProcessingDuration": "12ms",
+			"upstreamDuration": "675ms",
+			"responseProcessingDuration": "6ms"
+		},
 		"jwt": {
 			"sub": "test-user",
 			"role": "admin"
-		}
+		},
 	});
 
 	// Deserialize into ExecutorSerde
@@ -192,7 +332,20 @@ fn test_executor_snapshot_json_to_cel() {
 	assert_eq!(cel_json["request"]["path"], "/test");
 	assert_eq!(cel_json["source"]["address"], "10.0.0.1");
 	assert_eq!(cel_json["backend"]["name"], "my-backend");
+	assert_eq!(cel_json["proxy"]["listener"]["name"], "http");
+	assert_eq!(cel_json["proxy"]["route"]["rule"], "rule");
 	assert_eq!(cel_json["jwt"]["sub"], "test-user");
+	assert_eq!(cel_json["proxy"]["requestProcessingDuration"], "0.012s");
+	assert_eq!(cel_json["proxy"]["upstreamDuration"], "0.675s");
+	assert_eq!(cel_json["proxy"]["responseProcessingDuration"], "0.006s");
+
+	let expr = Expression::new_strict(
+		"proxy.requestProcessingDuration == duration('12ms') && \
+		 proxy.upstreamDuration == duration('675ms') && \
+		 proxy.responseProcessingDuration == duration('6ms')",
+	)
+	.expect("failed to compile");
+	assert!(executor.eval_bool(&expr));
 }
 
 #[test]
@@ -239,12 +392,17 @@ fn test_extension_or_direct_serialization() {
 	let value = SourceContext {
 		address: "192.168.1.1".parse().unwrap(),
 		port: 8080,
+		raw_address: "192.168.1.1".parse().unwrap(),
+		raw_port: 8080,
 		tls: None,
+		unverified_workload: None,
 	};
 	let ext_or_direct: ExtensionOrDirect<SourceContext> = ExtensionOrDirect::Direct(Some(&value));
 	let json = serde_json::to_value(&ext_or_direct).expect("failed to serialize");
 	assert_eq!(json["address"], "192.168.1.1");
 	assert_eq!(json["port"], 8080);
+	assert_eq!(json["rawAddress"], "192.168.1.1");
+	assert_eq!(json["rawPort"], 8080);
 
 	// Test Direct with None
 	let ext_or_direct_none: ExtensionOrDirect<SourceContext> = ExtensionOrDirect::Direct(None);

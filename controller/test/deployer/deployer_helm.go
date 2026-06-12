@@ -10,32 +10,35 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"istio.io/istio/pkg/ptr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gwxv1a1 "sigs.k8s.io/gateway-api/apisx/v1alpha1"
 	"sigs.k8s.io/yaml"
 
+	apisettings "github.com/agentgateway/agentgateway/controller/api/settings"
+	apitests "github.com/agentgateway/agentgateway/controller/api/tests"
 	"github.com/agentgateway/agentgateway/controller/api/v1alpha1/agentgateway"
+	"github.com/agentgateway/agentgateway/controller/pkg/agentgateway/plugins"
 	"github.com/agentgateway/agentgateway/controller/pkg/apiclient"
-	pkgdeployer "github.com/agentgateway/agentgateway/controller/pkg/deployer"
-	internaldeployer "github.com/agentgateway/agentgateway/controller/pkg/kgateway/deployer"
-	"github.com/agentgateway/agentgateway/controller/pkg/pluginsdk/collections"
+	"github.com/agentgateway/agentgateway/controller/pkg/deployer"
 	"github.com/agentgateway/agentgateway/controller/pkg/utils/envutils"
 	"github.com/agentgateway/agentgateway/controller/test/testutils"
 )
 
+const testSessionKey = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
 type HelmTestCase struct {
 	Name   string
-	Inputs *pkgdeployer.Inputs
+	Inputs *deployer.Inputs
 	// InputFile is just the name of the manifest omitting the file extension suffix
 	InputFile string
+	// Settings has install-time control plane settings, passed to AgwCollections.
+	Settings *apisettings.Settings
 	// Validate is an optional function to run additional validation on the output YAML
 	Validate func(t *testing.T, outputYaml string)
 	// HelmValuesGeneratorOverride is an optional function to modify deployer inputs before rendering.
 	// This is useful for tests that need special configuration like TLS.
-	HelmValuesGeneratorOverride func(inputs *pkgdeployer.Inputs) pkgdeployer.HelmValuesGenerator
+	HelmValuesGeneratorOverride func(inputs *deployer.Inputs) deployer.HelmValuesGenerator
 }
 
 type DeployerTester struct {
@@ -110,7 +113,7 @@ func VerifyAllYAMLFilesReferenced(t *testing.T, testDataDir string, testCases []
 	require.Empty(t, unreferencedGolden, "Found golden output files in %s without corresponding test cases: %v", testDataDir, unreferencedGolden)
 }
 
-// ExtractCommonObjs will return a collection containing only objects necessary for collections.CommonCollections,
+// ExtractCommonObjs will return a collection containing only objects necessary for AgwCollections,
 // so we don't add unknown objects to avoid logging from krttest package re: objects not consumed
 func ExtractCommonObjs(t *testing.T, objs []client.Object) ([]client.Object, *gwv1.Gateway) {
 	var commonObjs []client.Object
@@ -126,7 +129,7 @@ func ExtractCommonObjs(t *testing.T, objs []client.Object) ([]client.Object, *gw
 			commonObjs = append(commonObjs, gtw)
 		case *gwv1.GatewayClass:
 			commonObjs = append(commonObjs, obj)
-		case *gwxv1a1.XListenerSet:
+		case *gwv1.ListenerSet:
 			commonObjs = append(commonObjs, obj)
 		}
 	}
@@ -138,52 +141,48 @@ func (dt DeployerTester) GetObjects(
 	tt HelmTestCase,
 	scheme *runtime.Scheme,
 	dir string,
-	crdDir string,
 ) []client.Object {
 	filePath := filepath.Join(dir, "testdata/", tt.InputFile)
 	inputFile := filePath + ".yaml"
 
-	gvkToStructuralSchema, err := testutils.GetStructuralSchemas(crdDir)
-	require.NoError(t, err, "error getting structural schemas")
+	validator := apitests.NewAgentgatewayValidatorSkipMissing(t)
 
-	objs, err := testutils.LoadFromFiles(inputFile, scheme, gvkToStructuralSchema)
+	objs, err := testutils.LoadFromFiles(inputFile, scheme, validator)
 	require.NoError(t, err, "error loading files from input file")
 
 	return objs
 }
 
-func (dt DeployerTester) RunHelmChartTest(
-	t *testing.T,
-	tt HelmTestCase,
-	scheme *runtime.Scheme,
-	dir string,
-	crdDir string,
-	fakeClient apiclient.Client,
-) {
+func (dt DeployerTester) RunHelmChartTest(t *testing.T, tt HelmTestCase, scheme *runtime.Scheme, dir string, fakeClient apiclient.Client, objs []client.Object) {
 	filePath := filepath.Join(dir, "testdata/", tt.InputFile)
 	outputFile := filePath + "-out.yaml"
-
-	objs := dt.GetObjects(t, tt, scheme, dir, crdDir)
 
 	_, gtw := ExtractCommonObjs(t, objs)
 	if gtw == nil {
 		t.Log("No Gateway found in test files, failing...")
 		t.FailNow()
 	}
-	commonCols := NewCommonCols(t)
-	inputs := DefaultDeployerInputs(dt, commonCols)
+	agwCols := NewAgwCols(t)
+	if tt.Settings != nil {
+		// override control-plane level settings
+		agwCols = NewAgwColsWithSettings(t, *tt.Settings, objs...)
+	}
+	inputs := DefaultDeployerInputs(dt, agwCols)
 	if tt.Inputs != nil {
 		inputs = tt.Inputs
 	}
 
-	gwParams := internaldeployer.NewGatewayParameters(
+	gwParams := deployer.NewGatewayParameters(
 		fakeClient,
 		inputs,
 	)
+	gwParams.WithSessionKeyGenerator(func() (string, error) {
+		return testSessionKey, nil
+	})
 	if tt.HelmValuesGeneratorOverride != nil {
 		gwParams.WithHelmValuesGeneratorOverride(tt.HelmValuesGeneratorOverride(inputs))
 	}
-	deployer, err := internaldeployer.NewGatewayDeployer(
+	deployer, err := deployer.NewGatewayDeployer(
 		dt.AgwControllerName,
 		dt.AgwClassName,
 		scheme,
@@ -249,20 +248,19 @@ func objectsToYAML(objs []client.Object) ([]byte, error) {
 	return result, nil
 }
 
-func DefaultDeployerInputs(dt DeployerTester, commonCols *collections.CommonCollections) *pkgdeployer.Inputs {
-	return &pkgdeployer.Inputs{
-		Dev:               false,
-		CommonCollections: commonCols,
-		ControlPlane: pkgdeployer.ControlPlaneInfo{
+func DefaultDeployerInputs(dt DeployerTester, agwCols *plugins.AgwCollections) *deployer.Inputs {
+	return &deployer.Inputs{
+		AgwCollections: agwCols,
+		ControlPlane: deployer.ControlPlaneInfo{
 			XdsHost:    "xds.cluster.local",
 			AgwXdsPort: 9978,
 		},
 		AgentgatewayClassName:      dt.AgwClassName,
 		AgentgatewayControllerName: dt.AgwControllerName,
 		ImageDefaults: &agentgateway.Image{
-			Registry:   ptr.Of("cr.agentgateway.dev"),
-			Repository: ptr.Of("agentgateway"),
-			Tag:        ptr.Of("99.99.99"),
+			Registry:   new("cr.agentgateway.dev"),
+			Repository: new("agentgateway"),
+			Tag:        new("99.99.99"),
 			Digest:     nil,
 			PullPolicy: nil,
 		},

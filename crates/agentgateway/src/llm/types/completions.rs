@@ -35,8 +35,36 @@ pub struct Request {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_completion_tokens: Option<u32>,
 
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub stop: Option<serde_json::Value>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tools: Option<Vec<serde_json::Value>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_choice: Option<serde_json::Value>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub user: Option<String>,
+
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
+}
+
+impl Request {
+	pub fn normalize_openai_token_limit(&mut self) {
+		if !self.requires_openai_max_completion_tokens() {
+			return;
+		}
+		if self.max_completion_tokens.is_none() {
+			self.max_completion_tokens = self.max_tokens;
+		}
+		self.max_tokens = None;
+	}
+
+	fn requires_openai_max_completion_tokens(&self) -> bool {
+		self
+			.model
+			.as_deref()
+			.is_some_and(|model| model.starts_with("gpt-"))
+	}
 }
 
 /// Options for streaming response. Only set this when you set `stream: true`.
@@ -52,6 +80,8 @@ pub struct StreamOptions {
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct Response {
 	pub model: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub service_tier: Option<String>,
 	pub usage: Option<Usage>,
 	/// A list of chat completion choices. Can be more than one if `n` is greater than 1.
 	#[serde(default)]
@@ -62,12 +92,13 @@ pub struct Response {
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct Choice {
+	#[serde(default)]
 	pub message: ResponseMessage,
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Default, Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct ResponseMessage {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub content: Option<String>,
@@ -80,24 +111,32 @@ pub struct ResponseMessage {
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct UsageCompletionDetails {
 	pub reasoning_tokens: Option<u64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_tokens: Option<u64>,
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct UsagePromptDetails {
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub cached_tokens: Option<u64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_tokens: Option<u64>,
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Default, Debug, Deserialize, Clone, Serialize)]
 pub struct Usage {
 	/// Number of tokens in the prompt.
+	#[serde(default)]
 	pub prompt_tokens: u32,
 	/// Number of tokens in the generated completion.
+	#[serde(default)]
 	pub completion_tokens: u32,
 	/// Total number of tokens used in the request (prompt + completion).
+	#[serde(default)]
 	pub total_tokens: u32,
 	/// Breakdown of tokens used in a completion.
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -113,9 +152,26 @@ impl ResponseType for Response {
 	fn to_llm_response(&self, include_completion_in_log: bool) -> LLMResponse {
 		LLMResponse {
 			input_tokens: self.usage.as_ref().map(|u| u.prompt_tokens as u64),
+			input_image_tokens: None,
+			input_text_tokens: None,
+			input_audio_tokens: self.usage.as_ref().and_then(|u| {
+				u.prompt_tokens_details
+					.as_ref()
+					.and_then(|d| d.audio_tokens)
+			}),
+
 			output_tokens: self.usage.as_ref().map(|u| u.completion_tokens as u64),
+			output_image_tokens: None,
+			output_text_tokens: None,
+			output_audio_tokens: self.usage.as_ref().and_then(|u| {
+				u.completion_tokens_details
+					.as_ref()
+					.and_then(|d| d.audio_tokens)
+			}),
+
 			total_tokens: self.usage.as_ref().map(|u| u.total_tokens as u64),
 			count_tokens: None,
+
 			reasoning_tokens: self.usage.as_ref().and_then(|u| {
 				u.completion_tokens_details
 					.as_ref()
@@ -127,6 +183,7 @@ impl ResponseType for Response {
 					.and_then(|d| d.cached_tokens)
 			}),
 			cache_creation_input_tokens: None,
+			service_tier: self.service_tier.as_deref().map(Into::into),
 			provider_model: Some(strng::new(&self.model)),
 			completion: if include_completion_in_log {
 				Some(
@@ -147,7 +204,7 @@ impl ResponseType for Response {
 		if self.choices.len() != choices.len() {
 			anyhow::bail!("webhook response message count mismatch");
 		}
-		for (m, wh) in self.choices.iter_mut().zip(choices.into_iter()) {
+		for (m, wh) in self.choices.iter_mut().zip(choices) {
 			m.message.content = Some(wh.message.content.to_string());
 		}
 		Ok(())
@@ -227,6 +284,7 @@ impl super::RequestType for Request {
 		let llm = LLMRequest {
 			input_tokens,
 			input_format: InputFormat::Completions,
+			native_format: Some(crate::llm::custom::ProviderFormat::Completions),
 			request_model: model,
 			provider,
 			streaming: self.stream.unwrap_or_default(),
@@ -292,6 +350,8 @@ fn convert_message(r: SimpleChatCompletionMessage) -> RequestMessage {
 		role: r.role.to_string(),
 		name: None,
 		content: Some(Content::Text(r.content.to_string())),
+		tool_call_id: None,
+		tool_calls: None,
 		rest: Default::default(),
 	}
 }
@@ -302,6 +362,10 @@ pub struct RequestMessage {
 	pub name: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub content: Option<Content>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_call_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_calls: Option<Vec<serde_json::Value>>,
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
 }
@@ -355,26 +419,78 @@ pub mod typed {
 		ChatCompletionMessageToolCall as MessageToolCall, ChatCompletionMessageToolCallChunk,
 		ChatCompletionMessageToolCalls as MessageToolCalls,
 		ChatCompletionNamedToolChoice as NamedToolChoice,
-		ChatCompletionRequestAssistantMessage as RequestAssistantMessage,
+		ChatCompletionRequestAssistantMessageAudio as RequestAssistantMessageAudio,
 		ChatCompletionRequestAssistantMessageContent as RequestAssistantMessageContent,
+		ChatCompletionRequestAssistantMessageContentPart as RequestAssistantMessageContentPart,
 		ChatCompletionRequestDeveloperMessage as RequestDeveloperMessage,
 		ChatCompletionRequestDeveloperMessageContent as RequestDeveloperMessageContent,
-		ChatCompletionRequestMessage as RequestMessage,
+		ChatCompletionRequestDeveloperMessageContentPart as RequestDeveloperMessageContentPart,
+		ChatCompletionRequestFunctionMessage as RequestFunctionMessage,
+		ChatCompletionRequestMessageContentPartImage as RequestMessageContentPartImage,
+		ChatCompletionRequestMessageContentPartText as RequestMessageContentPartText,
 		ChatCompletionRequestSystemMessage as RequestSystemMessage,
 		ChatCompletionRequestSystemMessageContent as RequestSystemMessageContent,
+		ChatCompletionRequestSystemMessageContentPart as RequestSystemMessageContentPart,
 		ChatCompletionRequestToolMessage as RequestToolMessage,
 		ChatCompletionRequestToolMessageContent as RequestToolMessageContent,
 		ChatCompletionRequestToolMessageContentPart as RequestToolMessageContentPart,
 		ChatCompletionRequestUserMessage as RequestUserMessage,
 		ChatCompletionRequestUserMessageContent as RequestUserMessageContent,
+		ChatCompletionRequestUserMessageContentPart as RequestUserMessageContentPart,
 		ChatCompletionStreamOptions as StreamOptions, ChatCompletionTool as FunctionTool,
 		ChatCompletionToolChoiceOption as ToolChoiceOption, ChatCompletionToolChoiceOption,
 		ChatCompletionTools as Tool, FinishReason, FunctionCall, FunctionCallStream, FunctionName,
-		FunctionObject, FunctionType, PredictionContent, ReasoningEffort, ResponseFormat,
-		ResponseFormatJsonSchema, ResponseModalities as ChatCompletionModalities, Role, ServiceTier,
+		FunctionObject, FunctionType, ImageUrl, PredictionContent, ReasoningEffort, ResponseFormat,
+		ResponseFormatJsonSchema, ResponseModalities as ChatCompletionModalities, Role,
 		StopConfiguration as Stop, ToolChoiceOptions, WebSearchOptions,
 	};
 	use serde::{Deserialize, Serialize};
+
+	/// Agentgateway fork of async-openai's `ChatCompletionRequestMessage`.
+	///
+	/// Identical wire format (`#[serde(tag = "role")]`, lowercase), but the `Assistant` variant
+	/// uses our own [`RequestAssistantMessage`] so an inbound assistant turn can carry
+	/// `reasoning_content` / `reasoning_signature`. async-openai's type has no field for those, so
+	/// the alternative was reading them out of the loose request's untyped `rest` map and
+	/// re-aligning by position — this keeps them on the message instead.
+	#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+	#[serde(tag = "role", rename_all = "lowercase")]
+	pub enum RequestMessage {
+		Developer(RequestDeveloperMessage),
+		System(RequestSystemMessage),
+		User(RequestUserMessage),
+		Assistant(RequestAssistantMessage),
+		Tool(RequestToolMessage),
+		Function(RequestFunctionMessage),
+	}
+
+	/// Agentgateway fork of async-openai's `ChatCompletionRequestAssistantMessage`, extended with
+	/// the reasoning fields needed to replay a thinking block back to the model (see
+	/// [`RequestMessage`]). The leading fields mirror the upstream layout one-to-one.
+	#[allow(deprecated)]
+	#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+	pub struct RequestAssistantMessage {
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub content: Option<RequestAssistantMessageContent>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub refusal: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub name: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub audio: Option<RequestAssistantMessageAudio>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub tool_calls: Option<Vec<MessageToolCalls>>,
+		/// Deprecated upstream and replaced by `tool_calls`; kept for wire-format parity.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub function_call: Option<FunctionCall>,
+		/// Agentgateway: reasoning text emitted on a prior turn, replayed back to the provider.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub reasoning_content: Option<String>,
+		/// Agentgateway: the Bedrock/Anthropic cryptographic attestation for `reasoning_content`.
+		/// Required for the provider to accept a replayed thinking block.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub reasoning_signature: Option<String>,
+	}
 
 	/// Represents a chat completion response returned by model, based on the provided input.
 	#[derive(Debug, Deserialize, Clone, Serialize)]
@@ -389,7 +505,7 @@ pub mod typed {
 		pub model: String,
 		/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
 		#[serde(skip_serializing_if = "Option::is_none")]
-		pub service_tier: Option<ServiceTier>,
+		pub service_tier: Option<String>,
 		/// This fingerprint represents the backend configuration that the model runs with.
 		///
 		/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
@@ -404,21 +520,32 @@ pub mod typed {
 	#[derive(Debug, Deserialize, Clone, Serialize)]
 	pub struct UsageCompletionDetails {
 		pub reasoning_tokens: Option<u64>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub audio_tokens: Option<u64>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
 	}
 
 	#[derive(Debug, Deserialize, Clone, Serialize)]
 	pub struct UsagePromptDetails {
 		pub cached_tokens: Option<u64>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub audio_tokens: Option<u64>,
+		#[serde(flatten, default)]
+		pub rest: serde_json::Value,
 	}
 
 	// Forked typed from OpenAI to include custom cache token details other providers use.
 	#[derive(Default, Debug, Deserialize, Clone, Serialize)]
 	pub struct Usage {
 		/// Number of tokens in the prompt.
+		#[serde(default)]
 		pub prompt_tokens: u32,
 		/// Number of tokens in the generated completion.
+		#[serde(default)]
 		pub completion_tokens: u32,
 		/// Total number of tokens used in the request (prompt + completion).
+		#[serde(default)]
 		pub total_tokens: u32,
 		/// Breakdown of tokens used in a completion.
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -447,7 +574,7 @@ pub mod typed {
 		/// The model to generate the completion.
 		pub model: String,
 		/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
-		pub service_tier: Option<ServiceTier>,
+		pub service_tier: Option<String>,
 		/// This fingerprint represents the backend configuration that the model runs with.
 		/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
 		pub system_fingerprint: Option<String>,
@@ -503,6 +630,17 @@ pub mod typed {
 		/// Agentgateway: added reasoning_content
 		#[serde(skip_serializing_if = "Option::is_none")]
 		pub reasoning_content: Option<String>,
+
+		/// Agentgateway: added reasoning_signature — the Bedrock/Anthropic cryptographic attestation
+		/// that must accompany a thinking block when it is fed back in a subsequent request.
+		/// Forwarded as-is from the upstream SignatureDelta event.
+		///
+		/// Note: this named field lives on the *response* delta only. The inbound *request* path
+		/// uses the untyped `types::completions::RequestMessage` whose `rest: serde_json::Value`
+		/// flatten map continues to hold `reasoning_signature` — so `extract_reasoning_replays` in
+		/// `bedrock.rs` still finds the signature on the request side regardless of this field.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub reasoning_signature: Option<String>,
 
 		/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
 		#[serde(flatten)]
@@ -564,6 +702,18 @@ pub mod typed {
 		/// specific with them.
 		#[serde(skip_serializing_if = "Option::is_none")]
 		pub reasoning_content: Option<String>,
+
+		/// Agentgateway: reasoning_signature — the Bedrock/Anthropic cryptographic attestation that
+		/// must accompany a thinking block when replayed in a subsequent turn. Extracted from the
+		/// Anthropic SignatureDelta event and forwarded verbatim so downstream consumers can preserve
+		/// thinking blocks across conversation turns.
+		///
+		/// Note: this named field lives on the *response* message only. The inbound *request* path
+		/// uses the untyped `types::completions::RequestMessage` whose `rest: serde_json::Value`
+		/// flatten map continues to hold `reasoning_signature` — so `extract_reasoning_replays` in
+		/// `bedrock.rs` still finds the signature on the request side regardless of this field.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub reasoning_signature: Option<String>,
 
 		/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
 		#[serde(flatten)]
@@ -680,7 +830,7 @@ pub mod typed {
 		///
 		/// When this parameter is set, the response body will include the `service_tier` utilized.
 		#[serde(skip_serializing_if = "Option::is_none")]
-		pub service_tier: Option<ServiceTier>,
+		pub service_tier: Option<String>,
 
 		/// Up to 4 sequences where the API will stop generating further tokens.
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -753,7 +903,7 @@ pub mod typed {
 		pub functions: Option<Vec<ChatCompletionFunctions>>,
 
 		/// Agentgateway: vendor specific fields we allow only for internal creation
-		#[serde(flatten, skip_deserializing)]
+		#[serde(flatten, skip_serializing, skip_deserializing)]
 		pub vendor_extensions: RequestVendorExtensions,
 	}
 
@@ -775,7 +925,8 @@ pub mod typed {
 
 	#[derive(Debug, Deserialize, Serialize)]
 	pub struct ChatCompletionError {
-		pub r#type: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub r#type: Option<String>,
 		pub message: String,
 		#[serde(skip_serializing_if = "Option::is_none")]
 		pub param: Option<String>,
@@ -785,9 +936,37 @@ pub mod typed {
 		pub event_id: Option<String>,
 	}
 
+	/// Google's OpenAI-compatible shim (Gemini API and Vertex AI) return errors
+	/// following the standard Google Cloud error model, but consistently wrap
+	/// them in a JSON array when returned from the Vertex AI shim.
+	///
+	/// For the official Google Cloud error model, see:
+	/// https://cloud.google.com/apis/design/errors#http_mapping
+	///
+	/// For the observed non-standard array-wrapping behavior in the OpenAI shim, see:
+	/// https://github.com/openai/openai-node/issues/1734
+	#[derive(Debug, Deserialize, Serialize)]
+	pub struct GoogleErrorResponse {
+		pub error: GoogleError,
+	}
+
+	#[derive(Debug, Deserialize, Serialize)]
+	pub struct GoogleError {
+		/// The numeric error code (e.g. 400).
+		pub code: i32,
+		/// The human-readable error message.
+		pub message: String,
+		/// The programmatic error status (e.g. "INVALID_ARGUMENT", "RESOURCE_EXHAUSTED").
+		#[serde(default)]
+		pub status: Option<String>,
+	}
+
+	#[allow(dead_code)]
 	pub const SYSTEM_ROLE: &str = "system";
+	#[allow(dead_code)]
 	pub const ASSISTANT_ROLE: &str = "assistant";
 
+	#[allow(dead_code)]
 	pub fn message_role(msg: &RequestMessage) -> &'static str {
 		match msg {
 			RequestMessage::Developer(_) => "developer",
@@ -799,6 +978,7 @@ pub mod typed {
 		}
 	}
 
+	#[allow(dead_code)]
 	pub fn message_text(msg: &RequestMessage) -> Option<&str> {
 		// All of these types support Vec<Text>... show we support those?
 		// Right now, we don't support

@@ -1,12 +1,28 @@
 # Tiltfile for AgentGateway development
 # This deploys both control plane (Go) and data plane (Rust) to Kind with live updates
 load('ext://restart_process', 'docker_build_with_restart')
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
 
 # Configuration
 version = 'v1.0.1-dev'
 cluster_name = 'kind'
 install_namespace = k8s_namespace()
 image_registry = 'localhost:5000'
+
+# Detect host architecture for cross-compilation
+host_os = str(local('uname -s', quiet=True)).strip()
+host_arch = str(local('uname -m', quiet=True)).strip()
+if host_arch in ['arm64', 'aarch64']:
+    rust_target = 'aarch64-unknown-linux-gnu'
+else:
+    rust_target = 'x86_64-unknown-linux-gnu'
+
+cross_env = ''
+if host_os == 'Darwin' and host_arch in ['arm64', 'aarch64']:
+  cross_env = 'CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:+$CROSS_CONTAINER_OPTS }--platform linux/amd64" '
+
+if str(local('command -v cross >/dev/null 2>&1; echo $?', quiet=True)).strip() != '0':
+    fail('cross is required for Tilt dataplane builds. Install it with: cargo install cross')
 
 # Ensure Kind cluster exists
 allow_k8s_contexts('kind-' + cluster_name)
@@ -33,14 +49,12 @@ run_controller_make('gie-crds')
 
 # Install CRDs
 print('Installing AgentGateway CRDs...')
-k8s_yaml(helm(
-    'controller/install/helm/agentgateway-crds',
-    name='agentgateway-crds',
-    namespace=install_namespace,
-    set=[
-        'version=' + version,
-    ]
-))
+helm_resource(
+  'agentgateway-crds',
+  'controller/install/helm/agentgateway-crds',
+  namespace=install_namespace,
+  flags=['--set=version=' + version],
+)
 
 # =============================================================================
 # Control Plane (Go-based controller)
@@ -48,7 +62,7 @@ k8s_yaml(helm(
 
 local_resource(
   'go-compile-controller',
-  'make -C ./controller VERSION=' + version + ' GCFLAGS=all="-N -l" agentgateway-controller && mv ./controller/_output/pkg/agentgateway/agentgateway-linux-$(go env GOARCH) ./hack/tilt/agentgateway-controller',
+  'make -C ./controller VERSION=' + version + ' GCFLAGS=all="-N -l" agentgateway-controller && mv ./controller/_output/pkg/agentgateway/agentgateway-linux-$(go env GOARCH) ./tools/tilt/agentgateway-controller',
   deps=['./controller/'],
   ignore=['./controller/_output/'],
 )
@@ -56,17 +70,21 @@ local_resource(
 # Build control plane Docker image
 docker_build_with_restart(
     image_registry + '/agentgateway-controller',
-    context='./hack/tilt/',
+    context='./tools/tilt/',
     entrypoint='/usr/local/bin/agentgateway-controller',
+    # Run as non-root while ensuring Tilt can do in-place updates of the Go binary
     dockerfile_contents="""
 FROM ubuntu:24.04
-COPY agentgateway-controller /usr/local/bin/agentgateway-controller
+RUN useradd -r -U -u 65532 -s /usr/sbin/nologin agentgateway
+RUN chown agentgateway:agentgateway /usr/local/bin
+COPY --chown=agentgateway:agentgateway agentgateway-controller /usr/local/bin/agentgateway-controller
+USER 65532
 ENTRYPOINT /usr/local/bin/agentgateway-controller
     """,
     # Live update: sync Go binaries
     live_update=[
         # Sync Go code changes
-        sync('./hack/tilt/agentgateway-controller', '/usr/local/bin/agentgateway-controller'), 
+        sync('./tools/tilt/agentgateway-controller', '/usr/local/bin/agentgateway-controller'), 
     ],
     only=[
         './agentgateway-controller',
@@ -104,9 +122,13 @@ k8s_resource('agentgateway',
 # Data Plane (Rust-based proxy)
 # =============================================================================
 
+# Use cross to consistently build a Linux binary (which can run on Kind)
+# regardless of whether the local machine is Linux or macOS
 local_resource(
   'rust-compile-dataplane',
-  'cargo build && if [ -f "./hack/tilt/agentgateway" ]; then rm "./hack/tilt/agentgateway"; fi && mv ./target/debug/agentgateway ./hack/tilt/agentgateway',
+  cross_env + 'cross build --target ' + rust_target +
+    ' && if [ -f "./tools/tilt/agentgateway" ]; then rm "./tools/tilt/agentgateway"; fi' +
+    ' && mv ./target/' + rust_target + '/debug/agentgateway ./tools/tilt/agentgateway',
   deps=['./crates',
         './Cargo.toml',
         './Cargo.lock',
@@ -115,7 +137,7 @@ local_resource(
 # Build data plane Docker image
 docker_build(
     'agentgateway',
-    context='./hack/tilt/',
+    context='./tools/tilt/',
     dockerfile_contents="""
 FROM ubuntu:24.04
 COPY start.sh /scripts/start.sh
@@ -124,7 +146,7 @@ COPY agentgateway /usr/local/bin/
 ENTRYPOINT ["/scripts/start.sh", "/usr/local/bin/agentgateway"]
     """,
     live_update=[
-        sync('./hack/tilt/agentgateway', '/usr/local/bin/agentgateway'),
+        sync('./tools/tilt/agentgateway', '/usr/local/bin/agentgateway'),
         run('/scripts/restart.sh'),
     ],
     only=[

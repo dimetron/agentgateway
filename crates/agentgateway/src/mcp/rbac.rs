@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use ::cel::Value;
 use ::cel::objects::{KeyRef, MapValue};
 use serde::{Deserialize, Serialize};
 use vector_map::VecMap;
 
-use crate::cel::{ContextBuilder, RequestSnapshot};
+use crate::cel::ContextBuilder;
 use crate::http::authorization::{RuleSet, RuleSets};
-use crate::http::jwt::Claims;
 use crate::*;
 
 #[apply(schema!)]
-pub struct McpAuthorization(RuleSet);
+pub struct McpAuthorization(
+	/// CEL authorization rules for MCP tools, prompts, and resources.
+	RuleSet,
+);
 
 impl McpAuthorization {
 	pub fn new(rule_set: RuleSet) -> Self {
@@ -21,14 +25,17 @@ impl McpAuthorization {
 	}
 }
 
-pub struct CelExecWrapper(Arc<Option<RequestSnapshot>>);
+/// Cheap clone via Arc; this API treats the request as read-only after construction.
+#[derive(Clone)]
+pub struct CelExecWrapper(Arc<::http::Request<()>>);
 
 impl CelExecWrapper {
-	pub fn new(snap: Arc<Option<RequestSnapshot>>) -> CelExecWrapper {
-		CelExecWrapper(snap)
+	pub fn new(req: ::http::Request<()>) -> CelExecWrapper {
+		CelExecWrapper(Arc::new(req))
 	}
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpAuthorizationSet(RuleSets);
 
 impl McpAuthorizationSet {
@@ -36,8 +43,12 @@ impl McpAuthorizationSet {
 		Self(rs)
 	}
 	pub fn validate(&self, res: &ResourceType, cel: &CelExecWrapper) -> bool {
+		if !self.0.has_rules() {
+			return true;
+		}
 		tracing::debug!("Checking RBAC for resource: {:?}", res);
-		let exec = crate::cel::Executor::new_mcp(cel.0.as_ref().as_ref(), res);
+		let mcp = crate::mcp::MCPInfo::from(res);
+		let exec = crate::cel::Executor::new_mcp_request(cel.0.as_ref(), &mcp);
 		self.0.validate(&exec)
 	}
 
@@ -97,54 +108,99 @@ impl ResourceId {
 	pub fn new(target: String, id: String) -> Self {
 		Self { target, id }
 	}
-}
 
-#[derive(Clone, Debug, Default)]
-pub struct Identity {
-	pub claims: Option<Claims>,
-}
+	pub fn target(&self) -> &str {
+		&self.target
+	}
 
-impl agent_core::trcng::Claim for Identity {
-	fn get_claim(&self, key: &str) -> Option<&str> {
-		self.get_claim(key, ".")
+	pub fn name(&self) -> &str {
+		&self.id
 	}
 }
 
-impl Identity {
-	pub fn new(claims: Option<Claims>) -> Self {
-		Self { claims }
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use serde_json::json;
+
+	use super::*;
+	use crate::http::authorization::PolicySet;
+
+	fn tool_resource(target: &str, name: &str) -> ResourceType {
+		ResourceType::Tool(ResourceId::new(target.to_string(), name.to_string()))
 	}
-	// Attempts to get the claim from the claims map
-	// The key should be split by the key_delimiter and then the map should be searched recursively
-	// If the key is not found, it returns None
-	// If the key is found, it returns the value
-	pub fn get_claim(&self, key: &str, key_delimiter: &str) -> Option<&str> {
-		match &self.claims {
-			Some(claims) => {
-				// Split the key by the delimiter to handle nested lookups
-				let keys = key.split(key_delimiter).collect::<Vec<&str>>();
 
-				// Start with the root claims map
-				let mut current_value = &claims.inner;
+	fn req_with_claims(claims: serde_json::Value) -> ::http::Request<()> {
+		let mut req = ::http::Request::builder()
+			.method(::http::Method::POST)
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap();
+		let serde_json::Value::Object(claims) = claims else {
+			panic!("claims must be a JSON object");
+		};
+		req.extensions_mut().insert(crate::http::jwt::Claims {
+			inner: claims,
+			jwt: Default::default(),
+		});
+		req
+	}
 
-				// Navigate through each key level
-				let num_keys = keys.len();
-				for (index, key_part) in keys.into_iter().enumerate() {
-					// Get the value at this level
-					let value = current_value.get(key_part)?;
+	fn req_without_claims() -> ::http::Request<()> {
+		::http::Request::builder()
+			.method(::http::Method::POST)
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap()
+	}
 
-					// If this is the last key part, return the string value
-					if index == num_keys - 1 {
-						return value.as_str();
-					}
+	fn authorization_set(expr: &str) -> McpAuthorizationSet {
+		let policies = PolicySet::new(
+			vec![Arc::new(cel::Expression::new_strict(expr).unwrap())],
+			vec![],
+			vec![],
+		);
+		McpAuthorizationSet::new(RuleSets::from(vec![RuleSet::new(policies)]))
+	}
 
-					// Otherwise, try to navigate deeper if it's an object
-					current_value = value.as_object()?;
-				}
+	#[test]
+	fn test_mcp_authorization_empty_rules_short_circuits() {
+		let res = tool_resource("server", "increment");
 
-				None
-			},
-			None => None,
-		}
+		let no_rule_sets = McpAuthorizationSet::new(RuleSets::from(vec![]));
+		assert!(no_rule_sets.validate(&res, &CelExecWrapper::new(req_without_claims())));
+
+		let empty_rule_set = McpAuthorizationSet::new(RuleSets::from(vec![RuleSet::new(
+			PolicySet::new(vec![], vec![], vec![]),
+		)]));
+		assert!(empty_rule_set.validate(&res, &CelExecWrapper::new(req_without_claims())));
+	}
+
+	#[test]
+	fn test_mcp_authorization_jwt_claim_match() {
+		let authz = authorization_set(r#"mcp.tool.name == "increment" && jwt.sub == "1234567890""#);
+		let req = req_with_claims(json!({ "sub": "1234567890" }));
+		let res = tool_resource("server", "increment");
+
+		assert!(authz.validate(&res, &CelExecWrapper::new(req)));
+	}
+
+	#[test]
+	fn test_mcp_authorization_jwt_nested_claim_mismatch() {
+		let authz = authorization_set(r#"mcp.tool.name == "increment" && jwt.user.role == "admin""#);
+		let req = req_with_claims(json!({ "user": { "role": "viewer" } }));
+		let res = tool_resource("server", "increment");
+
+		assert!(!authz.validate(&res, &CelExecWrapper::new(req)));
+	}
+
+	#[test]
+	fn test_mcp_authorization_jwt_claim_required_but_missing() {
+		let authz = authorization_set(r#"mcp.tool.name == "increment" && jwt.sub == "1234567890""#);
+		let req = req_without_claims();
+		let res = tool_resource("server", "increment");
+
+		assert!(!authz.validate(&res, &CelExecWrapper::new(req)));
 	}
 }

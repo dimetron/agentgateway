@@ -12,12 +12,12 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/wellknown"
 	"github.com/agentgateway/agentgateway/controller/pkg/pluginsdk/reporter"
 	"github.com/agentgateway/agentgateway/controller/pkg/reports"
+	"github.com/agentgateway/agentgateway/controller/pkg/wellknown"
 )
 
-const fakeCondition = "kgateway.dev/SomeCondition"
+const fakeCondition = "agentgateway.dev/SomeCondition"
 
 var ctx = context.Background()
 
@@ -30,7 +30,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 		// Initialize GatewayReporter to mimic translation loop.
 		r.Gateway(gw)
 
-		status := rm.BuildGWStatus(context.Background(), *gw, nil)
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 2, len(status.Conditions))
@@ -41,7 +41,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 	t.Run("preserve conditions set externally", func(t *testing.T) {
 		gw := gw()
 		gw.Status.Conditions = append(gw.Status.Conditions, metav1.Condition{
-			Type:   "gateway.kgateway.dev/SomeCondition",
+			Type:   "gateway.agentgateway.dev/SomeCondition",
 			Status: metav1.ConditionFalse,
 		})
 		rm := reports.NewReportMap()
@@ -50,7 +50,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 		// Initialize GatewayReporter to mimic translation loop.
 		r.Gateway(gw)
 
-		status := rm.BuildGWStatus(context.Background(), *gw, nil)
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 3, len(status.Conditions)) // 2 from report, 1 from original status.
@@ -67,7 +67,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 			Status: metav1.ConditionFalse,
 			Reason: gwv1.GatewayReasonAddressNotUsable,
 		})
-		status := rm.BuildGWStatus(context.Background(), *gw, nil)
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 2, len(status.Conditions))
@@ -88,7 +88,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 			Status: metav1.ConditionFalse,
 			Reason: gwv1.ListenerReasonInvalidRouteKinds,
 		})
-		status := rm.BuildGWStatus(context.Background(), *gw, nil)
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 2, len(status.Conditions))
@@ -108,7 +108,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 		// Initialize GatewayReporter to mimic translation loop.
 		r.Gateway(gw)
 
-		status := rm.BuildGWStatus(context.Background(), *gw, nil)
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 2, len(status.Conditions))
@@ -120,7 +120,7 @@ func TestBuildGatewayStatus(t *testing.T) {
 		oldTransitionTime := acceptedCond.LastTransitionTime
 
 		gw.Status = *status
-		status = rm.BuildGWStatus(context.Background(), *gw, nil)
+		status = rm.BuildGWStatus(context.Background(), *gw, 0)
 
 		assert.Equal(t, true, status != nil)
 		assert.Equal(t, 2, len(status.Conditions))
@@ -347,7 +347,7 @@ func TestBuildRouteStatus(t *testing.T) {
 					route.Status.RouteStatus = *status
 				case *gwv1a2.TCPRoute:
 					route.Status.RouteStatus = *status
-				case *gwv1a2.TLSRoute:
+				case *gwv1.TLSRoute:
 					route.Status.RouteStatus = *status
 				case *gwv1.GRPCRoute:
 					route.Status.RouteStatus = *status
@@ -391,7 +391,7 @@ func TestBuildRouteStatus(t *testing.T) {
 					route.Spec.ParentRefs = append(route.Spec.ParentRefs, gwv1.ParentReference{
 						Name: "additional-gateway",
 					})
-				case *gwv1a2.TLSRoute:
+				case *gwv1.TLSRoute:
 					route.Spec.ParentRefs = append(route.Spec.ParentRefs, gwv1.ParentReference{
 						Name: "additional-gateway",
 					})
@@ -463,24 +463,24 @@ func TestBuildRouteStatus(t *testing.T) {
 
 				switch r1 := tt.route1.(type) {
 				case *gwv1.HTTPRoute:
-					r1.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener1.Name))
+					r1.Spec.ParentRefs[0].SectionName = new(tt.listener1.Name)
 				case *gwv1a2.TCPRoute:
-					r1.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener1.Name))
-				case *gwv1a2.TLSRoute:
-					r1.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener1.Name))
+					r1.Spec.ParentRefs[0].SectionName = new(tt.listener1.Name)
+				case *gwv1.TLSRoute:
+					r1.Spec.ParentRefs[0].SectionName = new(tt.listener1.Name)
 				case *gwv1.GRPCRoute:
-					r1.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener1.Name))
+					r1.Spec.ParentRefs[0].SectionName = new(tt.listener1.Name)
 				}
 
 				switch r2 := tt.route2.(type) {
 				case *gwv1.HTTPRoute:
-					r2.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener2.Name))
+					r2.Spec.ParentRefs[0].SectionName = new(tt.listener2.Name)
 				case *gwv1a2.TCPRoute:
-					r2.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener2.Name))
-				case *gwv1a2.TLSRoute:
-					r2.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener2.Name))
+					r2.Spec.ParentRefs[0].SectionName = new(tt.listener2.Name)
+				case *gwv1.TLSRoute:
+					r2.Spec.ParentRefs[0].SectionName = new(tt.listener2.Name)
 				case *gwv1.GRPCRoute:
-					r2.Spec.ParentRefs[0].SectionName = ptr.To(gwv1.SectionName(tt.listener2.Name))
+					r2.Spec.ParentRefs[0].SectionName = new(tt.listener2.Name)
 				}
 
 				rm := reports.NewReportMap()
@@ -519,7 +519,7 @@ func TestBuildRouteStatusWithMissingParentReferences(t *testing.T) {
 				r.Spec.ParentRefs = nil
 			case *gwv1a2.TCPRoute:
 				r.Spec.ParentRefs = nil
-			case *gwv1a2.TLSRoute:
+			case *gwv1.TLSRoute:
 				r.Spec.ParentRefs = nil
 			case *gwv1.GRPCRoute:
 				r.Spec.ParentRefs = nil
@@ -598,7 +598,7 @@ func fakeTranslate(reporter reporter.Reporter, obj client.Object) {
 		for _, pr := range route.Spec.ParentRefs {
 			routeReporter.ParentRef(&pr)
 		}
-	case *gwv1a2.TLSRoute:
+	case *gwv1.TLSRoute:
 		routeReporter := reporter.Route(route)
 		for _, pr := range route.Spec.ParentRefs {
 			routeReporter.ParentRef(&pr)
@@ -648,7 +648,7 @@ func tcpRoute(conditions ...metav1.Condition) client.Object {
 }
 
 func tlsRoute(conditions ...metav1.Condition) client.Object {
-	route := &gwv1a2.TLSRoute{
+	route := &gwv1.TLSRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "route",
 			Namespace: "default",
@@ -685,7 +685,7 @@ func grpcRoute(conditions ...metav1.Condition) client.Object {
 
 func parentRef() *gwv1.ParentReference {
 	return &gwv1.ParentReference{
-		Name: "kgateway-gtw",
+		Name: "agentgateway-gtw",
 	}
 }
 
@@ -726,7 +726,7 @@ func gw() *gwv1.Gateway {
 	g := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
-			Name:      "kgateway-gtw",
+			Name:      "agentgateway-gtw",
 		},
 	}
 	g.Spec.Listeners = append(g.Spec.Listeners, *listener())

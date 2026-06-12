@@ -1,8 +1,10 @@
+use std::borrow::Cow;
 use std::fmt::{Debug, Display};
 use std::io;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use openapiv3::OpenAPI;
 #[cfg(feature = "schema")]
 pub use schemars::JsonSchema;
 use secrecy::SecretString;
@@ -49,13 +51,40 @@ pub use macro_rules_attribute::{apply, attribute_alias};
 
 attribute_alias! {
 		#[apply(schema_de!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
-		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+		#[apply(schema_ser!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)];
+		#[apply(schema_ser_schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 		#[apply(schema!)] = #[serde_with::serde_as] #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 		#[apply(schema_enum!)] = #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, serde::Deserialize, serde::Serialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)] #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
 pub fn is_default<T: Default + PartialEq>(t: &T) -> bool {
 	*t == Default::default()
+}
+
+pub struct SerAsStr;
+impl<T> serde_with::SerializeAs<T> for SerAsStr
+where
+	T: AsRef<str>,
+{
+	fn serialize_as<S>(source: &T, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		serializer.serialize_str(source.as_ref())
+	}
+}
+impl<'de, T> serde_with::DeserializeAs<'de, T> for SerAsStr
+where
+	T: std::str::FromStr,
+	<T as std::str::FromStr>::Err: Display,
+{
+	fn deserialize_as<D>(deserializer: D) -> Result<T, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		let s = String::deserialize(deserializer)?;
+		s.parse().map_err(serde::de::Error::custom)
+	}
 }
 
 pub mod serde_instant_option {
@@ -245,28 +274,28 @@ pub fn ser_bytes<S: Serializer, T: AsRef<[u8]>>(t: &T, serializer: S) -> Result<
 	}
 }
 
-pub fn de_parse<'de: 'a, 'a, D, T>(deserializer: D) -> Result<T, D::Error>
+pub fn de_parse<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
 	D: Deserializer<'de>,
-	T: TryFrom<&'a str>,
-	<T as TryFrom<&'a str>>::Error: Display,
+	for<'a> T: TryFrom<&'a str>,
+	for<'a> <T as TryFrom<&'a str>>::Error: Display,
 {
-	let s: &'a str = <&str>::deserialize(deserializer)?;
-	match T::try_from(s) {
+	let s: Cow<'de, str> = Cow::<str>::deserialize(deserializer)?;
+	match T::try_from(s.as_ref()) {
 		Ok(t) => Ok(t),
 		Err(e) => Err(serde::de::Error::custom(e)),
 	}
 }
 
-pub fn de_parse_option<'de: 'a, 'a, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub fn de_parse_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
 	D: Deserializer<'de>,
-	T: TryFrom<&'a str>,
-	<T as TryFrom<&'a str>>::Error: Display,
+	for<'a> T: TryFrom<&'a str>,
+	for<'a> <T as TryFrom<&'a str>>::Error: Display,
 {
-	let s: Option<&'a str> = Option::deserialize(deserializer)?;
+	let s: Option<Cow<'de, str>> = Option::deserialize(deserializer)?;
 	let Some(s) = s else { return Ok(None) };
-	match T::try_from(s) {
+	match T::try_from(s.as_ref()) {
 		Ok(t) => Ok(Some(t)),
 		Err(e) => Err(serde::de::Error::custom(e)),
 	}
@@ -380,6 +409,29 @@ impl FileInlineOrRemote {
 			},
 		};
 		serde_json::from_str(&s).map_err(Into::into)
+	}
+
+	pub async fn load_openapi_schema(&self, client: Client) -> anyhow::Result<OpenAPI> {
+		let s = match self {
+			FileInlineOrRemote::File { file } => fs_err::tokio::read_to_string(file).await?,
+			FileInlineOrRemote::Inline(s) => s.clone(),
+			FileInlineOrRemote::Remote { url } => {
+				let resp = client
+					.simple_call(
+						::http::Request::builder()
+							.uri(url)
+							.body(Body::empty())
+							.expect("builder should succeed"),
+					)
+					.await
+					.context(format!("fetch {url}"))?;
+				let body_bytes = crate::http::read_resp_body(resp).await?;
+				String::from_utf8(body_bytes.to_vec())?
+			},
+		};
+		stacker::grow(2 * 1024 * 1024, || {
+			yamlviajson::from_str::<OpenAPI>(s.as_str())
+		})
 	}
 }
 

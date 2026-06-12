@@ -1,5 +1,4 @@
 use std::cmp;
-use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rustls::client::Resumption;
 use rustls::server::VerifierBuilderError;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
-use rustls_pemfile::Item;
-use rustls_pki_types::PrivateKeyDer;
+use rustls_pki_types::pem::{PemObject, SectionKind};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::watch;
 use tonic::IntoRequest;
 use tracing::{error, info, warn};
@@ -20,7 +19,7 @@ use crate::*;
 // Generated from proto/citadel.proto
 pub mod istio {
 	pub mod ca {
-		tonic::include_proto!("istio.v1.auth");
+		pub use protos::istio::v1::auth::*;
 	}
 }
 
@@ -66,6 +65,9 @@ pub struct Config {
 	pub identity: Identity,
 	pub auth: AuthSource,
 	pub ca_cert: RootCert,
+	pub ca_headers: Vec<(String, String)>,
+	pub allowed_trust_domains: Arc<[Strng]>,
+	pub skip_validate_trust_domain: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -83,10 +85,18 @@ pub struct WorkloadCertificate {
 	private_key: PrivateKeyDer<'static>,
 	expiry: Expiration,
 	identity: Identity,
+	allowed_trust_domains: Arc<[Strng]>,
+	skip_validate_trust_domain: bool,
 }
 
 impl WorkloadCertificate {
-	fn new(key: &[u8], cert: &[u8], chain: Vec<&[u8]>) -> Result<WorkloadCertificate, Error> {
+	fn new(
+		key: &[u8],
+		cert: &[u8],
+		chain: Vec<&[u8]>,
+		allowed_trust_domains: Arc<[Strng]>,
+		skip_validate_trust_domain: bool,
+	) -> Result<WorkloadCertificate, Error> {
 		let cert = parse_cert(cert.to_vec())?;
 		let mut roots_store = RootCertStore::empty();
 		let identity = cert
@@ -126,6 +136,8 @@ impl WorkloadCertificate {
 			private_key: key,
 			chain: cert_and_chain,
 			identity,
+			allowed_trust_domains,
+			skip_validate_trust_domain,
 		})
 	}
 	pub fn is_expired(&self) -> bool {
@@ -153,6 +165,7 @@ impl WorkloadCertificate {
 				self.chain.iter().map(|c| c.der.clone()).collect(),
 				self.private_key.clone_key(),
 			)?;
+		cc.key_log = transport::tls::key_log();
 		cc.alpn_protocols = vec![b"istio".into()];
 		cc.resumption = Resumption::disabled();
 		// cc.enable_sni = false;
@@ -174,6 +187,7 @@ impl WorkloadCertificate {
 				self.chain.iter().map(|c| c.der.clone()).collect(),
 				self.private_key.clone_key(),
 			)?;
+		cc.key_log = transport::tls::key_log();
 		cc.alpn_protocols = vec![b"h2".into()];
 		cc.resumption = Resumption::disabled();
 		cc.enable_sni = false;
@@ -183,27 +197,46 @@ impl WorkloadCertificate {
 		})
 	}
 	pub fn hbone_termination(&self) -> Result<ServerConfig, Error> {
-		let Identity::Spiffe { trust_domain, .. } = &self.identity;
+		self.server_config(vec![b"h2".into()], true)
+	}
 
-		// TODO: this istoo expensive to build per request
+	pub fn server_config(
+		&self,
+		alpns: Vec<Vec<u8>>,
+		require_client_cert: bool,
+	) -> Result<ServerConfig, Error> {
+		// TODO: this is too expensive to build per request
 		let roots = self.roots.clone();
-		let raw_client_cert_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-			roots.clone(),
-			transport::tls::provider(),
-		)
-		.build()?;
-		let client_cert_verifier = transport::tls::trustdomain::TrustDomainVerifier::new(
-			raw_client_cert_verifier,
-			Some(trust_domain.clone()),
-		);
-		let sc = ServerConfig::builder_with_provider(transport::tls::provider())
+		let scb = ServerConfig::builder_with_provider(transport::tls::provider())
 			.with_protocol_versions(transport::tls::ALL_TLS_VERSIONS)
-			.expect("server config must be valid")
-			.with_client_cert_verifier(client_cert_verifier)
-			.with_single_cert(
-				self.chain.iter().map(|c| c.der.clone()).collect(),
-				self.private_key.clone_key(),
-			)?;
+			.expect("server config must be valid");
+		let scb = if require_client_cert {
+			let raw_client_cert_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+				roots,
+				transport::tls::provider(),
+			)
+			.build()?;
+			// Verify the client's SPIFFE trust domain is in the allowed set, unless explicitly
+			// disabled via skip_validate_trust_domain. CA-level certificate validation still applies.
+			let client_cert_verifier: Arc<dyn rustls::server::danger::ClientCertVerifier> =
+				if self.skip_validate_trust_domain {
+					raw_client_cert_verifier
+				} else {
+					transport::tls::trustdomain::TrustDomainVerifier::new(
+						raw_client_cert_verifier,
+						self.allowed_trust_domains.clone(),
+					)
+				};
+			scb.with_client_cert_verifier(client_cert_verifier)
+		} else {
+			scb.with_no_client_auth()
+		};
+		let mut sc = scb.with_single_cert(
+			self.chain.iter().map(|c| c.der.clone()).collect(),
+			self.private_key.clone_key(),
+		)?;
+		sc.key_log = transport::tls::key_log();
+		sc.alpn_protocols = alpns;
 		Ok(sc)
 	}
 }
@@ -215,28 +248,33 @@ struct Certificate {
 	der: rustls_pki_types::CertificateDer<'static>,
 }
 
-fn parse_key(mut key: &[u8]) -> Result<PrivateKeyDer<'static>, Error> {
-	let mut reader = std::io::BufReader::new(Cursor::new(&mut key));
-	let parsed = rustls_pemfile::read_one(&mut reader)
-		.map_err(|e| Error::CertificateParse(e.to_string()))?
-		.ok_or_else(|| Error::CertificateParse("no key".to_string()))?;
-	match parsed {
-		Item::Pkcs8Key(c) => Ok(PrivateKeyDer::Pkcs8(c)),
-		Item::Sec1Key(c) => Ok(PrivateKeyDer::Sec1(c)),
+fn parse_key(key: &[u8]) -> Result<PrivateKeyDer<'static>, Error> {
+	let (kind, der) = <(SectionKind, Vec<u8>)>::from_pem_slice(key).map_err(|e| match e {
+		rustls_pki_types::pem::Error::NoItemsFound => Error::CertificateParse("no key".to_string()),
+		_ => Error::CertificateParse(e.to_string()),
+	})?;
+
+	match kind {
+		SectionKind::PrivateKey => Ok(PrivateKeyDer::Pkcs8(der.into())),
+		SectionKind::RsaPrivateKey => Ok(PrivateKeyDer::Pkcs1(der.into())),
+		SectionKind::EcPrivateKey => Ok(PrivateKeyDer::Sec1(der.into())),
 		_ => Err(Error::CertificateParse("no key".to_string())),
 	}
 }
 
-fn parse_cert(mut cert: Vec<u8>) -> Result<Certificate, Error> {
-	let mut reader = std::io::BufReader::new(Cursor::new(&mut cert));
-	let parsed = rustls_pemfile::read_one(&mut reader)
-		.map_err(|e| Error::CertificateParse(e.to_string()))?
-		.ok_or_else(|| Error::CertificateParse("no certificate".to_string()))?;
-	let Item::X509Certificate(der) = parsed else {
+fn parse_cert(cert: Vec<u8>) -> Result<Certificate, Error> {
+	let (kind, der) = <(SectionKind, Vec<u8>)>::from_pem_slice(&cert).map_err(|e| match e {
+		rustls_pki_types::pem::Error::NoItemsFound => {
+			Error::CertificateParse("no certificate".to_string())
+		},
+		_ => Error::CertificateParse(e.to_string()),
+	})?;
+	if kind != SectionKind::Certificate {
 		return Err(Error::CertificateParse("no certificate".to_string()));
-	};
+	}
+	let der = CertificateDer::from(der);
 
-	let (_, cert) = x509_parser::parse_x509_certificate(&der)
+	let (_, cert) = x509_parser::parse_x509_certificate(der.as_ref())
 		.map_err(|e| Error::CertificateParse(e.to_string()))?;
 	Ok(Certificate {
 		der: der.clone(),
@@ -245,17 +283,17 @@ fn parse_cert(mut cert: Vec<u8>) -> Result<Certificate, Error> {
 	})
 }
 
-fn parse_cert_multi(mut cert: &[u8]) -> Result<Vec<Certificate>, Error> {
-	let mut reader = std::io::BufReader::new(Cursor::new(&mut cert));
-	let parsed: Result<Vec<_>, _> = rustls_pemfile::read_all(&mut reader).collect();
+fn parse_cert_multi(cert: &[u8]) -> Result<Vec<Certificate>, Error> {
+	let parsed: Result<Vec<_>, _> = <(SectionKind, Vec<u8>)>::pem_slice_iter(cert).collect();
 	parsed
 		.map_err(|e| Error::CertificateParse(e.to_string()))?
 		.into_iter()
-		.map(|p| {
-			let Item::X509Certificate(der) = p else {
+		.map(|(kind, der)| {
+			if kind != SectionKind::Certificate {
 				return Err(Error::CertificateParse("no certificate".to_string()));
-			};
-			let (_, cert) = x509_parser::parse_x509_certificate(&der)
+			}
+			let der = CertificateDer::from(der);
+			let (_, cert) = x509_parser::parse_x509_certificate(der.as_ref())
 				.map_err(|e| Error::CertificateParse(e.to_string()))?;
 			Ok(Certificate {
 				der: der.clone(),
@@ -326,13 +364,27 @@ impl CaClient {
 	pub fn new(client: client::Client, config: Config) -> Result<Self, Error> {
 		let (state_tx, state_rx) = watch::channel(CertificateState::NotReady);
 
+		let headers: Vec<(http::header::HeaderName, http::HeaderValue)> = config
+			.ca_headers
+			.iter()
+			.map(|(k, v)| {
+				Ok((
+					http::header::HeaderName::from_str(k)
+						.map_err(|e| Error::CaClientCreation(Arc::new(anyhow::Error::new(e))))?,
+					http::HeaderValue::from_str(v)
+						.map_err(|e| Error::CaClientCreation(Arc::new(anyhow::Error::new(e))))?,
+				))
+			})
+			.collect::<Result<_, Error>>()?;
+
 		// Start the fetcher task
 		let fetcher_handle = tokio::spawn({
 			let config = config.clone();
 			let state_tx = state_tx.clone();
+			let headers = headers.clone();
 
 			async move {
-				Self::run_fetcher(client, config, state_tx).await;
+				Self::run_fetcher(client, config, state_tx, headers).await;
 			}
 		});
 
@@ -373,11 +425,14 @@ impl CaClient {
 		client: client::Client,
 		config: Config,
 		state_tx: watch::Sender<CertificateState>,
+		headers: Vec<(http::header::HeaderName, http::HeaderValue)>,
 	) {
 		let mut interval = tokio::time::interval(Duration::from_secs(30)); // Check every 30 seconds
 
 		// Start with an immediate fetch
-		if let Err(e) = Self::fetch_and_update_certificate(client.clone(), &config, &state_tx).await {
+		if let Err(e) =
+			Self::fetch_and_update_certificate(client.clone(), &config, &state_tx, headers.clone()).await
+		{
 			error!("Initial certificate fetch failed: {:?}", e);
 			let _ = state_tx.send(CertificateState::Error(e));
 		}
@@ -400,7 +455,14 @@ impl CaClient {
 			if should_renew {
 				info!("Renewing certificate for identity: {}", config.identity);
 
-				match Self::fetch_and_update_certificate(client.clone(), &config, &state_tx).await {
+				match Self::fetch_and_update_certificate(
+					client.clone(),
+					&config,
+					&state_tx,
+					headers.clone(),
+				)
+				.await
+				{
 					Ok(_) => {
 						info!(
 							"Successfully renewed certificate for identity: {}",
@@ -423,6 +485,7 @@ impl CaClient {
 		client: client::Client,
 		config: &Config,
 		state_tx: &watch::Sender<CertificateState>,
+		headers: Vec<(http::header::HeaderName, http::HeaderValue)>,
 	) -> Result<(), Error> {
 		info!("Fetching certificate for identity: {}", config.identity);
 
@@ -431,6 +494,7 @@ impl CaClient {
 			config.address.clone(),
 			config.auth.clone(),
 			config.ca_cert.clone(),
+			headers.clone(),
 		)
 		.await
 		.map_err(|e| Error::CaClientCreation(Arc::new(e)))?;
@@ -459,8 +523,6 @@ impl CaClient {
 			.map_err(|e| Error::CaClient(Box::new(e)))?;
 
 		let response = response.into_inner();
-
-		// Parse the certificate chain
 		let cert_chain = response.cert_chain;
 
 		if cert_chain.is_empty() {
@@ -480,6 +542,8 @@ impl CaClient {
 			&private_key,
 			leaf_cert,
 			chain_certs,
+			config.allowed_trust_domains.clone(),
+			config.skip_validate_trust_domain,
 		)?);
 
 		// Verify the certificate matches our identity

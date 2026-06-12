@@ -1,19 +1,17 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use agent_core::prelude::Strng;
 use axum::response::Response;
 
-use crate::ProxyInputs;
-use crate::cel::ContextBuilder;
 use crate::http::authorization::RuleSets;
 use crate::http::sessionpersistence::Encoder;
 use crate::http::*;
-use crate::mcp::auth;
 use crate::mcp::handler::RelayInputs;
 use crate::mcp::session::SessionManager;
 use crate::mcp::sse::LegacySSEService;
 use crate::mcp::streamablehttp::{StreamableHttpServerConfig, StreamableHttpService};
-use crate::mcp::{MCPInfo, McpAuthorizationSet};
+use crate::mcp::{FailureMode, MCPInfo, McpAuthorizationSet, auth};
 use crate::proxy::ProxyError;
 use crate::proxy::httpproxy::{MustSnapshot, PolicyClient};
 use crate::store::{BackendPolicies, Stores};
@@ -21,6 +19,7 @@ use crate::telemetry::log::RequestLog;
 use crate::types::agent::{
 	BackendTargetRef, McpBackend, McpTargetSpec, ResourceName, SimpleBackend, SimpleBackendReference,
 };
+use crate::{ProxyInputs, cel, mcp};
 
 #[derive(Debug, Clone)]
 pub struct App {
@@ -30,7 +29,7 @@ pub struct App {
 
 impl App {
 	pub fn new(state: Stores, encoder: Encoder) -> Self {
-		let session: Arc<SessionManager> = Arc::new(crate::mcp::session::SessionManager::new(encoder));
+		let session = crate::mcp::session::SessionManager::new(encoder);
 		Self { state, session }
 	}
 
@@ -87,6 +86,7 @@ impl App {
 					let backend_policies = backend_policies
 						.clone()
 						.merge(binds.sub_backend_policies(sub_backend_target, inline_pols));
+					tracing::trace!("merged policies {:?}", backend_policies);
 					Ok::<_, ProxyError>(Arc::new(McpTarget {
 						name: t.name.clone(),
 						spec: t.spec.clone(),
@@ -100,56 +100,67 @@ impl App {
 			McpBackendGroup {
 				targets: nt,
 				stateful: backend.stateful,
+				failure_mode: backend.failure_mode,
+				session_idle_ttl: backend.session_idle_ttl,
 			}
 		};
-		let sm = self.session.clone();
-		let client = PolicyClient { inputs: pi.clone() };
+		let sessions = self.session.clone();
+		sessions.ensure_idle_running();
+		let client = PolicyClient::new(pi.clone());
 		let authorization_policies = backend_policies
 			.mcp_authorization
 			.unwrap_or_else(|| McpAuthorizationSet::new(RuleSets::from(Vec::new())));
 		let authn = backend_policies.mcp_authentication;
+		let mcp_guardrails = backend_policies.mcp_guardrails.clone();
 
 		// Store an empty value, we will populate each field async
 		let logy = log.mcp_status.clone();
 		logy.store(Some(MCPInfo::default()));
 		req.extensions_mut().insert(logy);
+		let tracer = log.span_writer();
+		req.extensions_mut().insert(tracer);
 
-		let mut ctx = ContextBuilder::new();
-		authorization_policies.register(&mut ctx);
-		ctx.maybe_buffer_request_body(&mut req).await;
+		authorization_policies.register(log.cel.ctx());
+		log.cel.ctx().maybe_buffer_request_body(&mut req).await;
 
 		// `response` is not valid here, since we run authz first
 		// MCP context is added later. The context is inserted after
 		// authentication so it can include verified claims
 
+		// Take a request snapshot before authentication can mutate or partially consume the
+		// request. If authentication lets the request continue, the normal snapshot below
+		// replaces this with the post-authentication request state.
+		Self::snapshot_request_without_clearing_extensions(&mut req, log);
 		if let Some(auth) = authn.as_ref()
 			&& let Some(resp) = auth::enforce_authentication(&mut req, auth, &client).await?
 		{
 			return Ok(resp);
 		}
 
-		let mut req = req.take_and_snapshot(Some(&mut log))?;
-		// This is an unfortunate clone. The request snapshot is intended to be done at the end of the request,
-		// so it strips all of the extensions. However, in MCP land its much trickier for us to do this so
-		// we snapshot early... but then we lose the extensions. So we do a clone here.
-		let snapshot = log.request_snapshot.clone();
-		req.extensions_mut().insert(Arc::new(snapshot));
-		if req.uri().path() == "/sse" {
+		// MCP requires CEL execution after the snapshot so we do not clear extensions
+		let req = req.take_and_snapshot_without_clearing_extensions(Some(&mut log))?;
+		if log.request_processing_duration.is_none() {
+			// This is a bit inaccurate but the best we can do for the MCP path without very invasive changes.
+			log.request_processing_duration = Some(log.request_processing_start.elapsed());
+		}
+		let upstream_start = Instant::now();
+		let mut response = if req.uri().path() == "/sse" {
 			// Legacy handling
 			// Assume this is streamable HTTP otherwise
-			let sse = LegacySSEService::new(sm);
+			let sse = LegacySSEService::new(sessions);
 			Box::pin(sse.handle(
 				req,
 				RelayInputs {
 					backend: backends.clone(),
 					policies: authorization_policies.clone(),
+					mcp_guardrails: mcp_guardrails.clone(),
 					client: client.clone(),
 				},
 			))
 			.await
 		} else {
 			let streamable = StreamableHttpService::new(
-				sm,
+				sessions,
 				StreamableHttpServerConfig {
 					stateful_mode: backend.stateful,
 				},
@@ -159,11 +170,39 @@ impl App {
 				RelayInputs {
 					backend: backends.clone(),
 					policies: authorization_policies.clone(),
+					mcp_guardrails: mcp_guardrails.clone(),
 					client: client.clone(),
 				},
 			))
 			.await
+		};
+		let upstream_end = Instant::now();
+		// This aggregates the total time; no per-backend timings for fanout.
+		log.upstream_duration = Some(upstream_end - upstream_start);
+		if response.is_ok() {
+			log.response_processing_start = Some(upstream_end);
 		}
+		if let Ok(response) = response.as_mut() {
+			response
+				.extensions_mut()
+				.insert(cel::ProxyContext::from_std_durations(
+					log.request_processing_duration,
+					log.upstream_duration,
+					log.response_processing_duration,
+				));
+		}
+		response
+	}
+
+	fn snapshot_request_without_clearing_extensions(
+		req: &mut MustSnapshot<'_>,
+		log: &mut RequestLog,
+	) {
+		log.request_snapshot = log
+			.cel
+			.cel_context
+			.maybe_snapshot_request(req, false)
+			.map(Arc::new);
 	}
 }
 
@@ -171,6 +210,19 @@ impl App {
 pub struct McpBackendGroup {
 	pub targets: Vec<Arc<McpTarget>>,
 	pub stateful: bool,
+	pub failure_mode: FailureMode,
+	pub session_idle_ttl: Duration,
+}
+
+impl Default for McpBackendGroup {
+	fn default() -> Self {
+		Self {
+			targets: vec![],
+			stateful: true,
+			failure_mode: crate::mcp::FailureMode::default(),
+			session_idle_ttl: mcp::DEFAULT_SESSION_IDLE_TTL,
+		}
+	}
 }
 
 #[derive(Debug)]

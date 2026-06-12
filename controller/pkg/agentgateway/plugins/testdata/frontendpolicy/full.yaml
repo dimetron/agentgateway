@@ -32,6 +32,7 @@ spec:
         interval: 30s
     http:
       http2FrameSize: 17000
+      http2MaxHeaderSize: 16Ki
       maxBufferSize: 1000
     accessLog:
       filter: 'response.code != 200'
@@ -58,87 +59,163 @@ spec:
         add:
           - expression: 'request.headers["user-agent"]'
             name: http.useragent
+    metrics:
+      attributes:
+        add:
+          - expression: 'request.headers["x-org-id"]'
+            name: org
 
 ---
 # Output
 output:
-- Policy:
-    frontend:
-      http:
-        http2FrameSize: 17000
-        maxBufferSize: 1000
-    key: frontend/default/agw:frontend-http:default/test
-    name:
-      kind: AgentgatewayPolicy
-      name: agw
-      namespace: default
-    target:
-      gateway:
-        name: test
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        http:
+          http2FrameSize: 17000
+          http2MaxHeaderSize: 16384
+          maxBufferSize: 1000
+      key: frontend/default/agw:frontend-http:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
         namespace: default
-- Policy:
-    frontend:
-      tls:
-        alpn:
-          protocols:
-          - custom
-        handshakeTimeout: 10s
-    key: frontend/default/agw:frontend-tls:default/test
-    name:
-      kind: AgentgatewayPolicy
-      name: agw
-      namespace: default
-    target:
-      gateway:
-        name: test
+      target:
+        gateway:
+          name: test
+          namespace: default
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        logging:
+          fields:
+            add:
+            - expression: request.headers["user-agent"]
+              name: http.useragent
+            remove:
+            - response.code
+          filter: response.code != 200
+      key: frontend/default/agw:frontend-logging:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
         namespace: default
-- Policy:
-    frontend:
-      tcp:
-        keepalives:
-          interval: 30s
-          retries: 5
-          time: 60s
-    key: frontend/default/agw:frontend-tcp:default/test
-    name:
-      kind: AgentgatewayPolicy
-      name: agw
-      namespace: default
-    target:
-      gateway:
-        name: test
+      target:
+        gateway:
+          name: test
+          namespace: default
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        metrics:
+          fields:
+            add:
+            - expression: request.headers["x-org-id"]
+              name: org
+      key: frontend/default/agw:frontend-metrics:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
         namespace: default
-- Policy:
-    frontend:
-      logging:
-        fields:
-          add:
-          - expression: request.headers["user-agent"]
-            name: http.useragent
+      target:
+        gateway:
+          name: test
+          namespace: default
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        tcp:
+          keepalives:
+            interval: 30s
+            retries: 5
+            time: 60s
+      key: frontend/default/agw:frontend-tcp:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
+        namespace: default
+      target:
+        gateway:
+          name: test
+          namespace: default
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        tls:
+          alpn:
+            protocols:
+            - custom
+          handshakeTimeout: 10s
+      key: frontend/default/agw:frontend-tls:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
+        namespace: default
+      target:
+        gateway:
+          name: test
+          namespace: default
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      frontend:
+        tracing:
+          attributes:
+          - name: http.useragent
+            value: request.headers["user-agent"]
+          clientSampling: "true"
+          protocol: GRPC
+          randomSampling: "true"
           remove:
           - response.code
-        filter: response.code != 200
-    key: frontend/default/agw:frontend-logging:default/test
-    name:
-      kind: AgentgatewayPolicy
-      name: agw
-      namespace: default
-    target:
-      gateway:
+          resources:
+          - name: service.name
+            value: agent-gateway
+      key: frontend/default/agw:frontend-tracing:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: agw
+        namespace: default
+      target:
+        gateway:
+          name: test
+          namespace: default
+status:
+- apiVersion: agentgateway.dev/v1alpha1
+  kind: AgentgatewayPolicy
+  metadata:
+    name: agw
+    namespace: default
+  spec: null
+  status:
+    ancestors:
+    - ancestorRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
         name: test
         namespace: default
-status:
-  ancestors:
-  - ancestorRef:
-      group: gateway.networking.k8s.io
-      kind: Gateway
-      name: test
-      namespace: default
-    conditions:
-    - lastTransitionTime: fake
-      message: 'failed to translate tracing backend ref: unable to find the Service
-        some-other-ns/my-otel'
-      reason: PartiallyValid
-      status: "True"
-      type: Accepted
-    controllerName: agentgateway.dev/agentgateway
+      conditions:
+      - lastTransitionTime: fake
+        message: 'failed to translate tracing backend ref: unable to find the Service
+          some-other-ns/my-otel'
+        reason: PartiallyValid
+        status: "True"
+        type: Accepted
+      controllerName: agentgateway.dev/agentgateway

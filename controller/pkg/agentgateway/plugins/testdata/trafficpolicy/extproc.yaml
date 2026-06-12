@@ -13,6 +13,14 @@ spec:
       backendRef:
         name: extproc-svc
         port: 4444
+      processingOptions:
+        requestBodyMode: BufferedPartial
+        responseBodyMode: FullDuplexStreamed
+        requestHeaderMode: Skip
+        responseHeaderMode: Send
+        requestTrailerMode: Send
+        responseTrailerMode: Skip
+        allowModeOverride: true
 ---
 apiVersion: v1
 kind: Service
@@ -25,39 +33,58 @@ spec:
 ---
 # Output
 output:
-- Policy:
-    key: traffic/default/http:extproc:default/test
-    name:
-      kind: AgentgatewayPolicy
-      name: http
-      namespace: default
-    target:
-      gateway:
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      key: traffic/default/http:extproc:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: http
+        namespace: default
+      target:
+        gateway:
+          name: test
+          namespace: default
+      traffic:
+        extProc:
+          processingOptions:
+            allowModeOverride: true
+            requestBodyMode: BUFFERED_PARTIAL
+            requestHeaderMode: SKIP
+            requestTrailerMode: SEND
+            responseBodyMode: FULL_DUPLEX_STREAMED
+            responseHeaderMode: SEND
+            responseTrailerMode: SKIP
+          target:
+            port: 4444
+            service:
+              hostname: extproc-svc.default.svc.cluster.local
+              namespace: default
+status:
+- apiVersion: agentgateway.dev/v1alpha1
+  kind: AgentgatewayPolicy
+  metadata:
+    name: http
+    namespace: default
+  spec: null
+  status:
+    ancestors:
+    - ancestorRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
         name: test
         namespace: default
-    traffic:
-      extProc:
-        target:
-          port: 4444
-          service:
-            hostname: extproc-svc.default.svc.cluster.local
-            namespace: default
-status:
-  ancestors:
-  - ancestorRef:
-      group: gateway.networking.k8s.io
-      kind: Gateway
-      name: test
-      namespace: default
-    conditions:
-    - lastTransitionTime: fake
-      message: Policy accepted
-      reason: Valid
-      status: "True"
-      type: Accepted
-    - lastTransitionTime: fake
-      message: Attached to all targets
-      reason: Attached
-      status: "True"
-      type: Attached
-    controllerName: agentgateway.dev/agentgateway
+      conditions:
+      - lastTransitionTime: fake
+        message: Policy accepted
+        reason: Valid
+        status: "True"
+        type: Accepted
+      - lastTransitionTime: fake
+        message: Attached to all targets
+        reason: Attached
+        status: "True"
+        type: Attached
+      controllerName: agentgateway.dev/agentgateway

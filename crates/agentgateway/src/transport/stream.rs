@@ -8,7 +8,9 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use agent_hbone::RWStream;
+use hyper::upgrade::Upgraded;
 use hyper_util::client::legacy::connect::{Connected, Connection};
+use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -61,6 +63,13 @@ pub struct TLSConnectionInfo {
 #[derive(Debug, Clone)]
 pub struct HBONEConnectionInfo {
 	pub hbone_address: SocketAddr,
+}
+
+/// WaypointTLSInfo indicates if TLS sniffing should be performed
+/// for waypoint traffic based on the service port's appProtocol.
+#[derive(Debug, Clone)]
+pub struct WaypointTLSInfo {
+	pub should_sniff_tls: bool,
 }
 
 #[derive(Debug, Default)]
@@ -116,9 +125,16 @@ impl Connection for Socket {
 	}
 }
 
-impl hyper_util_fork::client::legacy::connect::Connection for Socket {
-	fn connected(&self) -> hyper_util_fork::client::legacy::connect::Connected {
-		let mut con = hyper_util_fork::client::legacy::connect::Connected::new();
+// Signal we are HttpProxying
+#[derive(Debug, Clone, Default)]
+pub struct HttpProxy;
+
+impl agent_pool::connect::Connection for Socket {
+	fn connected(&self) -> agent_pool::connect::Connected {
+		let mut con = agent_pool::connect::Connected::new();
+		if self.ext.get::<HttpProxy>().is_some() {
+			con = con.proxy(true);
+		}
 		match self
 			.ext
 			.get::<TLSConnectionInfo>()
@@ -191,9 +207,18 @@ impl Socket {
 	}
 
 	pub fn from_tls(
+		ext: Extension,
+		metrics: Metrics,
+		tls: TlsStream<Box<SocketType>>,
+	) -> anyhow::Result<Self> {
+		Self::from_tls_with_identity(ext, metrics, tls, true)
+	}
+
+	pub fn from_tls_with_identity(
 		mut ext: Extension,
 		metrics: Metrics,
 		tls: TlsStream<Box<SocketType>>,
+		include_src_identity: bool,
 	) -> anyhow::Result<Self> {
 		let info = {
 			let server_name = match &tls {
@@ -205,7 +230,11 @@ impl Socket {
 			};
 			let (_, ssl) = tls.get_ref();
 			TLSConnectionInfo {
-				src_identity: crate::transport::tls::identity_from_connection(ssl),
+				src_identity: if include_src_identity {
+					crate::transport::tls::identity_from_connection(ssl)
+				} else {
+					None
+				},
 				negotiated_alpn: ssl.alpn_protocol().map(Alpn::from),
 				server_name,
 			}
@@ -221,10 +250,42 @@ impl Socket {
 	pub fn from_hbone(ext: Arc<Extension>, hbone_address: SocketAddr, hbone: RWStream) -> Self {
 		let mut ext = Extension::wrap(ext);
 		ext.insert(HBONEConnectionInfo { hbone_address });
+		// Update TCPConnectionInfo.local_addr with the original destination from the HBONE
+		// CONNECT :authority header. Without this, downstream consumers (ext_authz, CEL policy
+		// evaluation, telemetry) would see the HBONE listener port (15008) instead of the
+		// original service port.
+		// Note: peer_addr is the original client IP (ztunnel preserves the source address).
+		// Client identity comes from mTLS (TLSConnectionInfo).
+		if let Some(tcp) = ext.get::<TCPConnectionInfo>().cloned() {
+			ext.insert(TCPConnectionInfo {
+				local_addr: hbone_address,
+				..tcp
+			});
+		}
 
 		Socket {
 			ext,
 			inner: SocketType::Hbone(hbone),
+			metrics: Metrics::with_counter(),
+		}
+	}
+
+	pub fn from_upgraded(
+		ext: Arc<Extension>,
+		target_address: SocketAddr,
+		upgraded: Upgraded,
+	) -> Self {
+		let mut ext = Extension::wrap(ext);
+		if let Some(tcp) = ext.get::<TCPConnectionInfo>().cloned() {
+			ext.insert(TCPConnectionInfo {
+				local_addr: target_address,
+				..tcp
+			});
+		}
+
+		Socket {
+			ext,
+			inner: SocketType::Upgraded(TokioIo::new(upgraded)),
 			metrics: Metrics::with_counter(),
 		}
 	}
@@ -327,6 +388,7 @@ pub enum SocketType {
 	Rewind(Box<rewind::RewindSocket>),
 	Tls(Box<TlsStream<Box<SocketType>>>),
 	Hbone(RWStream),
+	Upgraded(TokioIo<Upgraded>),
 	Memory(DuplexStream),
 	Boxed(Box<SocketType>),
 }
@@ -344,6 +406,7 @@ impl AsyncRead for SocketType {
 			SocketType::Rewind(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Tls(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_read(cx, buf),
+			SocketType::Upgraded(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Memory(inner) => Pin::new(inner).poll_read(cx, buf),
 			SocketType::Boxed(inner) => Pin::new(inner).poll_read(cx, buf),
 		}
@@ -362,6 +425,7 @@ impl AsyncWrite for SocketType {
 			SocketType::Rewind(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Tls(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_write(cx, buf),
+			SocketType::Upgraded(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Memory(inner) => Pin::new(inner).poll_write(cx, buf),
 			SocketType::Boxed(inner) => Pin::new(inner).poll_write(cx, buf),
 		}
@@ -375,6 +439,7 @@ impl AsyncWrite for SocketType {
 			SocketType::Rewind(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Tls(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_flush(cx),
+			SocketType::Upgraded(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Memory(inner) => Pin::new(inner).poll_flush(cx),
 			SocketType::Boxed(inner) => Pin::new(inner).poll_flush(cx),
 		}
@@ -388,6 +453,7 @@ impl AsyncWrite for SocketType {
 			SocketType::Rewind(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Tls(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_shutdown(cx),
+			SocketType::Upgraded(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Memory(inner) => Pin::new(inner).poll_shutdown(cx),
 			SocketType::Boxed(inner) => Pin::new(inner).poll_shutdown(cx),
 		}
@@ -405,6 +471,7 @@ impl AsyncWrite for SocketType {
 			SocketType::Rewind(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Tls(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Hbone(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
+			SocketType::Upgraded(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Memory(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 			SocketType::Boxed(inner) => Pin::new(inner).poll_write_vectored(cx, bufs),
 		}
@@ -418,6 +485,7 @@ impl AsyncWrite for SocketType {
 			SocketType::Rewind(inner) => inner.is_write_vectored(),
 			SocketType::Tls(inner) => inner.is_write_vectored(),
 			SocketType::Hbone(inner) => inner.is_write_vectored(),
+			SocketType::Upgraded(inner) => inner.is_write_vectored(),
 			SocketType::Memory(inner) => inner.is_write_vectored(),
 			SocketType::Boxed(inner) => inner.is_write_vectored(),
 		}
@@ -501,6 +569,13 @@ impl Extension {
 		Extension::Wrapped(http::Extensions::new(), ext)
 	}
 
+	pub fn remove<T: Clone + Send + Sync + 'static>(&mut self) -> Option<T> {
+		match self {
+			Extension::Single(extensions) => extensions.remove(),
+			Extension::Wrapped(extensions, _) => extensions.remove(),
+		}
+	}
+
 	pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, val: T) -> Option<T> {
 		match self {
 			Extension::Single(extensions) => extensions.insert(val),
@@ -521,9 +596,12 @@ impl Extension {
 		}
 	}
 
-	pub fn copy<T: Send + Clone + Sync + 'static>(&self, ext: &mut http::Extensions) {
+	pub fn copy<T: Send + Clone + Sync + 'static>(&self, ext: &mut http::Extensions) -> Option<&T> {
 		if let Some(got) = self.get::<T>() {
 			ext.insert(got.clone());
+			Some(got)
+		} else {
+			None
 		}
 	}
 }

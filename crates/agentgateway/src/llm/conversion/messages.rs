@@ -1,13 +1,57 @@
 use std::time::Instant;
 
 use agent_core::strng;
+use bytes::Bytes;
 
 use crate::http::Body;
-use crate::llm::LLMInfo;
 use crate::llm::types::completions::typed as completions;
 use crate::llm::types::messages::typed as messages;
+use crate::llm::{AIError, AmendOnDrop};
 use crate::parse;
-use crate::telemetry::log::AsyncLog;
+
+fn anthropic_error_type(status: ::http::StatusCode) -> &'static str {
+	match status {
+		::http::StatusCode::BAD_REQUEST => "invalid_request_error",
+		::http::StatusCode::UNAUTHORIZED | ::http::StatusCode::FORBIDDEN => "authentication_error",
+		::http::StatusCode::NOT_FOUND => "not_found_error",
+		::http::StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
+		_ => "api_error",
+	}
+}
+
+pub fn translate_anthropic_error(
+	bytes: &Bytes,
+	status: ::http::StatusCode,
+) -> Result<Bytes, AIError> {
+	if serde_json::from_slice::<messages::MessagesErrorResponse>(bytes).is_ok() {
+		return Ok(bytes.clone());
+	}
+	let m = messages::MessagesErrorResponse {
+		r#type: "error".to_string(),
+		error: messages::MessagesError {
+			r#type: anthropic_error_type(status).to_string(),
+			message: String::from_utf8_lossy(bytes).into_owned(),
+		},
+	};
+	Ok(Bytes::from(
+		serde_json::to_vec(&m).map_err(AIError::ResponseMarshal)?,
+	))
+}
+
+/// Translate a Google error response into an Anthropic Messages error response.
+pub fn translate_google_error(bytes: &Bytes) -> Result<Bytes, AIError> {
+	let res = super::completions::parse_google_error(bytes)?;
+	let m = messages::MessagesErrorResponse {
+		r#type: "error".to_string(),
+		error: messages::MessagesError {
+			r#type: super::completions::google_error_type(&res.error).to_string(),
+			message: res.error.message.clone(),
+		},
+	};
+	Ok(Bytes::from(
+		serde_json::to_vec(&m).map_err(AIError::ResponseMarshal)?,
+	))
+}
 
 pub mod from_completions {
 	use std::collections::HashMap;
@@ -17,13 +61,170 @@ pub mod from_completions {
 	use bytes::Bytes;
 
 	use crate::http::Body;
+	use crate::llm::conversion::completions::{extract_system_text, parse_data_url};
 	use crate::llm::types::ResponseType;
 	use crate::llm::types::completions::typed as completions;
 	use crate::llm::types::completions::typed::UsagePromptDetails;
 	use crate::llm::types::messages::typed as messages;
-	use crate::llm::{AIError, LLMInfo, types};
-	use crate::telemetry::log::AsyncLog;
+	use crate::llm::{AIError, AmendOnDrop, logged_response_parsing, types};
 	use crate::{json, parse};
+
+	fn user_content_to_messages(
+		content: &completions::RequestUserMessageContent,
+	) -> Vec<messages::ContentBlock> {
+		let mut out = Vec::new();
+		match content {
+			completions::RequestUserMessageContent::Text(text) => {
+				if !text.trim().is_empty() {
+					out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+						text: text.clone(),
+						citations: None,
+						cache_control: None,
+					}));
+				}
+			},
+			completions::RequestUserMessageContent::Array(parts) => {
+				for part in parts {
+					match part {
+						completions::RequestUserMessageContentPart::Text(text) => {
+							if !text.text.trim().is_empty() {
+								out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+									text: text.text.clone(),
+									citations: None,
+									cache_control: None,
+								}));
+							}
+						},
+						completions::RequestUserMessageContentPart::ImageUrl(image) => {
+							let source = if let Some((media_type, data)) = parse_data_url(&image.image_url.url) {
+								serde_json::json!({
+									"type": "base64",
+									"media_type": media_type,
+									"data": data
+								})
+							} else {
+								serde_json::json!({
+									"type": "url",
+									"url": image.image_url.url
+								})
+							};
+							out.push(messages::ContentBlock::Image(messages::ContentImageBlock {
+								source,
+								cache_control: None,
+							}));
+						},
+						completions::RequestUserMessageContentPart::InputAudio(_)
+						| completions::RequestUserMessageContentPart::File(_) => {},
+					}
+				}
+			},
+		}
+		out
+	}
+
+	fn assistant_content_to_messages(
+		msg: &completions::RequestAssistantMessage,
+	) -> Vec<messages::ContentBlock> {
+		let mut out = Vec::new();
+		if let Some(content) = &msg.content {
+			match content {
+				completions::RequestAssistantMessageContent::Text(text) => {
+					if !text.trim().is_empty() {
+						out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+							text: text.clone(),
+							citations: None,
+							cache_control: None,
+						}));
+					}
+				},
+				completions::RequestAssistantMessageContent::Array(parts) => {
+					for part in parts {
+						match part {
+							completions::RequestAssistantMessageContentPart::Text(text) => {
+								if !text.text.trim().is_empty() {
+									out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+										text: text.text.clone(),
+										citations: None,
+										cache_control: None,
+									}));
+								}
+							},
+							completions::RequestAssistantMessageContentPart::Refusal(refusal) => {
+								if !refusal.refusal.trim().is_empty() {
+									out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+										text: refusal.refusal.clone(),
+										citations: None,
+										cache_control: None,
+									}));
+								}
+							},
+						}
+					}
+				},
+			}
+		}
+		if let Some(refusal) = &msg.refusal
+			&& !refusal.trim().is_empty()
+		{
+			out.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+				text: refusal.clone(),
+				citations: None,
+				cache_control: None,
+			}));
+		}
+		if let Some(tool_calls) = &msg.tool_calls {
+			for tool_call in tool_calls {
+				match tool_call {
+					completions::MessageToolCalls::Function(call) => {
+						let input = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+							.unwrap_or_else(|_| serde_json::Value::String(call.function.arguments.clone()));
+						out.push(messages::ContentBlock::ToolUse {
+							id: call.id.clone(),
+							name: call.function.name.clone(),
+							input,
+							cache_control: None,
+						});
+					},
+					completions::MessageToolCalls::Custom(call) => {
+						let input = serde_json::from_str::<serde_json::Value>(&call.custom_tool.input)
+							.unwrap_or_else(|_| serde_json::Value::String(call.custom_tool.input.clone()));
+						out.push(messages::ContentBlock::ToolUse {
+							id: call.id.clone(),
+							name: call.custom_tool.name.clone(),
+							input,
+							cache_control: None,
+						});
+					},
+				}
+			}
+		}
+		out
+	}
+
+	fn tool_content_to_messages(
+		content: &completions::RequestToolMessageContent,
+	) -> messages::ToolResultContent {
+		match content {
+			completions::RequestToolMessageContent::Text(text) => {
+				messages::ToolResultContent::Text(text.clone())
+			},
+			completions::RequestToolMessageContent::Array(parts) => {
+				let parts = parts
+					.iter()
+					.map(|part| match part {
+						completions::RequestToolMessageContentPart::Text(text) => {
+							messages::ToolResultContentPart::Text {
+								text: text.text.clone(),
+								citations: None,
+								cache_control: None,
+							}
+						},
+					})
+					.collect();
+				messages::ToolResultContent::Array(parts)
+			},
+		}
+	}
 
 	/// translate an OpenAI completions request to an anthropic messages request
 	pub fn translate(req: &types::completions::Request) -> Result<Vec<u8>, AIError> {
@@ -40,13 +241,7 @@ pub mod from_completions {
 		let system = req
 			.messages
 			.iter()
-			.filter_map(|msg| {
-				if completions::message_role(msg) == completions::SYSTEM_ROLE {
-					completions::message_text(msg).map(|s| s.to_string())
-				} else {
-					None
-				}
-			})
+			.filter_map(extract_system_text)
 			.collect::<Vec<String>>()
 			.join("\n");
 
@@ -54,23 +249,47 @@ pub mod from_completions {
 		let messages = req
 			.messages
 			.iter()
-			.filter(|msg| completions::message_role(msg) != completions::SYSTEM_ROLE)
 			.filter_map(|msg| {
-				let role = match completions::message_role(msg) {
-					completions::ASSISTANT_ROLE => messages::Role::Assistant,
-					// Default to user for other roles
-					_ => messages::Role::User,
-				};
-
-				completions::message_text(msg)
-					.map(|s| {
-						vec![messages::ContentBlock::Text(messages::ContentTextBlock {
-							text: s.to_string(),
-							citations: None,
+				let (role, content) = match msg {
+					completions::RequestMessage::System(_) | completions::RequestMessage::Developer(_) => {
+						return None;
+					},
+					completions::RequestMessage::User(user) => (
+						messages::Role::User,
+						user_content_to_messages(&user.content),
+					),
+					completions::RequestMessage::Assistant(assistant) => (
+						messages::Role::Assistant,
+						assistant_content_to_messages(assistant),
+					),
+					completions::RequestMessage::Tool(tool) => (
+						messages::Role::User,
+						vec![messages::ContentBlock::ToolResult {
+							tool_use_id: tool.tool_call_id.clone(),
+							content: tool_content_to_messages(&tool.content),
 							cache_control: None,
-						})]
-					})
-					.map(|content| messages::Message { role, content })
+							is_error: None,
+						}],
+					),
+					completions::RequestMessage::Function(function) => {
+						let mut blocks = Vec::new();
+						if let Some(text) = &function.content
+							&& !text.trim().is_empty()
+						{
+							blocks.push(messages::ContentBlock::Text(messages::ContentTextBlock {
+								text: text.clone(),
+								citations: None,
+								cache_control: None,
+							}));
+						}
+						(messages::Role::User, blocks)
+					},
+				};
+				if content.is_empty() {
+					None
+				} else {
+					Some(messages::Message { role, content })
+				}
 			})
 			.collect();
 
@@ -99,20 +318,32 @@ pub mod from_completions {
 			fields: HashMap::from([("user_id".to_string(), user)]),
 		});
 
+		let disable_parallel_tool_use = req.parallel_tool_calls.map(|p| !p);
+		let has_tools = tools.as_ref().is_some_and(|tools| !tools.is_empty());
 		let tool_choice = match req.tool_choice {
 			Some(completions::ToolChoiceOption::Function(completions::NamedToolChoice { function })) => {
 				Some(messages::ToolChoice::Tool {
 					name: function.name,
+					disable_parallel_tool_use,
 				})
 			},
 			Some(completions::ToolChoiceOption::Mode(completions::ToolChoiceOptions::Auto)) => {
-				Some(messages::ToolChoice::Auto)
+				Some(messages::ToolChoice::Auto {
+					disable_parallel_tool_use,
+				})
 			},
 			Some(completions::ToolChoiceOption::Mode(completions::ToolChoiceOptions::Required)) => {
-				Some(messages::ToolChoice::Any)
+				Some(messages::ToolChoice::Any {
+					disable_parallel_tool_use,
+				})
 			},
 			Some(completions::ToolChoiceOption::Mode(completions::ToolChoiceOptions::None)) => {
-				Some(messages::ToolChoice::None)
+				Some(messages::ToolChoice::None {})
+			},
+			None if disable_parallel_tool_use.is_some() && has_tools => {
+				Some(messages::ToolChoice::Auto {
+					disable_parallel_tool_use,
+				})
 			},
 			_ => None,
 		};
@@ -128,9 +359,11 @@ pub mod from_completions {
 		};
 
 		let response_format = match req.response_format {
-			Some(completions::ResponseFormat::JsonSchema { json_schema }) => json_schema
-				.schema
-				.map(|schema| messages::OutputFormat::JsonSchema { schema }),
+			Some(completions::ResponseFormat::JsonSchema { json_schema }) => {
+				Some(messages::OutputFormat::JsonSchema {
+					schema: json_schema.schema,
+				})
+			},
 			Some(completions::ResponseFormat::JsonObject) => Some(messages::OutputFormat::JsonSchema {
 				schema: serde_json::json!({
 					"type": "object",
@@ -180,7 +413,7 @@ pub mod from_completions {
 
 	pub fn translate_response(bytes: &Bytes) -> Result<Box<dyn ResponseType>, AIError> {
 		let resp = serde_json::from_slice::<messages::MessagesResponse>(bytes)
-			.map_err(AIError::ResponseParsing)?;
+			.map_err(logged_response_parsing(bytes))?;
 		let openai = translate_response_internal(resp);
 		let passthrough = json::convert::<_, types::completions::Response>(&openai)
 			.map_err(AIError::ResponseParsing)?;
@@ -195,7 +428,9 @@ pub mod from_completions {
 		for block in resp.content {
 			match block {
 				messages::ContentBlock::Text(messages::ContentTextBlock { text, .. }) => {
-					content = Some(text.clone())
+					// A message may contain multiple text blocks (e.g. text split around
+					// citations); concatenate them into the single OpenAI `content` field.
+					content.get_or_insert_with(String::new).push_str(&text)
 				},
 				messages::ContentBlock::ToolUse {
 					id, name, input, ..
@@ -247,6 +482,7 @@ pub mod from_completions {
 			refusal: None,
 			audio: None,
 			reasoning_content,
+			reasoning_signature: None,
 			extra: None,
 		};
 		let finish_reason = resp.stop_reason.as_ref().map(super::translate_stop_reason);
@@ -270,6 +506,8 @@ pub mod from_completions {
 				.cache_read_input_tokens
 				.map(|i| UsagePromptDetails {
 					cached_tokens: Some(i as u64),
+					audio_tokens: None,
+					rest: Default::default(),
 				}),
 			cache_creation_input_tokens: resp.usage.cache_creation_input_tokens.map(|i| i as u64),
 
@@ -284,19 +522,20 @@ pub mod from_completions {
 			model: resp.model,
 			choices,
 			usage: Some(usage),
-			service_tier: None,
+			service_tier: resp.usage.service_tier,
 			system_fingerprint: None,
 		}
 	}
 
 	pub fn translate_error(bytes: &Bytes) -> Result<Bytes, AIError> {
-		let res = serde_json::from_slice::<messages::MessagesErrorResponse>(bytes)
-			.map_err(AIError::ResponseMarshal)?;
+		let res = serde_json::from_slice::<messages::MessagesErrorResponse>(bytes).ok();
 		let m = completions::ChatCompletionErrorResponse {
 			event_id: None,
 			error: completions::ChatCompletionError {
-				r#type: "invalid_request_error".to_string(),
-				message: res.error.message,
+				r#type: Some("invalid_request_error".to_string()),
+				message: res
+					.map(|res| res.error.message)
+					.unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned()),
 				param: None,
 				code: None,
 				event_id: None,
@@ -307,13 +546,16 @@ pub mod from_completions {
 		))
 	}
 
-	pub fn translate_stream(b: Body, buffer_limit: usize, log: AsyncLog<LLMInfo>) -> Body {
+	pub fn translate_stream(b: Body, buffer_limit: usize, log: AmendOnDrop) -> Body {
 		let mut message_id = None;
 		let mut model = String::new();
+		let mut service_tier = None;
 		let created = chrono::Utc::now().timestamp() as u32;
 		// let mut finish_reason = None;
-		let mut input_tokens = 0;
 		let mut saw_token = false;
+		let mut next_tool_index = 0u32;
+		let mut tool_index_map: HashMap<usize, u32> = HashMap::new();
+
 		// https://docs.anthropic.com/en/docs/build-with-claude/streaming
 		parse::sse::json_transform::<messages::MessagesStreamEvent, completions::StreamResponse>(
 			b,
@@ -326,7 +568,7 @@ pub mod from_completions {
 						model: model.clone(),
 						object: "chat.completion.chunk".to_string(),
 						system_fingerprint: None,
-						service_tier: None,
+						service_tier: service_tier.clone(),
 						created,
 						choices,
 						usage,
@@ -340,7 +582,7 @@ pub mod from_completions {
 					messages::MessagesStreamEvent::MessageStart { message } => {
 						message_id = Some(message.id);
 						model = message.model.clone();
-						input_tokens = message.usage.input_tokens;
+						service_tier = message.usage.service_tier.clone();
 						log.non_atomic_mutate(|r| {
 							r.response.output_tokens = Some(message.usage.output_tokens as u64);
 							r.response.input_tokens = Some(message.usage.input_tokens as u64);
@@ -348,17 +590,45 @@ pub mod from_completions {
 								message.usage.cache_read_input_tokens.map(|i| i as u64);
 							r.response.cache_creation_input_tokens =
 								message.usage.cache_creation_input_tokens.map(|i| i as u64);
+							r.response.service_tier = message.usage.service_tier.as_deref().map(Into::into);
 							r.response.provider_model = Some(strng::new(&message.model))
 						});
 						// no need to respond with anything yet
 						None
 					},
 
-					messages::MessagesStreamEvent::ContentBlockStart { .. } => {
-						// There is never(?) any content here
-						None
+					messages::MessagesStreamEvent::ContentBlockStart {
+						index,
+						content_block,
+					} => match content_block {
+						messages::ContentBlock::ToolUse { id, name, .. }
+						| messages::ContentBlock::ServerToolUse { id, name, .. } => {
+							let tool_index = next_tool_index;
+							next_tool_index += 1;
+							tool_index_map.insert(index, tool_index);
+
+							let choice = completions::ChatChoiceStream {
+								index: 0,
+								logprobs: None,
+								delta: completions::StreamResponseDelta {
+									tool_calls: Some(vec![completions::ChatCompletionMessageToolCallChunk {
+										index: tool_index,
+										id: Some(id),
+										r#type: Some(completions::FunctionType::Function),
+										function: Some(completions::FunctionCallStream {
+											name: Some(name),
+											arguments: None,
+										}),
+									}]),
+									..Default::default()
+								},
+								finish_reason: None,
+							};
+							mk(vec![choice], None)
+						},
+						_ => None,
 					},
-					messages::MessagesStreamEvent::ContentBlockDelta { delta, .. } => {
+					messages::MessagesStreamEvent::ContentBlockDelta { delta, index } => {
 						if !saw_token {
 							saw_token = true;
 							log.non_atomic_mutate(|r| {
@@ -366,6 +636,7 @@ pub mod from_completions {
 							});
 						}
 						let mut dr = completions::StreamResponseDelta::default();
+						let mut emit_chunk = true;
 						match delta {
 							messages::ContentBlockDelta::TextDelta { text } => {
 								dr.content = Some(text);
@@ -373,42 +644,78 @@ pub mod from_completions {
 							messages::ContentBlockDelta::ThinkingDelta { thinking } => {
 								dr.reasoning_content = Some(thinking)
 							},
-							// TODO
-							messages::ContentBlockDelta::InputJsonDelta { .. } => {},
-							messages::ContentBlockDelta::SignatureDelta { .. } => {},
-							messages::ContentBlockDelta::CitationsDelta { .. } => {},
+							messages::ContentBlockDelta::InputJsonDelta { partial_json } => {
+								if let Some(&tool_index) = tool_index_map.get(&index) {
+									dr.tool_calls = Some(vec![completions::ChatCompletionMessageToolCallChunk {
+										index: tool_index,
+										id: None,
+										r#type: None,
+										function: Some(completions::FunctionCallStream {
+											name: None,
+											arguments: Some(partial_json),
+										}),
+									}]);
+								} else {
+									emit_chunk = false;
+								}
+							},
+							messages::ContentBlockDelta::SignatureDelta { .. }
+							| messages::ContentBlockDelta::CitationsDelta { .. } => {
+								emit_chunk = false;
+							},
 						};
-						let choice = completions::ChatChoiceStream {
-							index: 0,
-							logprobs: None,
-							delta: dr,
-							finish_reason: None,
-						};
-						mk(vec![choice], None)
+						if emit_chunk {
+							let choice = completions::ChatChoiceStream {
+								index: 0,
+								logprobs: None,
+								delta: dr,
+								finish_reason: None,
+							};
+							mk(vec![choice], None)
+						} else {
+							None
+						}
 					},
-					messages::MessagesStreamEvent::MessageDelta { usage, delta: _ } => {
-						// TODO
-						// finish_reason = delta.stop_reason.as_ref().map(translate_stop_reason);
+					messages::MessagesStreamEvent::MessageDelta { usage, delta } => {
+						let finish_reason = delta.stop_reason.as_ref().map(super::translate_stop_reason);
 						log.non_atomic_mutate(|r| {
-							r.response.cached_input_tokens = usage.cache_read_input_tokens.map(|i| i as u64);
-							r.response.cache_creation_input_tokens =
-								usage.cache_creation_input_tokens.map(|i| i as u64);
-							r.response.output_tokens = Some(usage.output_tokens as u64);
-							if let Some(inp) = r.response.input_tokens {
-								r.response.total_tokens = Some(inp + usage.output_tokens as u64)
+							if let Some(crt) = usage.cache_read_input_tokens {
+								r.response.cached_input_tokens = Some(crt as u64);
+							}
+							if let Some(cwt) = usage.cache_creation_input_tokens {
+								r.response.cache_creation_input_tokens = Some(cwt as u64);
+							}
+							if let Some(o) = usage.output_tokens {
+								r.response.output_tokens = Some(o as u64);
+							}
+							if let Some(inp) = r.response.input_tokens
+								&& let Some(o) = r.response.output_tokens
+							{
+								r.response.total_tokens = Some(inp + o)
 							}
 						});
+						let choices = finish_reason.map_or_else(Vec::new, |finish_reason| {
+							vec![completions::ChatChoiceStream {
+								index: 0,
+								logprobs: None,
+								delta: completions::StreamResponseDelta::default(),
+								finish_reason: Some(finish_reason),
+							}]
+						});
 						mk(
-							vec![],
+							choices,
 							Some(completions::Usage {
-								prompt_tokens: input_tokens as u32,
-								completion_tokens: usage.output_tokens as u32,
+								prompt_tokens: usage.input_tokens.unwrap_or_default() as u32,
+								completion_tokens: usage.output_tokens.unwrap_or_default() as u32,
 
-								total_tokens: (input_tokens + usage.output_tokens) as u32,
+								total_tokens: (usage.input_tokens.unwrap_or_default()
+									+ usage.output_tokens.unwrap_or_default()) as u32,
 
 								cache_read_input_tokens: usage.cache_read_input_tokens.map(|i| i as u64),
 								prompt_tokens_details: usage.cache_read_input_tokens.map(|i| UsagePromptDetails {
 									cached_tokens: Some(i as u64),
+									audio_tokens: None,
+									rest: Default::default(),
 								}),
 								cache_creation_input_tokens: usage.cache_creation_input_tokens.map(|i| i as u64),
 
@@ -416,7 +723,10 @@ pub mod from_completions {
 							}),
 						)
 					},
-					messages::MessagesStreamEvent::ContentBlockStop { .. } => None,
+					messages::MessagesStreamEvent::ContentBlockStop { index } => {
+						tool_index_map.remove(&index);
+						None
+					},
 					messages::MessagesStreamEvent::MessageStop => None,
 					messages::MessagesStreamEvent::Ping => None,
 				}
@@ -437,12 +747,28 @@ fn translate_stop_reason(resp: &messages::StopReason) -> completions::FinishReas
 	}
 }
 
-pub fn passthrough_stream(b: Body, buffer_limit: usize, log: AsyncLog<LLMInfo>) -> Body {
+pub fn passthrough_stream(
+	b: Body,
+	buffer_limit: usize,
+	log: AmendOnDrop,
+	include_completion_in_log: bool,
+) -> Body {
 	let mut saw_token = false;
+	let mut completion = include_completion_in_log.then(String::new);
 	// https://platform.claude.com/docs/en/build-with-claude/streaming
 	parse::sse::json_passthrough::<messages::MessagesStreamEvent>(b, buffer_limit, move |f| {
 		// ignore errors... what else can we do?
-		let Some(Ok(f)) = f else { return };
+		let Some(Ok(f)) = f else {
+			// Stream ended ([DONE]): flush completion if not already set via MessageDelta
+			if f.is_none() {
+				log.non_atomic_mutate(|r| {
+					if let Some(c) = completion.take() {
+						r.response.completion = Some(vec![c]);
+					}
+				});
+			}
+			return;
+		};
 
 		// Extract info we need
 		match f {
@@ -453,25 +779,41 @@ pub fn passthrough_stream(b: Body, buffer_limit: usize, log: AsyncLog<LLMInfo>) 
 					r.response.cached_input_tokens = message.usage.cache_read_input_tokens.map(|i| i as u64);
 					r.response.cache_creation_input_tokens =
 						message.usage.cache_creation_input_tokens.map(|i| i as u64);
+					r.response.service_tier = message.usage.service_tier.as_deref().map(Into::into);
 					r.response.provider_model = Some(strng::new(&message.model))
 				});
 			},
-			messages::MessagesStreamEvent::ContentBlockDelta { .. } => {
+			messages::MessagesStreamEvent::ContentBlockDelta { delta, .. } => {
 				if !saw_token {
 					saw_token = true;
 					log.non_atomic_mutate(|r| {
 						r.response.first_token = Some(Instant::now());
 					});
 				}
+				if let Some(c) = completion.as_mut()
+					&& let messages::ContentBlockDelta::TextDelta { text } = &delta
+				{
+					c.push_str(text);
+				}
 			},
 			messages::MessagesStreamEvent::MessageDelta { usage, delta: _ } => {
 				log.non_atomic_mutate(|r| {
-					r.response.output_tokens = Some(usage.output_tokens as u64);
-					r.response.cached_input_tokens = usage.cache_read_input_tokens.map(|i| i as u64);
-					r.response.cache_creation_input_tokens =
-						usage.cache_creation_input_tokens.map(|i| i as u64);
-					if let Some(inp) = r.response.input_tokens {
-						r.response.total_tokens = Some(inp + usage.output_tokens as u64)
+					if let Some(o) = usage.output_tokens {
+						r.response.output_tokens = Some(o as u64);
+					}
+					if let Some(crt) = usage.cache_read_input_tokens {
+						r.response.cached_input_tokens = Some(crt as u64);
+					}
+					if let Some(cwt) = usage.cache_creation_input_tokens {
+						r.response.cache_creation_input_tokens = Some(cwt as u64);
+					}
+					if let Some(inp) = r.response.input_tokens
+						&& let Some(o) = r.response.output_tokens
+					{
+						r.response.total_tokens = Some(inp + o)
+					}
+					if let Some(c) = completion.take() {
+						r.response.completion = Some(vec![c]);
 					}
 				});
 			},

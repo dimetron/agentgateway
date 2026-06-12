@@ -5,6 +5,14 @@ frontendPolicies:
 
 llm:
   policies:
+    cors:
+      allowOrigins:
+        - http://localhost:15000
+    localRateLimit:
+    - type: tokens
+      fillInterval: 1s
+      tokensPerFill: 10
+      maxTokens: 100
     jwtAuth:
       issuer: agentgateway.dev
       audiences: [test.agentgateway.dev]
@@ -16,25 +24,39 @@ llm:
   - name: claude-3-haiku
     provider: anthropic
     params:
-      model: claude-3-5-haiku-20241022
+      model: claude-haiku-4-5-20251001
       apiKey: "sk-123"
+      baseUrl: https://anthropic.internal/v1
+      tokenize: true
+    responseHeaders:
+      remove:
+      - server
+    health:
+      unhealthyExpression: "response.code >= 500 || response.code == 429"
+      eviction:
+        duration: 30s
     matches:
     - headers:
       - name: "X-Org"
         value:
           exact: "engineering"
-  - name: gemini-0.5-pro
+    promptCaching:
+      cacheSystem: true
+      cacheMessages: true
+      minTokens: 1
+  - name: '*'
     provider: vertex
     params:
-      model: claude-3-5-haiku-20241022
+      model: claude-haiku-4-5-20251001
       apiKey: "sk-123"
       vertexRegion: global
       vertexProject: my-vertex-project
   - name: gpt-7-max
-    provider: azureOpenAI
+    provider: azure
     params:
       model: gpt-3.5-turbo
-      azureHost: my-azure-openai-endpoint.openai.azure.com
+      azureResourceName: my-azure-openai-endpoint
+      azureResourceType: openAI
       azureApiVersion: v1
   - name: gpt-3.5-turbo
     provider: openAI

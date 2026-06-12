@@ -1,6 +1,9 @@
 pub mod filters;
+pub mod health;
 pub mod timeout;
 
+pub mod buffer;
+pub mod bufferbody;
 mod buflist;
 pub mod cors;
 pub mod jwt;
@@ -15,10 +18,14 @@ pub mod backendtls;
 pub mod basicauth;
 pub mod compression;
 pub mod csrf;
+pub mod envoy_proto_common;
 pub mod ext_authz;
 pub mod ext_proc;
+pub(crate) mod oauth;
+pub mod oidc;
 pub mod outlierdetection;
 mod peekbody;
+mod recordbody;
 pub mod remoteratelimit;
 pub mod sessionpersistence;
 #[cfg(any(test, feature = "internal_benches"))]
@@ -29,6 +36,44 @@ pub type Error = axum_core::Error;
 pub type Body = axum_core::body::Body;
 pub type Request = ::http::Request<Body>;
 pub type Response = ::http::Response<Body>;
+
+pub use recordbody::{RecordedBody, RecordedBodyHandle};
+
+pub(crate) fn iter_request_cookies<'a>(
+	req: &'a Request,
+) -> impl Iterator<Item = cookie::Cookie<'a>> + 'a {
+	req
+		.headers()
+		.get_all(header::COOKIE)
+		.into_iter()
+		.filter_map(|value| value.to_str().ok())
+		.flat_map(move |header_value| {
+			cookie::Cookie::split_parse(Cow::Borrowed(header_value)).filter_map(Result::ok)
+		})
+}
+
+pub(crate) fn read_request_cookie<'a>(req: &'a Request, name: &str) -> Option<Cow<'a, str>> {
+	for cookie in iter_request_cookies(req) {
+		if cookie.name() == name {
+			return Some(Cow::Owned(cookie.value().to_owned()));
+		}
+	}
+	None
+}
+
+pub(crate) fn strip_request_cookies_by_prefix(req: &mut Request, prefix: &str) {
+	let preserved: Vec<String> = iter_request_cookies(req)
+		.filter(|cookie| !cookie.name().starts_with(prefix))
+		.map(|cookie| cookie.to_string())
+		.collect();
+
+	req.headers_mut().remove(header::COOKIE);
+	if !preserved.is_empty() {
+		let hv =
+			HeaderValue::from_str(&preserved.join("; ")).expect("re-joined cookie header is valid");
+		req.headers_mut().insert(header::COOKIE, hv);
+	}
+}
 
 // SendDirectResponse is a Response that has been buffered so that it is Send.
 pub struct SendDirectResponse(pub ::http::Response<Bytes>);
@@ -101,10 +146,30 @@ impl RequestOrResponse<'_> {
 			RequestOrResponse::Response(r) => r.body_mut(),
 		}
 	}
-	pub fn apply_header(&mut self, k: &HeaderOrPseudo, v: Option<HeaderOrPseudoValue>, append: bool) {
+	pub fn apply_header(
+		&mut self,
+		k: &HeaderOrPseudo,
+		v: Option<HeaderOrPseudoValue>,
+		action: HeaderMutationAction,
+	) {
 		match (k, v) {
 			(HeaderOrPseudo::Header(k), Some(HeaderOrPseudoValue::Header(v))) => {
-				if append {
+				// Normalize modification of host header to authority header.
+				if k == header::HOST && matches!(self, RequestOrResponse::Request(_)) {
+					let Some(value) = HeaderOrPseudoValue::from_raw(&HeaderOrPseudo::Authority, v.as_bytes())
+					else {
+						return;
+					};
+					self.headers().remove(header::HOST);
+					self.apply_header(&HeaderOrPseudo::Authority, Some(value), action);
+					return;
+				}
+
+				let exists = self.headers().contains_key(k);
+				if !action.should_apply(exists) {
+					return;
+				}
+				if action.should_append() {
 					self.headers().append(k.clone(), v);
 				} else {
 					self.headers().insert(k.clone(), v);
@@ -163,6 +228,7 @@ impl RequestOrResponse<'_> {
 	}
 }
 
+use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::pin::Pin;
@@ -173,15 +239,16 @@ pub use ::http::uri::{Authority, Scheme};
 pub use ::http::{
 	HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header, status, uri,
 };
+use axum_core::BoxError;
 use bytes::Bytes;
 use cel::Value;
 use http::uri::PathAndQuery;
 use http_body::{Frame, SizeHint};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tower_serve_static::private::mime;
-use url::Url;
+use url::{Url, form_urlencoded};
 
-use crate::cel::{BackendContext, LLMContext, RequestStartTime, SourceContext};
+use crate::cel::{BackendContext, LLMContext, RequestTime, SourceContext};
 use crate::client::PoolKey;
 use crate::proxy::{ProxyError, ProxyResponse};
 use crate::transport::BufferLimit;
@@ -210,11 +277,60 @@ pub enum HeaderOrPseudoValue {
 	Status(StatusCode),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HeaderMutationAction {
+	AppendIfExistsOrAdd,
+	AddIfAbsent,
+	OverwriteIfExistsOrAdd,
+	OverwriteIfExists,
+}
+
+impl HeaderMutationAction {
+	pub fn should_apply(self, exists: bool) -> bool {
+		match self {
+			HeaderMutationAction::AppendIfExistsOrAdd | HeaderMutationAction::OverwriteIfExistsOrAdd => {
+				true
+			},
+			HeaderMutationAction::AddIfAbsent => !exists,
+			HeaderMutationAction::OverwriteIfExists => exists,
+		}
+	}
+
+	pub fn should_append(self) -> bool {
+		matches!(self, HeaderMutationAction::AppendIfExistsOrAdd)
+	}
+}
+
 impl HeaderOrPseudoValue {
+	pub fn from_raw(k: &HeaderOrPseudo, raw: &[u8]) -> Option<HeaderOrPseudoValue> {
+		match k {
+			HeaderOrPseudo::Header(_) => HeaderValue::from_bytes(raw)
+				.ok()
+				.map(HeaderOrPseudoValue::Header),
+			HeaderOrPseudo::Status => std::str::from_utf8(raw)
+				.ok()
+				.and_then(|s| s.parse::<u16>().ok())
+				.and_then(|s| StatusCode::from_u16(s).ok())
+				.map(HeaderOrPseudoValue::Status),
+			HeaderOrPseudo::Method => ::http::Method::from_bytes(raw)
+				.ok()
+				.map(HeaderOrPseudoValue::Method),
+			HeaderOrPseudo::Scheme => ::http::uri::Scheme::try_from(raw)
+				.ok()
+				.map(HeaderOrPseudoValue::Scheme),
+			HeaderOrPseudo::Authority => ::http::uri::Authority::try_from(raw)
+				.ok()
+				.map(HeaderOrPseudoValue::Authority),
+			HeaderOrPseudo::Path => ::http::uri::PathAndQuery::try_from(raw)
+				.ok()
+				.map(HeaderOrPseudoValue::Path),
+		}
+	}
+
 	pub fn from_cel_result(k: &HeaderOrPseudo, res: Option<Value>) -> Option<HeaderOrPseudoValue> {
-		match (res?, k) {
+		match (res?.always_materialize_owned(), k) {
 			(v, HeaderOrPseudo::Header(_)) => v
-				.as_bytes()
+				.as_bytes_pre_materialized()
 				.ok()
 				.and_then(|b| HeaderValue::from_bytes(b).ok())
 				.map(HeaderOrPseudoValue::Header),
@@ -225,22 +341,22 @@ impl HeaderOrPseudoValue {
 				.and_then(|v| StatusCode::from_u16(v).ok())
 				.map(HeaderOrPseudoValue::Status),
 			(v, HeaderOrPseudo::Method) => v
-				.as_bytes()
+				.as_bytes_pre_materialized()
 				.ok()
 				.and_then(|b| ::http::Method::from_bytes(b).ok())
 				.map(HeaderOrPseudoValue::Method),
 			(v, HeaderOrPseudo::Scheme) => v
-				.as_bytes()
+				.as_bytes_pre_materialized()
 				.ok()
 				.and_then(|b| ::http::uri::Scheme::try_from(b).ok())
 				.map(HeaderOrPseudoValue::Scheme),
 			(v, HeaderOrPseudo::Authority) => v
-				.as_bytes()
+				.as_bytes_pre_materialized()
 				.ok()
 				.and_then(|b| ::http::uri::Authority::try_from(b).ok())
 				.map(HeaderOrPseudoValue::Authority),
 			(v, HeaderOrPseudo::Path) => v
-				.as_bytes()
+				.as_bytes_pre_materialized()
 				.ok()
 				.and_then(|b| ::http::uri::PathAndQuery::try_from(b).ok())
 				.map(HeaderOrPseudoValue::Path),
@@ -374,88 +490,17 @@ pub fn get_request_pseudo_headers(req: &Request) -> Vec<(HeaderOrPseudo, String)
 	out
 }
 
-/// Apply a pseudo header mutation to either a request or a response. Returns true if applied.
-pub fn apply_header_or_pseudo(
-	rr: &mut RequestOrResponse,
-	pseudo: &HeaderOrPseudo,
-	raw: &[u8],
-) -> bool {
-	match (rr, pseudo) {
-		(RequestOrResponse::Request(req), HeaderOrPseudo::Method) => {
-			if let Ok(m) = ::http::Method::from_bytes(raw) {
-				*req.method_mut() = m;
-				return true;
-			}
-		},
-		(RequestOrResponse::Request(req), HeaderOrPseudo::Scheme) => {
-			if let Ok(s) = ::http::uri::Scheme::try_from(raw) {
-				let _ = modify_req_uri(req, |uri| {
-					uri.scheme = Some(s);
-					Ok(())
-				});
-				return true;
-			}
-		},
-		(RequestOrResponse::Request(req), HeaderOrPseudo::Authority) => {
-			if let Ok(a) = ::http::uri::Authority::try_from(raw) {
-				let _ = modify_req_uri(req, |uri| {
-					uri.authority = Some(a);
-					if uri.scheme.is_none() {
-						// When authority is set, scheme must also be set
-						// TODO: do the same for HeaderOrPseudo::Scheme
-						uri.scheme = Some(Scheme::HTTP);
-					}
-					Ok(())
-				});
-				return true;
-			}
-		},
-		(RequestOrResponse::Request(req), HeaderOrPseudo::Path) => {
-			if let Ok(pq) = ::http::uri::PathAndQuery::try_from(raw) {
-				let _ = modify_req_uri(req, |uri| {
-					uri.path_and_query = Some(pq);
-					Ok(())
-				});
-				return true;
-			}
-		},
-		(RequestOrResponse::Response(resp), HeaderOrPseudo::Status) => {
-			if let Some(code) = std::str::from_utf8(raw)
-				.ok()
-				.and_then(|s| s.parse::<u16>().ok())
-				.and_then(|c| ::http::StatusCode::from_u16(c).ok())
-			{
-				*resp.status_mut() = code;
-				return true;
-			}
-		},
-		(RequestOrResponse::Response(resp), HeaderOrPseudo::Header(hn)) => {
-			let Ok(hv) = HeaderValue::try_from(raw) else {
-				return false;
-			};
-			resp.headers_mut().insert(hn, hv);
-			return true;
-		},
-		(RequestOrResponse::Request(req), HeaderOrPseudo::Header(hn)) => {
-			let Ok(hv) = HeaderValue::try_from(raw) else {
-				return false;
-			};
-			req.headers_mut().insert(hn, hv);
-			return true;
-		},
-		// Not applicable combination
-		_ => {},
-	}
-	false
-}
-
 pub mod x_headers {
-	use http::HeaderName;
+	use http::uri::Scheme;
+	use http::{HeaderMap, HeaderName, HeaderValue, Uri};
+
+	pub const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
 
 	pub const X_RATELIMIT_LIMIT: HeaderName = HeaderName::from_static("x-ratelimit-limit");
 	pub const X_RATELIMIT_REMAINING: HeaderName = HeaderName::from_static("x-ratelimit-remaining");
 	pub const X_RATELIMIT_RESET: HeaderName = HeaderName::from_static("x-ratelimit-reset");
 	pub const X_AMZN_REQUESTID: HeaderName = HeaderName::from_static("x-amzn-requestid");
+	pub const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 
 	pub const RETRY_AFTER_MS: HeaderName = HeaderName::from_static("retry-after-ms");
 
@@ -467,6 +512,35 @@ pub mod x_headers {
 		HeaderName::from_static("x-ratelimit-reset-requests-day");
 	pub const X_RATELIMIT_RESET_TOKENS_MINUTE: HeaderName =
 		HeaderName::from_static("x-ratelimit-reset-tokens-minute");
+
+	pub fn forwarded_proto(headers: &HeaderMap<HeaderValue>) -> Option<String> {
+		headers
+			.get_all(&X_FORWARDED_PROTO)
+			.iter()
+			.filter_map(|value| value.to_str().ok())
+			.flat_map(|value| value.split(','))
+			.map(str::trim)
+			.find(|value| !value.is_empty())
+			.map(|value| value.to_ascii_lowercase())
+	}
+
+	pub fn forwarded_scheme(headers: &HeaderMap<HeaderValue>) -> Option<Scheme> {
+		forwarded_proto(headers).and_then(|proto| proto.parse().ok())
+	}
+
+	pub fn apply_forwarded_scheme(uri: Uri, headers: &HeaderMap<HeaderValue>) -> Uri {
+		let Some(scheme) = forwarded_scheme(headers) else {
+			return uri;
+		};
+		if uri.authority().is_none() {
+			return uri;
+		}
+
+		let original = uri.clone();
+		let mut parts = uri.into_parts();
+		parts.scheme = Some(scheme);
+		Uri::from_parts(parts).unwrap_or(original)
+	}
 }
 
 pub fn modify_req(
@@ -544,6 +618,87 @@ pub fn modify_url(
 	Ok(())
 }
 
+pub fn modify_query_parameters<S, R, KSet, VSet, KRemove>(
+	uri: &mut Uri,
+	query_parameters_to_set: S,
+	query_parameters_to_remove: R,
+) -> anyhow::Result<()>
+where
+	S: IntoIterator<Item = (KSet, VSet)>,
+	R: IntoIterator<Item = KRemove>,
+	KSet: AsRef<str>,
+	VSet: AsRef<str>,
+	KRemove: AsRef<str>,
+{
+	let query_parameters_to_set = query_parameters_to_set
+		.into_iter()
+		.map(|(key, value)| (key.as_ref().to_owned(), value.as_ref().to_owned()))
+		.collect::<Vec<_>>();
+	let query_parameters_to_remove = query_parameters_to_remove
+		.into_iter()
+		.map(|key| key.as_ref().to_owned())
+		.collect::<Vec<_>>();
+
+	if query_parameters_to_set.is_empty() && query_parameters_to_remove.is_empty() {
+		return Ok(());
+	}
+
+	let mut parts = std::mem::take(uri).into_parts();
+	let path = parts
+		.path_and_query
+		.as_ref()
+		.map(|pq| pq.path())
+		.filter(|path| !path.is_empty())
+		.unwrap_or("/");
+	let query = parts
+		.path_and_query
+		.as_ref()
+		.and_then(|pq| pq.query())
+		.unwrap_or_default();
+	let mut pairs = form_urlencoded::parse(query.as_bytes())
+		.map(|(key, value)| (key.into_owned(), value.into_owned()))
+		.collect::<Vec<_>>();
+
+	for (key, value) in query_parameters_to_set {
+		pairs.retain(|(current_key, _)| current_key != &key);
+		pairs.push((key, value));
+	}
+
+	if !query_parameters_to_remove.is_empty() {
+		pairs.retain(|(key, _)| {
+			!query_parameters_to_remove
+				.iter()
+				.any(|remove| remove == key)
+		});
+	}
+
+	let mut updated = form_urlencoded::Serializer::new(String::new());
+	for (key, value) in pairs {
+		updated.append_pair(&key, &value);
+	}
+
+	let updated = updated.finish();
+	let new_path: Result<PathAndQuery, _> = if updated.is_empty() {
+		path.to_string()
+	} else {
+		format!("{path}?{updated}")
+	}
+	.parse();
+	match new_path {
+		Ok(p) => {
+			parts.path_and_query = Some(p);
+			*uri = Uri::from_parts(parts)?;
+			Ok(())
+		},
+		Err(e) => {
+			// Just a backup, in the event that somehow our new param was invalid we still set the URI
+			// so its not wiped out
+			*uri = Uri::from_parts(parts)?;
+			Err(e.into())
+		},
+	}
+}
+
 #[derive(Debug)]
 pub enum WellKnownContentTypes {
 	Json,
@@ -565,6 +720,31 @@ pub fn classify_content_type(h: &HeaderMap) -> WellKnownContentTypes {
 		}
 	}
 	WellKnownContentTypes::Unknown
+}
+
+pub fn is_grpc_request<B>(req: &::http::Request<B>) -> bool {
+	!req.uri().path().is_empty() && is_grpc_content_type(req.headers())
+}
+
+pub fn is_grpc_content_type(headers: &HeaderMap) -> bool {
+	let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
+		return false;
+	};
+	let Ok(content_type) = content_type.to_str() else {
+		return false;
+	};
+	let content_type = content_type.split(';').next().unwrap_or_default().trim();
+	content_type.eq_ignore_ascii_case("application/grpc")
+		|| content_type
+			.get(..17)
+			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("application/grpc+"))
+}
+
+pub fn get_path_and_query(req: &Uri) -> &str {
+	req
+		.path_and_query()
+		.map(|pq| pq.as_str())
+		.unwrap_or_else(|| req.path())
 }
 
 pub fn get_host(req: &Request) -> Result<&str, ProxyError> {
@@ -601,9 +781,14 @@ pub fn response_buffer_limit(resp: &Response) -> usize {
 		.unwrap_or(2_097_152)
 }
 
-pub async fn read_body(req: Request) -> Result<Bytes, axum_core::Error> {
+pub async fn read_req_body(req: Request) -> Result<Bytes, axum_core::Error> {
 	let lim = buffer_limit(&req);
 	read_body_with_limit(req.into_body(), lim).await
+}
+
+pub async fn read_resp_body(resp: Response) -> Result<Bytes, axum_core::Error> {
+	let lim = response_buffer_limit(&resp);
+	read_body_with_limit(resp.into_body(), lim).await
 }
 
 pub async fn read_response_body(
@@ -698,16 +883,19 @@ pin_project_lite::pin_project! {
 	}
 }
 
-impl<B, D> DropBody<B, D> {
-	pub fn new(body: B, dropper: D) -> Self {
-		Self { body, dropper }
+impl<B, D> DropBody<B, D>
+where
+	D: Send + 'static,
+	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
+	B::Error: Into<BoxError>,
+{
+	#[allow(clippy::new_ret_no_self)]
+	pub fn new(body: B, dropper: D) -> Body {
+		Body::new(Self { body, dropper })
 	}
 }
 
-impl<B: http_body::Body + Debug + Unpin, D> http_body::Body for DropBody<B, D>
-where
-	B::Data: Debug,
-{
+impl<B: http_body::Body + Unpin, D> http_body::Body for DropBody<B, D> {
 	type Data = B::Data;
 	type Error = B::Error;
 
@@ -793,9 +981,75 @@ impl Debug for DebugExtensions<'_> {
 		if let Some(e) = ext.get::<SourceContext>() {
 			d.field("SourceContext", e);
 		}
-		if let Some(e) = ext.get::<RequestStartTime>() {
-			d.field("RequestStartTime", e);
+		if let Some(e) = ext.get::<RequestTime>() {
+			d.field("RequestTime", e);
+		}
+		if let Some(e) = ext.get::<transformation_cel::TransformationMetadata>() {
+			d.field("TransformationMetadata", e);
 		}
 		d.finish()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_modify_query_parameters_for_relative_uri() {
+		let mut uri = "/resource?keep=1&set=old&set=older&remove=gone"
+			.parse()
+			.unwrap();
+
+		modify_query_parameters(
+			&mut uri,
+			[("set", "updated"), ("new", "added value")],
+			["remove"],
+		)
+		.unwrap();
+
+		assert_eq!(
+			uri.to_string(),
+			"/resource?keep=1&set=updated&new=added+value"
+		);
+	}
+
+	#[test]
+	fn test_modify_query_parameters_for_absolute_uri() {
+		let mut uri = "https://example.com/resource?remove=1".parse().unwrap();
+
+		modify_query_parameters(&mut uri, std::iter::empty::<(&str, &str)>(), ["remove"]).unwrap();
+
+		assert_eq!(uri.to_string(), "https://example.com/resource");
+	}
+
+	#[test]
+	fn detects_grpc_request_content_types() {
+		for content_type in [
+			"application/grpc",
+			"application/grpc+proto",
+			"application/grpc; charset=utf-8",
+		] {
+			let req = ::http::Request::builder()
+				.uri("/svc.Method/Call")
+				.header(header::CONTENT_TYPE, content_type)
+				.body(Body::empty())
+				.unwrap();
+
+			assert!(is_grpc_request(&req), "{content_type}");
+		}
+	}
+
+	#[test]
+	fn rejects_non_grpc_request_content_types() {
+		for content_type in ["application/json", "application/grpc-web"] {
+			let req = ::http::Request::builder()
+				.uri("/svc.Method/Call")
+				.header(header::CONTENT_TYPE, content_type)
+				.body(Body::empty())
+				.unwrap();
+
+			assert!(!is_grpc_request(&req), "{content_type}");
+		}
 	}
 }

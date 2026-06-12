@@ -13,23 +13,54 @@ on:
         required: false
         default: false
         type: boolean
+      extra_helm_tag:
+        description: 'Additional Helm chart version to push (e.g. 0.0.0-latest-dev)'
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version number (without v prefix)'
+        required: true
+        type: string
+      extra_tag:
+        description: 'Additional Docker image tag to push (e.g. latest-dev)'
+        required: false
+        default: ''
+        type: string
+      extra_helm_tag:
+        description: 'Additional Helm chart version to push (e.g. 0.0.0-latest-dev)'
+        required: false
+        default: ''
+        type: string
 
 env:
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-  CONTROLLER_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}-controller
+  CARGO_TERM_COLOR: always
+  CI: true
+  RUST_VERSION: "1.96.0"
+  GO_VERSION: "1.26.4"
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/agentgateway
+  CONTROLLER_REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/controller
+  VEX_FILE: .github/vex/openvex.json
+  # Note: /charts is added to this
+  CHART_REGISTRY_IMAGE_BASE: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # Help debug what exact was input for this since Github doesn't expose it.
+      - name: Output Inputs
+        run: echo "${{ toJSON(github.event.inputs) }}"
       - name: Set canonical VERSION
         id: version
         run: |
           # Determine version source
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
           else
             VERSION="${{ github.ref_name }}"
           fi
@@ -50,9 +81,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
           - platform: linux/arm64
-            os: ubuntu-22.04-arm
+            os: blacksmith-4vcpu-ubuntu-2404-arm
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
@@ -63,23 +94,25 @@ jobs:
 
     - name: Docker meta
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
       with:
         images: ${{ env.REGISTRY_IMAGE }}
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
     - name: Build and push by digest
       id: build
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
       with:
         build-args: |
           VERSION=${{ env.VERSION }}
@@ -98,7 +131,7 @@ jobs:
         touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
     - name: Upload digest
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: digests-${{ env.PLATFORM_PAIR }}
         path: ${{ runner.temp }}/digests/*
@@ -106,7 +139,7 @@ jobs:
         retention-days: 1
 
   push-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -118,32 +151,34 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.9.2
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-linux-*
           merge-multiple: true
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=raw,value=v${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
@@ -152,11 +187,19 @@ jobs:
             $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
 
       - name: Sign the container image
-        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:v${{ env.VERSION }}
+
+      - name: Sign the latest tag
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:latest
+
+      - name: Sign the extra tag
+        if: ${{ inputs.extra_tag != '' }}
+        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:${{ inputs.extra_tag }}
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:v${{ env.VERSION }}
 
   musl-build-image:
     runs-on: ${{ matrix.os }}
@@ -170,9 +213,12 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
           - platform: linux/arm64
-            os: ubuntu-22.04-arm
+            os: blacksmith-4vcpu-ubuntu-2404-arm
+            # arm64 musl fails with jemalloc: https://github.com/tikv/jemallocator/issues/146
+            cargo_features: agentgateway/ui,agentgateway-app/mimalloc,agentgateway-app/tls-aws-lc
+            cargo_no_default_features: true
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
@@ -183,24 +229,26 @@ jobs:
 
     - name: Docker meta
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
       with:
         images: ${{ env.REGISTRY_IMAGE }}-musl
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
     - name: Build and push by digest
       id: build
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
       with:
         platforms: ${{ matrix.platform }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -212,6 +260,8 @@ jobs:
           VERSION=${{ env.VERSION }}
           GIT_REVISION=${{ github.sha }}
           BUILDER=musl
+          CARGO_FEATURES=${{ matrix.cargo_features || 'agentgateway/ui' }}
+          CARGO_NO_DEFAULT_FEATURES=${{ matrix.cargo_no_default_features || 'false' }}
 
     - name: Export digest
       run: |
@@ -220,7 +270,7 @@ jobs:
         touch "${{ runner.temp }}/digests-musl/${digest#sha256:}"
 
     - name: Upload digest
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: digests-musl-${{ env.PLATFORM_PAIR }}
         path: ${{ runner.temp }}/digests-musl/*
@@ -228,7 +278,7 @@ jobs:
         retention-days: 1
 
   musl-push-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -240,32 +290,33 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.9.2
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/digests-musl
           pattern: digests-musl*
           merge-multiple: true
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=raw,value=v${{ env.VERSION }}
+            type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests-musl
@@ -274,11 +325,15 @@ jobs:
             $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
 
       - name: Sign the container image
-        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}-musl
+        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:v${{ env.VERSION }}-musl
+
+      - name: Sign the extra tag
+        if: ${{ inputs.extra_tag != '' }}
+        run: cosign sign --yes ${{ env.REGISTRY_IMAGE }}:${{ inputs.extra_tag }}-musl
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}-musl
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:v${{ env.VERSION }}-musl
 
   build-controller-image:
     runs-on: ${{ matrix.os }}
@@ -292,10 +347,10 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             goarch: amd64
           - platform: linux/arm64
-            os: ubuntu-22.04-arm
+            os: blacksmith-4vcpu-ubuntu-2404-arm
             goarch: arm64
     defaults:
       run:
@@ -309,21 +364,22 @@ jobs:
         echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       working-directory: .
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
-        go-version: '1.25.7'
-        cache-dependency-path: |
-          **/*.sum
+        go-version: "${{ env.GO_VERSION }}"
+        cache: false
 
     - name: Build controller binary
       run: |
@@ -337,16 +393,16 @@ jobs:
 
     - name: Docker meta
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
       with:
         images: ${{ env.CONTROLLER_REGISTRY_IMAGE }}
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
     - name: Build and push by digest
       id: build
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
       with:
         context: controller/_output/pkg/agentgateway
         file: controller/_output/pkg/agentgateway/Dockerfile.agentgateway
@@ -366,7 +422,7 @@ jobs:
         touch "${{ runner.temp }}/controller-digests/${digest#sha256:}"
 
     - name: Upload digest
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: controller-digests-${{ env.PLATFORM_PAIR }}
         path: ${{ runner.temp }}/controller-digests/*
@@ -374,7 +430,7 @@ jobs:
         retention-days: 1
 
   push-controller-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -386,10 +442,14 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.9.2
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/controller-digests
           pattern: controller-digests-*
@@ -403,22 +463,23 @@ jobs:
           find . -type f
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.CONTROLLER_REGISTRY_IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=raw,value=v${{ env.VERSION }}
+            type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/controller-digests
@@ -427,48 +488,87 @@ jobs:
             $(find . -type f -exec sh -c 'printf "${{ env.CONTROLLER_REGISTRY_IMAGE }}@sha256:%s " "$(basename "$1")"' _ {} \;)
 
       - name: Sign the container image
-        run: cosign sign --yes ${{ env.CONTROLLER_REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+        run: cosign sign --yes ${{ env.CONTROLLER_REGISTRY_IMAGE }}:v${{ env.VERSION }}
+
+      - name: Sign the extra tag
+        if: ${{ inputs.extra_tag != '' }}
+        run: cosign sign --yes ${{ env.CONTROLLER_REGISTRY_IMAGE }}:${{ inputs.extra_tag }}
+
+      - name: Attach VEX attestation
+        run: |
+          cosign attest \
+            --predicate "${{ env.VEX_FILE }}" \
+            --type openvex \
+            --yes \
+            ${{ env.CONTROLLER_REGISTRY_IMAGE }}:v${{ env.VERSION }}
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.CONTROLLER_REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.CONTROLLER_REGISTRY_IMAGE }}:v${{ env.VERSION }}
+
+  push-helm-charts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    needs:
+      - setup
+      - push-controller-image
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Helm login to ${{ env.CHART_REGISTRY_IMAGE_BASE }}
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | ./tools/helm registry login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+
+      - name: Push helm charts
+        run: make -C controller release-charts
+        env:
+          IMAGE_REGISTRY: ${{ env.CHART_REGISTRY_IMAGE_BASE }}
+          EXTRA_HELM_TAG: ${{ inputs.extra_helm_tag }}
 
   build:
-    if: ${{ github.event_name == 'push' || ! github.event.inputs.skip_gh_release }}
+    if: ${{ github.event_name != 'workflow_call' && (github.event_name == 'push' || ! github.event.inputs.skip_gh_release) }}
     needs:
       - setup
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: blacksmith-4vcpu-ubuntu-2404
             target: x86_64-unknown-linux-musl
-            # Performance is horrendous on musl without jemalloc
-            features: jemalloc
-          - os: ubuntu-22.04-arm
+            name: linux
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
             target: aarch64-unknown-linux-musl
-            # TODO: arm64 build fails with jemalloc for some reason?
-            features: default
-          - os: macos-latest
+            # arm64 musl fails with jemalloc: https://github.com/tikv/jemallocator/issues/146
+            extra_cargo_args: "--no-default-features --features agentgateway-app/mimalloc,agentgateway-app/tls-aws-lc"
+            name: linux-arm
+          - os: macos-26
             target: aarch64-apple-darwin
-            features: default
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            features: default
-          - os: windows-latest
+            name: mac
+          - os: windows-2025
             target: x86_64-pc-windows-msvc
-            features: default
+            name: windows
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        node-version: 23
+        persist-credentials: false
+    - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version: 24
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
+        toolchain: "${{ env.RUST_VERSION }}"
         targets: ${{ matrix.target }}
     # TODO: build this in a separate job and just copy it over
     - name: Build UI
@@ -476,8 +576,8 @@ jobs:
         cd ui
         npm install
         npm run build
-    - name: Install musl-tools
-      if: ${{ matrix.os == 'ubuntu-22.04-arm' || matrix.os == 'ubuntu-latest' }}
+    - name: Prepare Linux target
+      if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
       run: |
         sudo apt-get update
         sudo apt-get install -y musl-tools
@@ -485,31 +585,67 @@ jobs:
     - name: Build
       run: make build
       env:
-        CARGO_BUILD_ARGS: "--target ${{ matrix.target }} -F ${{ matrix.features }}"
+        CARGO_BUILD_ARGS: "--target ${{ matrix.target }} ${{ matrix.extra_cargo_args || '' }}"
     - name: Debug dirty build
       run: |
         git status
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
-        name: release-binary-${{ matrix.os }}
+        name: release-binary-${{ matrix.name }}
         path: |
           target/${{ matrix.target }}/release/agentgateway
           target/${{ matrix.target }}/release/agentgateway.exe
 
-  release:
-    if: ${{ github.event_name == 'push' || ! github.event.inputs.skip_gh_release }}
+  build-agctl:
+    if: ${{ github.event_name != 'workflow_call' && (github.event_name == 'push' || ! github.event.inputs.skip_gh_release) }}
     needs:
+      - setup
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: controller
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - name: Set up Go
+      uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+      with:
+        go-version: "${{ env.GO_VERSION }}"
+        cache: false
+    - name: Build agctl
+      run: make agctl-release
+    - name: Upload Artifact
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: release-binary-agctl
+        path: controller/_output/pkg/agctl/agctl-*
+        if-no-files-found: error
+
+  release:
+    if: ${{ github.event_name != 'workflow_call' && (github.event_name == 'push' || ! github.event.inputs.skip_gh_release) }}
+    needs:
+    - setup
     - push-image
     - musl-push-image
     - push-controller-image
+    - push-helm-charts
     - build
-    runs-on: ubuntu-latest
+    - build-agctl
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
     steps:
     - name: Download Artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:
         pattern: release-binary-*
 
@@ -517,22 +653,52 @@ jobs:
       run: |
         ls -R
         mkdir outputs
-        mv release-binary-macos-latest/agentgateway outputs/agentgateway-darwin-arm64
+        mv release-binary-mac/agentgateway outputs/agentgateway-darwin-arm64
         sha256sum outputs/agentgateway-darwin-arm64 > outputs/agentgateway-darwin-arm64.sha256
-        mv release-binary-macos-15-intel/agentgateway outputs/agentgateway-darwin-amd64
-        sha256sum outputs/agentgateway-darwin-amd64 > outputs/agentgateway-darwin-amd64.sha256
-        mv release-binary-ubuntu-latest/agentgateway outputs/agentgateway-linux-amd64
+        mv release-binary-linux/agentgateway outputs/agentgateway-linux-amd64
         sha256sum outputs/agentgateway-linux-amd64 > outputs/agentgateway-linux-amd64.sha256
-        mv release-binary-ubuntu-22.04-arm/agentgateway outputs/agentgateway-linux-arm64
+        mv release-binary-linux-arm/agentgateway outputs/agentgateway-linux-arm64
         sha256sum outputs/agentgateway-linux-arm64 > outputs/agentgateway-linux-arm64.sha256
-        mv release-binary-windows-latest/agentgateway.exe outputs/agentgateway-windows-amd64.exe
+        mv release-binary-windows/agentgateway.exe outputs/agentgateway-windows-amd64.exe
         sha256sum outputs/agentgateway-windows-amd64.exe > outputs/agentgateway-windows-amd64.exe.sha256
+        shopt -s nullglob
+        agctl_bins=(release-binary-agctl/agctl-*)
+        shopt -u nullglob
+        if [ ${#agctl_bins[@]} -eq 0 ]; then
+          echo "No agctl binaries found in release-binary-agctl/" >&2
+          exit 1
+        fi
+        for agctl in "${agctl_bins[@]}"; do
+          name="$(basename "$agctl")"
+          mv "$agctl" "outputs/${name}"
+          sha256sum "outputs/${name}" > "outputs/${name}.sha256"
+        done
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
       with:
-        files: outputs/agentgateway-*
+        files: |
+          outputs/agentgateway-*
+          outputs/agctl-*
         tag_name: ${{ github.ref_name }}
-        body: "Automated release of ${{ github.ref_name }}."
+        generate_release_notes: true
+        body: |
+          🎉 Welcome to the ${{ env.VERSION }} release of the agentgateway project!
+
+          ## Artifacts
+
+          **Docker images** are available:
+          * `cr.agentgateway.dev/agentgateway:v${{ env.VERSION }}`
+          * `cr.agentgateway.dev/controller:v${{ env.VERSION }}`
+
+          **Helm charts** are available:
+          * `cr.agentgateway.dev/charts/agentgateway:v${{ env.VERSION }}`
+          * `cr.agentgateway.dev/charts/agentgateway-crds:v${{ env.VERSION }}`
+
+          **Binaries** for `agentgateway` and the `agctl` CLI are available below.
+
+          ## Quick Start
+
+          Follow the [Kubernetes](https://agentgateway.dev/docs/kubernetes/latest/quickstart/) or [Standalone](https://agentgateway.dev/docs/standalone/latest/quickstart/) quick start guide to get started!
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       if: startsWith(github.ref, 'refs/tags/')

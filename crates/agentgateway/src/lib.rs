@@ -8,7 +8,7 @@ use std::{fmt, io};
 
 use agent_core::prelude::*;
 use control::caclient::CaClient;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use indexmap::IndexMap;
 #[cfg(feature = "schema")]
 pub use schemars::JsonSchema;
@@ -20,7 +20,9 @@ use crate::store::Stores;
 use crate::types::discovery::Identity;
 
 pub mod a2a;
+pub mod agentcore;
 pub mod app;
+pub mod aws;
 pub mod cel;
 pub mod client;
 pub mod config;
@@ -35,7 +37,7 @@ pub mod proxy;
 pub mod serdes;
 pub mod state_manager;
 pub mod store;
-mod telemetry;
+pub mod telemetry;
 #[cfg(any(test, feature = "internal_benches"))]
 pub mod test_helpers;
 pub mod transport;
@@ -50,6 +52,7 @@ use telemetry::{metrics, trc};
 use crate::control::{AuthSource, RootCert};
 use crate::telemetry::trc::Protocol;
 use crate::types::agent::{ListenerTarget, PolicyTargetRef};
+use crate::types::local;
 
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -59,12 +62,83 @@ pub struct NestedRawConfig {
 	config: Option<RawConfig>,
 }
 
+/// Controls which IP address families the DNS resolver will query for
+/// upstream (backend) connections.
+///
+///  Maps to hickory_resolver's `LookupIpStrategy` under the hood.
+///
+/// Can be set via the `DNS_LOOKUP_FAMILY` environment variable or the
+/// `dns.lookupFamily` field in the config file.
+///
+/// See: <https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/cluster.proto#enum-config-cluster-v3-cluster-dnslookupfamily>
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub enum DnsLookupFamily {
+	/// Query for both A and AAAA records in parallel and use all results.
+	All,
+	/// Automatically choose based on the `enable_ipv6` setting. When IPv6 is
+	/// enabled this behaves like `V4Preferred`; otherwise `V4Only`.
+	#[default]
+	Auto,
+	/// Query for both A and AAAA, but prefer IPv4 addresses when both are
+	/// available.
+	V4Preferred,
+	/// Only query for A (IPv4) records.
+	V4Only,
+	/// Only query for AAAA (IPv6) records.
+	V6Only,
+}
+
+impl DnsLookupFamily {
+	pub fn from_env_str(s: &str) -> anyhow::Result<Self> {
+		serde_json::from_value(serde_json::Value::String(s.to_owned()))
+			.map_err(|e| anyhow::anyhow!("invalid DNS lookup family '{s}': {e}"))
+	}
+
+	/// Convert to hickory_resolver's `LookupIpStrategy`, using the
+	/// `ipv6_enabled` flag to resolve the `Auto` case.
+	pub fn to_lookup_strategy(self, ipv6_enabled: bool) -> LookupIpStrategy {
+		match self {
+			Self::All => LookupIpStrategy::Ipv4AndIpv6,
+			Self::V4Preferred => LookupIpStrategy::Ipv4thenIpv6,
+			Self::V4Only => LookupIpStrategy::Ipv4Only,
+			Self::V6Only => LookupIpStrategy::Ipv6Only,
+			Self::Auto => {
+				if ipv6_enabled {
+					LookupIpStrategy::Ipv4thenIpv6
+				} else {
+					LookupIpStrategy::Ipv4Only
+				}
+			},
+		}
+	}
+}
+
+#[derive(serde::Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct RawDnsConfig {
+	/// Controls which IP address families the DNS resolver will query for
+	/// upstream connections.
+	/// Accepted values: All, Auto, V4Preferred, V4Only, V6Only.
+	/// Defaults to Auto (IPv4-only when enableIpv6 is false, both when true).
+	lookup_family: Option<DnsLookupFamily>,
+
+	/// Whether to enable EDNS0 (Extension Mechanisms for DNS) in the resolver.
+	/// When `None`, the system-provided resolver setting is preserved.
+	/// Can also be set via the `DNS_EDNS0` environment variable.
+	edns0: Option<bool>,
+}
+
 #[derive(serde::Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 // RawConfig represents the inputs a user can pass in. Config represents the internal representation of this.
 pub struct RawConfig {
 	enable_ipv6: Option<bool>,
+
+	/// DNS resolver settings.
+	dns: Option<RawDnsConfig>,
 
 	/// Local XDS path. If not specified, the current configuration file will be used.
 	local_xds_path: Option<PathBuf>,
@@ -76,19 +150,27 @@ pub struct RawConfig {
 	namespace: Option<String>,
 	gateway: Option<String>,
 	trust_domain: Option<String>,
+	/// Comma-separated list of additional SPIFFE trust domains accepted on inbound HBONE
+	/// connections. The local trust_domain is always implicitly included.
+	additional_trust_domains: Option<String>,
+	/// When true, skip SPIFFE trust-domain verification on inbound HBONE connections.
+	skip_validate_trust_domain: Option<bool>,
 	service_account: Option<String>,
 	cluster_id: Option<String>,
 	network: Option<String>,
 
-	/// Admin UI address in the format "ip:port"
+	/// Admin UI address in the format "ip:port", "localhost:port", "unix:/path/to/socket", or "off"
 	admin_addr: Option<String>,
-	/// Stats/metrics server address in the format "ip:port"
+	/// Stats/metrics server address in the format "ip:port", "localhost:port", "unix:/path/to/socket", or "off"
 	stats_addr: Option<String>,
-	/// Readiness probe server address in the format "ip:port"
+	/// Readiness probe server address in the format "ip:port", "localhost:port", "unix:/path/to/socket", or "off"
 	readiness_addr: Option<String>,
 
 	/// Configuration for stateful session management
 	session: Option<RawSession>,
+
+	/// MCP gateway settings.
+	mcp: Option<RawMcpConfig>,
 
 	#[serde(default, with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
@@ -151,6 +233,23 @@ pub struct BackendConfig {
 	pool_max_size: Option<usize>,
 }
 
+#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicCaCertCacheConfig {
+	#[serde(with = "serde_dur")]
+	pub ttl: Duration,
+	pub capacity: usize,
+}
+
+impl Default for DynamicCaCertCacheConfig {
+	fn default() -> Self {
+		Self {
+			ttl: Duration::from_secs(300),
+			capacity: 256,
+		}
+	}
+}
+
 impl Default for BackendConfig {
 	fn default() -> Self {
 		crate::BackendConfig {
@@ -198,7 +297,8 @@ pub struct RawHBONE {
 
 #[apply(schema_de!)]
 pub struct RawSession {
-	/// The signing key to be used. If not set, sessions will not be encrypted.
+	/// The AES-256-GCM session protection key to be used for session tokens.
+	/// If not set, sessions will not be encrypted.
 	/// For example, generated via `openssl rand -hex 32`.
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
 	#[serde(serialize_with = "ser_redact", deserialize_with = "deser_key")]
@@ -206,8 +306,15 @@ pub struct RawSession {
 }
 
 #[apply(schema_de!)]
+pub struct RawMcpConfig {
+	#[serde(default, with = "serde_dur_option")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	session_ttl: Option<Duration>,
+}
+
+#[apply(schema_de!)]
 pub struct RawTracing {
-	otlp_endpoint: String,
+	otlp_endpoint: Option<String>,
 	#[serde(default)]
 	headers: HashMap<String, String>,
 	#[serde(default)]
@@ -306,6 +413,10 @@ impl<'de> Deserialize<'de> for StringOrInt {
 			fn visit_i64<E>(self, value: i64) -> Result<StringOrInt, E> {
 				Ok(StringOrInt(value.to_string()))
 			}
+
+			fn visit_u64<E>(self, value: u64) -> Result<StringOrInt, E> {
+				Ok(StringOrInt(value.to_string()))
+			}
 		}
 
 		deserializer.deserialize_any(StringOrIntVisitor())
@@ -344,6 +455,10 @@ impl<'de> Deserialize<'de> for StringBoolFloat {
 			fn visit_i64<E>(self, value: i64) -> Result<StringBoolFloat, E> {
 				Ok(StringBoolFloat(value.to_string()))
 			}
+
+			fn visit_u64<E>(self, value: u64) -> Result<StringBoolFloat, E> {
+				Ok(StringBoolFloat(value.to_string()))
+			}
 		}
 
 		deserializer.deserialize_any(StringBoolFloatVisitor())
@@ -372,6 +487,9 @@ impl schemars::JsonSchema for StringBoolFloat {
 pub struct Config {
 	pub ipv6_enabled: bool,
 	pub network: Strng,
+	/// How the gateway discovers its own workload for locality-aware load balancing.
+	/// `None` disables locality filtering — any LoadBalancer config on services is ignored.
+	pub self_identity: Option<types::discovery::SelfIdentitySource>,
 	#[serde(with = "serde_dur")]
 	pub termination_max_deadline: Duration,
 	#[serde(with = "serde_dur")]
@@ -382,22 +500,36 @@ pub struct Config {
 	pub stats_addr: Address,
 	pub readiness_addr: Address,
 	// For waypoint identification
-	pub self_addr: Option<Strng>,
+	pub self_addr: Option<types::discovery::WaypointIdentity>,
 	pub hbone: Arc<agent_hbone::Config>,
 	/// XDS address to use. If unset, XDS will not be used.
 	pub xds: XDSConfig,
 	pub ca: Option<caclient::Config>,
-	pub tracing: trc::Config,
+
+	pub tracing: Option<trc::DeprecatedConfig>,
+	pub metrics: crate::telemetry::log::MetricsConfig,
 	pub logging: crate::telemetry::log::Config,
+
 	pub dns: client::Config,
 	pub proxy_metadata: ProxyMetadata,
 	pub threading_mode: ThreadingMode,
 	pub session_encoder: http::sessionpersistence::Encoder,
+	/// Runtime cookie/session crypto for browser OIDC flows.
+	pub oidc_cookie_encoder: Option<http::sessionpersistence::Encoder>,
 	/// Handle for tasks/spans emitted on the admin runtime.
 	#[serde(skip)]
 	pub admin_runtime_handle: Option<tokio::runtime::Handle>,
 
 	pub backend: BackendConfig,
+	pub mcp: McpConfig,
+	pub dynamic_ca_cert_cache: DynamicCaCertCacheConfig,
+}
+
+#[apply(schema!)]
+pub struct McpConfig {
+	#[serde(with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	pub session_ttl: Duration,
 }
 
 impl Config {
@@ -406,6 +538,7 @@ impl Config {
 			gateway_name: self.xds.gateway.clone(),
 			gateway_namespace: self.xds.namespace.clone(),
 			listener_name: None,
+			port: None,
 		}
 	}
 	pub fn gateway_ref(&self) -> PolicyTargetRef {
@@ -413,7 +546,25 @@ impl Config {
 			gateway_name: self.xds.gateway.as_ref(),
 			gateway_namespace: self.xds.namespace.as_ref(),
 			listener_name: None,
+			port: None,
 		}
+	}
+	pub fn gateway_port_ref(&self, port: u16) -> PolicyTargetRef {
+		PolicyTargetRef::Gateway {
+			gateway_name: self.xds.gateway.as_ref(),
+			gateway_namespace: self.xds.namespace.as_ref(),
+			listener_name: None,
+			port: Some(port),
+		}
+	}
+	pub fn as_policy_context(
+		&self,
+		policy_key: impl std::fmt::Display,
+	) -> Option<local::AttachedPolicyContext> {
+		Some(local::AttachedPolicyContext {
+			oidc_policy_id: crate::http::oidc::PolicyId::policy(&policy_key),
+			oidc_cookie_encoder: self.oidc_cookie_encoder.as_ref(),
+		})
 	}
 }
 
@@ -474,33 +625,64 @@ impl ConfigSource {
 
 #[derive(Debug, Clone)]
 pub struct ProxyInputs {
-	cfg: Arc<Config>,
-	stores: Stores,
+	pub cfg: Arc<Config>,
+	pub stores: Stores,
 
-	upstream: client::Client,
+	pub upstream: client::Client,
 
-	metrics: Arc<metrics::Metrics>,
-	tracer: Option<std::sync::Arc<trc::Tracer>>,
+	pub metrics: Arc<metrics::Metrics>,
 
-	mcp_state: mcp::App,
-	ca: Option<Arc<CaClient>>,
+	pub mcp_state: mcp::App,
+	pub ca: Option<Arc<CaClient>>,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
-// Address is a wrapper around either a normal SocketAddr or "bind to localhost on IPv4 and IPv6"
+impl ProxyInputs {
+	/// Create a new `ProxyInputs` for embedding agentgateway as a library.
+	///
+	/// This constructor is intended for use cases where the gateway is embedded
+	/// directly into another application, bypassing [`app::run`] which creates
+	/// its own admin servers, signal handlers, and XDS state management.
+	pub fn new(
+		cfg: Arc<Config>,
+		stores: Stores,
+		upstream: client::Client,
+		metrics: Arc<metrics::Metrics>,
+		mcp_state: mcp::App,
+		ca: Option<Arc<CaClient>>,
+	) -> Self {
+		Self {
+			cfg,
+			stores,
+			upstream,
+			metrics,
+			mcp_state,
+			ca,
+		}
+	}
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+// Address is a management listener address. It may bind TCP, bind localhost on
+// both IPv4 and IPv6, bind a Unix domain socket, or disable the listener.
 pub enum Address {
+	// Do not bind this listener.
+	Off,
 	// Bind to localhost (dual stack) on a specific port
 	// (ipv6_enabled, port)
 	Localhost(bool, u16),
 	// Bind to an explicit IP/port
 	SocketAddr(SocketAddr),
+	// Bind to a Unix domain socket.
+	UnixSocket(PathBuf),
 }
 
 impl Display for Address {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
+			Address::Off => write!(f, "off"),
 			Address::Localhost(_, port) => write!(f, "localhost:{port}"),
 			Address::SocketAddr(s) => write!(f, "{s}"),
+			Address::UnixSocket(path) => write!(f, "unix:{}", path.display()),
 		}
 	}
 }
@@ -511,6 +693,7 @@ impl IntoIterator for Address {
 
 	fn into_iter(self) -> Self::IntoIter {
 		match self {
+			Address::Off | Address::UnixSocket(_) => vec![].into_iter(),
 			Address::Localhost(ipv6_enabled, port) => {
 				if ipv6_enabled {
 					vec![
@@ -529,7 +712,14 @@ impl IntoIterator for Address {
 
 impl Address {
 	fn new(ipv6_enabled: bool, s: &str) -> anyhow::Result<Self> {
-		if s.starts_with("localhost:") {
+		if s == "off" {
+			Ok(Address::Off)
+		} else if let Some(path) = s.strip_prefix("unix:") {
+			if path.trim().is_empty() {
+				anyhow::bail!("unix socket path must not be empty")
+			}
+			Ok(Address::UnixSocket(PathBuf::from(path)))
+		} else if s.starts_with("localhost:") {
 			let (_host, ports) = s.split_once(':').expect("already checked it has a :");
 			let port: u16 = ports.parse()?;
 			Ok(Address::Localhost(ipv6_enabled, port))
@@ -540,6 +730,7 @@ impl Address {
 
 	pub fn port(&self) -> u16 {
 		match self {
+			Address::Off | Address::UnixSocket(_) => 0,
 			Address::Localhost(_, port) => *port,
 			Address::SocketAddr(s) => s.port(),
 		}
@@ -578,7 +769,7 @@ pub fn ipv6_enabled_on_localhost() -> io::Result<bool> {
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProxyMetadata {
-	pub instance_ip: String,
+	pub instance_ip: Option<String>,
 	pub pod_name: String,
 	pub pod_namespace: String,
 	pub node_name: String,

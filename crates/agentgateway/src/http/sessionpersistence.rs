@@ -1,6 +1,6 @@
 use crate::*;
 
-#[apply(schema!)]
+#[apply(schema_ser!)]
 pub struct Policy {}
 
 #[apply(schema!)]
@@ -34,12 +34,37 @@ pub struct HTTPSessionState {
 pub struct MCPSessionState {
 	#[serde(rename = "s")]
 	pub sessions: Vec<MCPSession>,
+	/// When an upstream has no session, we need to add our own randomness to avoid session collisions.
+	/// This is mostly for logging/etc purposes
+	#[serde(default, rename = "r", skip_serializing_if = "Option::is_none")]
+	random_identifier: Option<String>,
+}
+
+fn session_id() -> String {
+	uuid::Uuid::new_v4().to_string()
+}
+
+impl MCPSessionState {
+	pub fn new(sessions: Vec<MCPSession>) -> Self {
+		let random_identifier = if sessions.iter().any(|s| s.session.is_none()) {
+			Some(session_id())
+		} else {
+			None
+		};
+		Self {
+			sessions,
+			random_identifier,
+		}
+	}
 }
 
 #[apply(schema!)]
+#[derive(Eq, PartialEq)]
 pub struct MCPSession {
-	#[serde(rename = "s")]
-	pub session: String,
+	#[serde(default, rename = "t", skip_serializing_if = "Option::is_none")]
+	pub target_name: Option<String>,
+	#[serde(default, rename = "s", skip_serializing_if = "Option::is_none")]
+	pub session: Option<String>,
 	#[serde(default, rename = "b", skip_serializing_if = "Option::is_none")]
 	pub backend: Option<SocketAddr>,
 }
@@ -162,6 +187,9 @@ mod aes {
 		pub fn decrypt(&self, encoded: &str) -> Result<Vec<u8>, Error> {
 			// Base64 decode
 			let data = STANDARD.decode(encoded).map_err(|_| Error::InvalidFormat)?;
+			if data.len() < 12 {
+				return Err(Error::InvalidFormat);
+			}
 
 			// Extract nonce and ciphertext
 			let (nonce_bytes, ciphertext) = data.split_at(12);
@@ -186,5 +214,19 @@ mod aes {
 		DecryptionFailed,
 		#[error("invalid format")]
 		InvalidFormat,
+	}
+
+	#[cfg(test)]
+	mod tests {
+		use base64::Engine;
+
+		use super::{Encoder, Error};
+
+		#[test]
+		fn short_ciphertexts_fail_cleanly() {
+			let encoder = Encoder::new(&[0u8; 32]).expect("encoder");
+			let short = base64::engine::general_purpose::STANDARD.encode([0u8; 11]);
+			assert!(matches!(encoder.decrypt(&short), Err(Error::InvalidFormat)));
+		}
 	}
 }

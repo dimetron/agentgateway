@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use arc_swap::ArcSwapOption;
+use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::{ResolveError, TokioResolver};
+use hickory_resolver::net::NetError;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 
 use crate::*;
 
@@ -86,10 +87,11 @@ impl CacheEntry {
 					(expiry, false)
 				},
 				Err(e) => {
-					let cb = CircularBuffer::new(Default::default());
-					// We got a result, its just empty
-					self.entries.store(Some(Arc::new(cb)));
-					// if we got an error, retain the last state
+					if self.entries.load().is_none() {
+						let cb = CircularBuffer::new(Default::default());
+						self.entries.store(Some(Arc::new(cb)));
+					}
+					// If we got an error, retain the last successful state when one exists.
 					debug!("resolution failed: {e:?}");
 
 					backoff = std::cmp::min(backoff * 2, ERROR_BACKOFF_MAX);
@@ -131,7 +133,7 @@ enum Resolver {
 }
 
 impl Resolver {
-	async fn resolve(&self, host: &str) -> Result<(Box<[IpAddr]>, Instant), ResolveError> {
+	async fn resolve(&self, host: &str) -> Result<(Box<[IpAddr]>, Instant), NetError> {
 		match self {
 			Resolver::Real(resolver) => resolver.lookup_ip(host).await.map(|lookup| {
 				let expiry = lookup.valid_until();
@@ -145,11 +147,13 @@ impl Resolver {
 }
 
 impl CachedResolver {
-	pub fn new(config: ResolverConfig, opts: ResolverOpts) -> Self {
+	pub fn new(config: ResolverConfig, mut opts: ResolverOpts) -> Self {
+		// always consult the system's /etc/hosts file when resolving hostnames
+		opts.use_hosts_file = hickory_resolver::config::ResolveHosts::Always;
 		let mut rb =
-			hickory_resolver::Resolver::builder_with_config(config, TokioConnectionProvider::default());
+			hickory_resolver::Resolver::builder_with_config(config, TokioRuntimeProvider::default());
 		*rb.options_mut() = opts;
-		let dns_resolver = rb.build();
+		let dns_resolver = rb.build().expect("dns resolver config should be valid");
 		CachedResolver {
 			entries: Arc::new(Mutex::new(HashMap::new())),
 			dns: Arc::new(Resolver::Real(dns_resolver)),

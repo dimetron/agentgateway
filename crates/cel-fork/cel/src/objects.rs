@@ -6,12 +6,15 @@ use std::ops;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cel::types::dynamic::{DynamicType, DynamicValue};
 use serde::de::Error as DeError;
 use serde::ser::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::common::ast::{EntryExpr, Expr, OptimizedExpr, operators};
+use crate::common::ast::{CallExpr, EntryExpr, Expr, OptimizedExpr, operators};
+use crate::common::types;
+use crate::common::types::Type;
 use crate::common::value::CelVal;
 use crate::context::{Context, SingleVarResolver, VariableResolver};
 use crate::functions::FunctionContext;
@@ -58,6 +61,7 @@ pub enum Value<'a> {
 	Bytes(BytesValue<'a>),
 
 	Null,
+	Type(Type<'static>),
 }
 
 impl Serialize for Value<'_> {
@@ -114,31 +118,69 @@ impl Value<'_> {
 			Value::UInt(u) => {
 				usize::try_from(*u).map_err(|_e| ExecutionError::Conversion("usize", self.as_static()))
 			},
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_unsigned();
+				debug_assert!(res.is_err(), "numbers should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("usize", self.as_static())),
 		}
 	}
+
 	pub fn as_signed(&self) -> Result<i64, ExecutionError> {
 		match self {
 			Value::Int(i) => Ok(*i),
 			Value::UInt(u) => {
 				i64::try_from(*u).map_err(|_e| ExecutionError::Conversion("i64", self.as_static()))
 			},
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_signed();
+				debug_assert!(res.is_err(), "numbers should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("i64", self.as_static())),
 		}
 	}
+
 	pub fn as_bool(&self) -> Result<bool, ExecutionError> {
 		match self {
 			Value::Bool(b) => Ok(*b),
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_bool();
+				debug_assert!(res.is_err(), "bools should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("bool", self.as_static())),
 		}
 	}
-	pub fn as_bytes(&self) -> Result<&[u8], ExecutionError> {
+
+	/// as_bytes converts a Value into bytes
+	/// warning: callers are responsible for materializing values due to ownership
+	pub fn as_bytes_pre_materialized(&self) -> Result<&[u8], ExecutionError> {
 		match self {
 			Value::String(b) => Ok(b.as_ref().as_bytes()),
 			Value::Bytes(b) => Ok(b.as_ref()),
 			_ => Err(ExecutionError::Conversion("bytes", self.as_static())),
 		}
 	}
+	/// warning: callers are responsible for materializing values due to ownership
+	pub fn as_bytes_owned(&self) -> Result<Bytes, ExecutionError> {
+		match self {
+			Value::String(s) => Ok(Bytes::copy_from_slice(s.as_ref().as_bytes())),
+			Value::Bytes(BytesValue::Bytes(b)) => Ok(b.clone()),
+			Value::Bytes(b) => Ok(Bytes::copy_from_slice(b.as_ref())),
+			Value::Dynamic(d) => {
+				// No assertion here as there are viable cases for not auto materializing bytes/string
+				d.materialize().as_bytes_owned()
+			},
+			_ => Err(ExecutionError::Conversion("bytes", self.as_static())),
+		}
+	}
+
+	pub fn as_string(&self) -> Result<String, ExecutionError> {
+		self.as_str().map(|s| s.into_owned())
+	}
+
 	// Note: may allocate
 	pub fn as_str(&self) -> Result<Cow<'_, str>, ExecutionError> {
 		match self {
@@ -205,6 +247,7 @@ impl PartialEq for Value<'_> {
 			(Value::Float(a), Value::Int(b)) => *a == (*b as f64),
 			(Value::Float(a), Value::UInt(b)) => *a == (*b as f64),
 			(Value::Object(a), Value::Object(b)) => a.eq(b),
+			(Value::Type(a), Value::Type(b)) => a == b,
 			(_, _) => false,
 		}
 	}
@@ -281,6 +324,7 @@ impl Debug for Value<'_> {
 			Value::Object(obj) => write!(f, "Object<{}>({:?})", obj.type_name(), obj),
 			Value::Dynamic(obj) => write!(f, "Dynamic({:?})", obj),
 			Value::Null => write!(f, "Null"),
+			Value::Type(t) => write!(f, "Type({})", t.name()),
 		}
 	}
 }
@@ -315,6 +359,7 @@ pub enum ValueType {
 	Timestamp,
 	Object,
 	Null,
+	Type,
 }
 
 impl ValueType {
@@ -333,6 +378,7 @@ impl ValueType {
 			ValueType::Duration => "duration",
 			ValueType::Timestamp => "timestamp",
 			ValueType::Null => "null",
+			ValueType::Type => "type",
 		}
 	}
 }
@@ -360,6 +406,7 @@ impl<'a> Value<'a> {
 
 			Value::Timestamp(_) => ValueType::Timestamp,
 			Value::Null => ValueType::Null,
+			Value::Type(_) => ValueType::Type,
 		}
 	}
 
@@ -491,6 +538,7 @@ impl<'a> Value<'a> {
 			Value::Duration(d) => Value::Duration(*d),
 
 			Value::Timestamp(t) => Value::Timestamp(*t),
+			Value::Type(t) => Value::Type(t.clone()),
 			Value::String(s) => match s {
 				StringValue::Borrowed(str_ref) => Value::String(StringValue::Owned(Arc::from(*str_ref))),
 				StringValue::Owned(owned) => Value::String(StringValue::Owned(owned.clone())),
@@ -511,14 +559,13 @@ impl<'a> Value<'a> {
 	) -> ResolveResult<'a> {
 		Self::resolve(expr, ctx, resolver).map(|v| v.always_materialize_owned())
 	}
-	#[inline(always)]
+
 	pub fn resolve<'vars: 'a, 'rf>(
 		expr: &'vars Expression,
 		ctx: &'vars Context,
 		resolver: &'rf dyn VariableResolver<'vars>,
 	) -> ResolveResult<'a> {
 		let resolve = |e| Value::resolve(e, ctx, resolver);
-		let resolve_materialized = |e| Value::resolve_materialized(e, ctx, resolver);
 		match &expr.expr {
 			Expr::Optimized {
 				optimized,
@@ -537,326 +584,13 @@ impl<'a> Value<'a> {
 			},
 			Expr::Literal(val) => Ok(val.clone().into()),
 			Expr::Inline(val) => Ok(val.clone()),
-			Expr::Call(call) => {
-				if call.args.len() == 3 && call.func_name == operators::CONDITIONAL {
-					let cond = resolve(&call.args[0])?;
-					return if cond.to_bool()? {
-						resolve(&call.args[1])
-					} else {
-						resolve(&call.args[2])
-					};
-				}
-				if call.args.len() == 2 {
-					match call.func_name.as_str() {
-						operators::ADD => return resolve(&call.args[0])? + resolve(&call.args[1])?,
-						operators::SUBSTRACT => {
-							return resolve(&call.args[0])? - resolve(&call.args[1])?;
-						},
-						operators::DIVIDE => {
-							return resolve(&call.args[0])? / resolve(&call.args[1])?;
-						},
-						operators::MULTIPLY => {
-							return resolve(&call.args[0])? * resolve(&call.args[1])?;
-						},
-						operators::MODULO => {
-							return resolve(&call.args[0])? % resolve(&call.args[1])?;
-						},
-						operators::EQUALS => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(left.eq(&right)).into();
-						},
-						operators::NOT_EQUALS => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(left.ne(&right)).into();
-						},
-						operators::LESS => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(
-								left
-									.partial_cmp(&right)
-									.ok_or(ExecutionError::ValuesNotComparable(
-										left.as_static(),
-										right.as_static(),
-									))? == Ordering::Less,
-							)
-							.into();
-						},
-						operators::LESS_EQUALS => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(
-								left
-									.partial_cmp(&right)
-									.ok_or(ExecutionError::ValuesNotComparable(
-										left.as_static(),
-										right.as_static(),
-									))? != Ordering::Greater,
-							)
-							.into();
-						},
-						operators::GREATER => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(
-								left
-									.partial_cmp(&right)
-									.ok_or(ExecutionError::ValuesNotComparable(
-										left.as_static(),
-										right.as_static(),
-									))? == Ordering::Greater,
-							)
-							.into();
-						},
-						operators::GREATER_EQUALS => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve_materialized(&call.args[1])?;
-							return Value::Bool(
-								left
-									.partial_cmp(&right)
-									.ok_or(ExecutionError::ValuesNotComparable(
-										left.as_static(),
-										right.as_static(),
-									))? != Ordering::Less,
-							)
-							.into();
-						},
-						operators::IN => {
-							let left = resolve_materialized(&call.args[0])?;
-							let right = resolve(&call.args[1])?;
-							if let Value::Dynamic(d) = &right
-								&& let Value::String(k) = left
-							{
-								// TODO: in the future, if required, we could allow lookup of int for a list
-								return Value::Bool(d.field(k.as_ref()).is_some()).into();
-							}
-							match (left, right.always_materialize_owned()) {
-								(Value::String(l), Value::String(r)) => {
-									return Value::Bool(r.as_ref().contains(l.as_ref())).into();
-								},
-								(any, Value::List(v)) => {
-									return Value::Bool(v.as_ref().contains(&any)).into();
-								},
-								(any, Value::Map(m)) => match KeyRef::try_from(&any) {
-									Ok(key) => return Value::Bool(m.contains_key(&key)).into(),
-									Err(_) => return Value::Bool(false).into(),
-								},
-								(left, right) => Err(ExecutionError::ValuesNotComparable(
-									left.as_static(),
-									right.as_static(),
-								))?,
-							}
-						},
-						operators::LOGICAL_OR => {
-							let left = try_bool(resolve(&call.args[0]));
-							return if Ok(true) == left {
-								Ok(true.into())
-							} else {
-								let right = if let Value::Bool(b) = resolve(&call.args[1])? {
-									Some(b)
-								} else {
-									None
-								};
-								match (&left, right) {
-									(Ok(false), Some(right)) => Ok(right.into()),
-									(Err(_), Some(true)) => Ok(true.into()),
-									(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
-								}
-							};
-						},
-						operators::LOGICAL_AND => {
-							let left = try_bool(resolve(&call.args[0]));
-							return if Ok(false) == left {
-								Ok(false.into())
-							} else {
-								let right = if let Value::Bool(b) = resolve(&call.args[1])? {
-									Some(b)
-								} else {
-									None
-								};
-								match (&left, right) {
-									(Ok(true), Some(right)) => Ok(right.into()),
-									(Err(_), Some(false)) => Ok(false.into()),
-									(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
-								}
-							};
-						},
-						operators::INDEX | operators::OPT_INDEX => {
-							let mut value: Value<'a> = resolve(&call.args[0])?;
-							let idx = resolve(&call.args[1])?;
-							let mut is_optional = call.func_name == operators::OPT_INDEX;
-
-							if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
-								is_optional = true;
-								value = match opt_val.value() {
-									Some(inner) => inner.clone(),
-									None => {
-										return Ok(OpaqueValue::new(OptionalValue::none()).into());
-									},
-								};
-							}
-							if let Value::Dynamic(d) = &value
-								&& let Value::String(k) = idx
-							{
-								// TODO: in the future, if required, we could allow lookup of int for a list
-								let result = d
-									.field(k.as_ref())
-									.ok_or_else(|| ExecutionError::NoSuchKey(Arc::from(k.as_ref())));
-								return Self::maybe_optional(is_optional, result);
-							};
-
-							// Since we already established we cannot use dynamic, materialize
-							let result = match (value.always_materialize_owned(), idx) {
-								(Value::List(items), Value::Int(idx)) => {
-									if idx >= 0 && (idx as usize) < items.len() {
-										let x: Value<'a> = items.as_ref()[idx as usize].clone();
-										x.into()
-									} else {
-										Err(ExecutionError::IndexOutOfBounds(idx.into()))
-									}
-								},
-								(Value::List(items), Value::UInt(idx)) => {
-									if (idx as usize) < items.len() {
-										items.as_ref()[idx as usize].clone().into()
-									} else {
-										Err(ExecutionError::IndexOutOfBounds(idx.into()))
-									}
-								},
-								(Value::String(_), Value::Int(idx)) => {
-									Err(ExecutionError::NoSuchKey(idx.to_string().into()))
-								},
-								(Value::Map(map), Value::String(property)) => map
-									.get(&KeyRef::String(StringValue::Borrowed(&property)))
-									.cloned()
-									.ok_or_else(|| ExecutionError::NoSuchKey(property.as_owned())),
-								(Value::Map(map), Value::Bool(property)) => map
-									.get(&KeyRef::Bool(property))
-									.cloned()
-									.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
-								(Value::Map(map), Value::Int(property)) => map
-									.get(&KeyRef::Int(property))
-									.cloned()
-									.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
-								(Value::Map(map), Value::UInt(property)) => map
-									.get(&KeyRef::Uint(property))
-									.cloned()
-									.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
-								(Value::Map(_), index) => {
-									Err(ExecutionError::UnsupportedMapIndex(index.as_static()))
-								},
-								(Value::List(_), index) => {
-									Err(ExecutionError::UnsupportedListIndex(index.as_static()))
-								},
-								(value, index) => Err(ExecutionError::UnsupportedIndex(
-									value.as_static(),
-									index.as_static(),
-								))?,
-							};
-
-							return Self::maybe_optional(is_optional, result);
-						},
-						operators::OPT_SELECT => {
-							let operand = resolve(&call.args[0])?;
-							let field_literal = resolve(&call.args[1])?;
-							let field = match field_literal {
-								Value::String(s) => s,
-								_ => {
-									return Err(ExecutionError::function_error(
-										"_?._",
-										"field must be string",
-									));
-								},
-							};
-							if let Ok(opt_val) = <&OptionalValue>::try_from(&operand) {
-								return match opt_val.value() {
-									Some(inner) => {
-										Ok(OpaqueValue::new(OptionalValue::of(inner.clone().member(&field)?)).into())
-									},
-									None => Ok(operand),
-								};
-							}
-							return Ok(
-								OpaqueValue::new(OptionalValue::of(operand.member(&field)?.as_static())).into(),
-							);
-						},
-						_ => (),
-					}
-				}
-				if call.args.len() == 1 {
-					match call.func_name.as_str() {
-						operators::LOGICAL_NOT => {
-							let expr = resolve(&call.args[0])?;
-							return Ok(Value::Bool(!expr.to_bool()?));
-						},
-						operators::NEGATE => {
-							return match resolve_materialized(&call.args[0])? {
-								Value::Int(i) => Ok(Value::Int(-i)),
-								Value::Float(f) => Ok(Value::Float(-f)),
-								value => Err(ExecutionError::UnsupportedUnaryOperator(
-									"minus",
-									value.as_static(),
-								)),
-							};
-						},
-						operators::NOT_STRICTLY_FALSE => {
-							return match resolve(&call.args[0])? {
-								Value::Bool(b) => Ok(Value::Bool(b)),
-								_ => Ok(Value::Bool(true)),
-							};
-						},
-						_ => (),
-					}
-				}
-
-				match &call.target {
-					None => {
-						let Some(func) = ctx.get_function(call.func_name.as_str()) else {
-							return Err(ExecutionError::UndeclaredReference(
-								call.func_name.clone().into(),
-							));
-						};
-						let mut ctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
-						(func)(&mut ctx)
-					},
-					Some(target) => {
-						let qualified_func = if let Expr::Ident(prefix) = &target.expr {
-							ctx.get_qualified_function(prefix, call.func_name.as_str())
-						} else {
-							None
-						};
-						if let Some(func) = qualified_func {
-							let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
-							return (func)(&mut fctx);
-						}
-						let tgt = Some(resolve(target)?);
-
-						// Try call_function first for opaque objects
-						if let Some(Value::Object(ob)) = &tgt {
-							let ob = ob.clone();
-							let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
-							if let Some(result) = ob.call_function(call.func_name.as_str(), &mut fctx) {
-								return result;
-							}
-						}
-
-						// Fall back to qualified_func or ctx.get_function
-						let Some(func) = qualified_func.or_else(|| ctx.get_function(call.func_name.as_str()))
-						else {
-							return Err(ExecutionError::UndeclaredReference(
-								call.func_name.clone().into(),
-							));
-						};
-						let mut fctx =
-							FunctionContext::new(&call.func_name, tgt.clone(), ctx, &call.args, resolver);
-						(func)(&mut fctx)
-					},
-				}
-			},
+			Expr::Call(call) => Self::resolve_call(call, ctx, resolver),
 			Expr::Ident(name) => {
 				if let Some(v) = resolver.resolve(name) {
 					return Ok(v);
+				}
+				if let Some(t) = standard_type(name) {
+					return Ok(Value::Type(t));
 				}
 				Err(ExecutionError::UndeclaredReference(name.to_string().into()))
 			},
@@ -871,7 +605,7 @@ impl<'a> Value<'a> {
 				}
 				let left: Value<'a> = resolve(left_op)?;
 				if select.test {
-					match &left {
+					match left.always_materialize().as_ref() {
 						Value::Map(map) => {
 							let b = map.contains_key(&KeyRef::String(select.field.as_str().into()));
 							Ok(Value::Bool(b))
@@ -882,92 +616,461 @@ impl<'a> Value<'a> {
 					left.member(&select.field)
 				}
 			},
-			Expr::List(list_expr) => {
-				let list = list_expr
-					.elements
-					.iter()
-					.enumerate()
-					.map(|(idx, element)| {
-						resolve(element).map(|value| {
-							if list_expr.optional_indices.contains(&idx) {
-								if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
-									opt_val.value().cloned().map(|v| v.as_static())
-								} else {
-									Some(value)
-								}
-							} else {
-								Some(value)
-							}
-						})
-					})
-					.filter_map(|r| r.transpose())
-					.collect::<Result<Arc<_>, _>>()?;
-				Value::List(ListValue::PartiallyOwned(list)).into()
-			},
-			Expr::Map(map_expr) => {
-				let mut map = hashbrown::HashMap::with_capacity(map_expr.entries.len());
-				for entry in map_expr.entries.iter() {
-					let (k, v, is_optional) = match &entry.expr {
-						EntryExpr::StructField(_) => panic!("WAT?"),
-						EntryExpr::MapEntry(e) => (&e.key, &e.value, e.optional),
-					};
-					let key = resolve(k)?
-						.as_static()
-						.try_into()
-						.map_err(ExecutionError::UnsupportedKeyType)?;
-					let value = resolve(v)?.as_static();
-
-					if is_optional {
-						if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
-							if let Some(inner) = opt_val.value() {
-								map.insert(key, inner.clone());
-							}
-						} else {
-							map.insert(key, value);
-						}
-					} else {
-						map.insert(key, value);
-					}
-				}
-				Ok(Value::Map(MapValue::Owned(Arc::from(map))))
-			},
+			Expr::List(list_expr) => Self::resolve_list(list_expr, ctx, resolver),
+			Expr::Map(map_expr) => Self::resolve_map(map_expr, ctx, resolver),
 			Expr::Comprehension(comprehension) => {
-				let accu_init = resolve(&comprehension.accu_init)?;
-				let iter = resolve(&comprehension.iter_range)?;
-				let mut accu = accu_init;
-				match iter {
-					Value::List(items) => {
-						for item in items.as_ref() {
-							let comp_resolver =
-								SingleVarResolver::new(resolver, &comprehension.accu_var, accu.clone());
-							if !Value::resolve(&comprehension.loop_cond, ctx, &comp_resolver)?.to_bool()? {
-								break;
-							}
-							let with_iter =
-								SingleVarResolver::new(&comp_resolver, &comprehension.iter_var, item.clone());
-							accu = Value::resolve(&comprehension.loop_step, ctx, &with_iter)?;
-						}
-					},
-					Value::Map(map) => {
-						for key in map.iter_keys() {
-							let comp_resolver =
-								SingleVarResolver::new(resolver, &comprehension.accu_var, accu.clone());
-							if !Value::resolve(&comprehension.loop_cond, ctx, &comp_resolver)?.to_bool()? {
-								break;
-							}
-							let kv = Value::from(key);
-							let with_iter = SingleVarResolver::new(&comp_resolver, &comprehension.iter_var, kv);
-							accu = Value::resolve(&comprehension.loop_step, ctx, &with_iter)?;
-						}
-					},
-					_ => return Err(crate::ExecutionError::NoSuchOverload),
-				}
-				let comp_resolver = SingleVarResolver::new(resolver, &comprehension.accu_var, accu);
-				Value::resolve(&comprehension.result, ctx, &comp_resolver)
+				Self::resolve_comprehension(comprehension, ctx, resolver)
 			},
-			Expr::Struct(_) => todo!("Support structs!"),
+			Expr::Struct(_) => Err(ExecutionError::UnsupportedStruct),
 			Expr::Unspecified => panic!("Can't evaluate Unspecified Expr"),
 		}
+	}
+
+	#[inline(never)]
+	fn resolve_call<'vars: 'a, 'rf>(
+		call: &'vars CallExpr,
+		ctx: &'vars Context,
+		resolver: &'rf dyn VariableResolver<'vars>,
+	) -> ResolveResult<'a> {
+		let resolve = |e| Value::resolve(e, ctx, resolver);
+		let resolve_materialized = |e| Value::resolve_materialized(e, ctx, resolver);
+		if call.args.len() == 3 && call.func_name == operators::CONDITIONAL {
+			let cond = resolve(&call.args[0])?;
+			return if cond.to_bool()? {
+				resolve(&call.args[1])
+			} else {
+				resolve(&call.args[2])
+			};
+		}
+		if call.args.len() == 2 {
+			match call.func_name.as_str() {
+				op @ (operators::ADD
+				| operators::SUBSTRACT
+				| operators::DIVIDE
+				| operators::MULTIPLY
+				| operators::MODULO) => {
+					// Parser builds `a op b op c op ...` as a left-recursive tree; walk the
+					// left spine iteratively so deep chains don't recurse (and overflow).
+					let mut rhs_rev = vec![&call.args[1]];
+					let mut leftmost = &call.args[0];
+					while let Expr::Call(inner) = &leftmost.expr
+						&& inner.args.len() == 2
+						&& inner.func_name == op
+					{
+						rhs_rev.push(&inner.args[1]);
+						leftmost = &inner.args[0];
+					}
+					let mut acc = resolve(leftmost)?;
+					for rhs in rhs_rev.into_iter().rev() {
+						let r = resolve(rhs)?;
+						acc = match op {
+							operators::ADD => (acc + r)?,
+							operators::SUBSTRACT => (acc - r)?,
+							operators::DIVIDE => (acc / r)?,
+							operators::MULTIPLY => (acc * r)?,
+							operators::MODULO => (acc % r)?,
+							_ => unreachable!(),
+						};
+					}
+					return Ok(acc);
+				},
+				operators::EQUALS => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(left.eq(&right)).into();
+				},
+				operators::NOT_EQUALS => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(left.ne(&right)).into();
+				},
+				operators::LESS => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(
+						left
+							.partial_cmp(&right)
+							.ok_or(ExecutionError::ValuesNotComparable(
+								left.as_static(),
+								right.as_static(),
+							))? == Ordering::Less,
+					)
+					.into();
+				},
+				operators::LESS_EQUALS => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(
+						left
+							.partial_cmp(&right)
+							.ok_or(ExecutionError::ValuesNotComparable(
+								left.as_static(),
+								right.as_static(),
+							))? != Ordering::Greater,
+					)
+					.into();
+				},
+				operators::GREATER => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(
+						left
+							.partial_cmp(&right)
+							.ok_or(ExecutionError::ValuesNotComparable(
+								left.as_static(),
+								right.as_static(),
+							))? == Ordering::Greater,
+					)
+					.into();
+				},
+				operators::GREATER_EQUALS => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve_materialized(&call.args[1])?;
+					return Value::Bool(
+						left
+							.partial_cmp(&right)
+							.ok_or(ExecutionError::ValuesNotComparable(
+								left.as_static(),
+								right.as_static(),
+							))? != Ordering::Less,
+					)
+					.into();
+				},
+				operators::IN => {
+					let left = resolve_materialized(&call.args[0])?;
+					let right = resolve(&call.args[1])?;
+					if let Value::Dynamic(d) = &right
+						&& let Value::String(k) = &left
+						&& d.field(k.as_ref()).is_some()
+					{
+						// Optimistically attempt to lookup without materializing.
+						// This will fail for lists, string vs string, etc and fallback to slow path.
+						return Value::Bool(true).into();
+					}
+					match (left, right.always_materialize_owned()) {
+						(Value::String(l), Value::String(r)) => {
+							return Value::Bool(r.as_ref().contains(l.as_ref())).into();
+						},
+						(any, Value::List(v)) => {
+							return Value::Bool(v.as_ref().contains(&any)).into();
+						},
+						(any, Value::Map(m)) => match KeyRef::try_from(&any) {
+							Ok(key) => return Value::Bool(m.contains_key(&key)).into(),
+							Err(_) => return Value::Bool(false).into(),
+						},
+						(left, right) => Err(ExecutionError::ValuesNotComparable(
+							left.as_static(),
+							right.as_static(),
+						))?,
+					}
+				},
+				operators::LOGICAL_OR => {
+					let left = try_bool(resolve(&call.args[0]));
+					return if Ok(true) == left {
+						Ok(true.into())
+					} else {
+						let right = if let Value::Bool(b) = resolve_materialized(&call.args[1])? {
+							Some(b)
+						} else {
+							None
+						};
+						match (&left, right) {
+							(Ok(false), Some(right)) => Ok(right.into()),
+							(Err(_), Some(true)) => Ok(true.into()),
+							(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
+						}
+					};
+				},
+				operators::LOGICAL_AND => {
+					let left = try_bool(resolve(&call.args[0]));
+					return if Ok(false) == left {
+						Ok(false.into())
+					} else {
+						let right = if let Value::Bool(b) = resolve_materialized(&call.args[1])? {
+							Some(b)
+						} else {
+							None
+						};
+						match (&left, right) {
+							(Ok(true), Some(right)) => Ok(right.into()),
+							(Err(_), Some(false)) => Ok(false.into()),
+							(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
+						}
+					};
+				},
+				operators::INDEX | operators::OPT_INDEX => {
+					let mut value: Value<'a> = resolve(&call.args[0])?;
+					let idx = resolve_materialized(&call.args[1])?;
+					let mut is_optional = call.func_name == operators::OPT_INDEX;
+
+					if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
+						is_optional = true;
+						value = match opt_val.value() {
+							Some(inner) => inner.clone(),
+							None => {
+								return Ok(OpaqueValue::new(OptionalValue::none()).into());
+							},
+						};
+					}
+					if let Value::Dynamic(d) = &value
+						&& let Value::String(k) = idx
+					{
+						// TODO: in the future, if required, we could allow lookup of int for a list
+						let result = d
+							.field(k.as_ref())
+							.ok_or_else(|| ExecutionError::NoSuchKey(Arc::from(k.as_ref())));
+						return Self::maybe_optional(is_optional, result);
+					};
+
+					// Since we already established we cannot use dynamic, materialize
+					let result = match (value.always_materialize_owned(), idx) {
+						(Value::List(items), Value::Int(idx)) => {
+							if idx >= 0 && (idx as usize) < items.len() {
+								let x: Value<'a> = items.as_ref()[idx as usize].clone();
+								x.into()
+							} else {
+								Err(ExecutionError::IndexOutOfBounds(idx.into()))
+							}
+						},
+						(Value::List(items), Value::UInt(idx)) => {
+							if (idx as usize) < items.len() {
+								items.as_ref()[idx as usize].clone().into()
+							} else {
+								Err(ExecutionError::IndexOutOfBounds(idx.into()))
+							}
+						},
+						(Value::String(_), Value::Int(idx)) => {
+							Err(ExecutionError::NoSuchKey(idx.to_string().into()))
+						},
+						(Value::Map(map), Value::String(property)) => map
+							.get(&KeyRef::String(StringValue::Borrowed(&property)))
+							.cloned()
+							.ok_or_else(|| ExecutionError::NoSuchKey(property.as_owned())),
+						(Value::Map(map), Value::Bool(property)) => map
+							.get(&KeyRef::Bool(property))
+							.cloned()
+							.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
+						(Value::Map(map), Value::Int(property)) => map
+							.get(&KeyRef::Int(property))
+							.cloned()
+							.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
+						(Value::Map(map), Value::UInt(property)) => map
+							.get(&KeyRef::Uint(property))
+							.cloned()
+							.ok_or_else(|| ExecutionError::NoSuchKey(property.to_string().into())),
+						(Value::Map(_), index) => Err(ExecutionError::UnsupportedMapIndex(index.as_static())),
+						(Value::List(_), index) => Err(ExecutionError::UnsupportedListIndex(index.as_static())),
+						(value, index) => Err(ExecutionError::UnsupportedIndex(
+							value.as_static(),
+							index.as_static(),
+						))?,
+					};
+
+					return Self::maybe_optional(is_optional, result);
+				},
+				operators::OPT_SELECT => {
+					let operand = resolve(&call.args[0])?;
+					let field_literal = resolve_materialized(&call.args[1])?;
+					let field = match field_literal {
+						Value::String(s) => s,
+						_ => {
+							return Err(ExecutionError::function_error(
+								"_?._",
+								"field must be string",
+							));
+						},
+					};
+					if let Ok(opt_val) = <&OptionalValue>::try_from(&operand) {
+						return match opt_val.value() {
+							Some(inner) => {
+								Ok(OpaqueValue::new(OptionalValue::of(inner.clone().member(&field)?)).into())
+							},
+							None => Ok(operand),
+						};
+					}
+					return Ok(
+						OpaqueValue::new(OptionalValue::of(operand.member(&field)?.as_static())).into(),
+					);
+				},
+				_ => (),
+			}
+		}
+		if call.args.len() == 1 {
+			match call.func_name.as_str() {
+				operators::LOGICAL_NOT => {
+					let expr = resolve(&call.args[0])?;
+					return Ok(Value::Bool(!expr.to_bool()?));
+				},
+				operators::NEGATE => {
+					return match resolve_materialized(&call.args[0])? {
+						Value::Int(i) => Ok(Value::Int(-i)),
+						Value::Float(f) => Ok(Value::Float(-f)),
+						value => Err(ExecutionError::UnsupportedUnaryOperator(
+							"minus",
+							value.as_static(),
+						)),
+					};
+				},
+				operators::NOT_STRICTLY_FALSE => {
+					return match resolve(&call.args[0])? {
+						Value::Bool(b) => Ok(Value::Bool(b)),
+						_ => Ok(Value::Bool(true)),
+					};
+				},
+				_ => (),
+			}
+		}
+
+		match &call.target {
+			None => {
+				let Some(func) = ctx.get_function(call.func_name.as_str()) else {
+					return Err(ExecutionError::UndeclaredReference(
+						call.func_name.clone().into(),
+					));
+				};
+				let mut ctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
+				(func)(&mut ctx)
+			},
+			Some(target) => {
+				let qualified_func = if let Expr::Ident(prefix) = &target.expr {
+					ctx.get_qualified_function(prefix, call.func_name.as_str())
+				} else {
+					None
+				};
+				if let Some(func) = qualified_func {
+					let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
+					return (func)(&mut fctx);
+				}
+				let tgt = Some(resolve(target)?);
+
+				// Try call_function first for opaque and dynamic objects.
+				if let Some(Value::Object(ob)) = &tgt {
+					let ob = ob.clone();
+					let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
+					if let Some(result) = ob.call_function(call.func_name.as_str(), &mut fctx) {
+						return result;
+					}
+				}
+				if let Some(Value::Dynamic(dynamic)) = &tgt {
+					let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
+					if let Some(result) = dynamic.call_function(call.func_name.as_str(), &mut fctx) {
+						return result;
+					}
+				}
+
+				// Fall back to qualified_func or ctx.get_function
+				let Some(func) = qualified_func.or_else(|| ctx.get_function(call.func_name.as_str()))
+				else {
+					return Err(ExecutionError::UndeclaredReference(
+						call.func_name.clone().into(),
+					));
+				};
+				let mut fctx =
+					FunctionContext::new(&call.func_name, tgt.clone(), ctx, &call.args, resolver);
+				(func)(&mut fctx)
+			},
+		}
+	}
+
+	#[inline(never)]
+	fn resolve_list<'vars: 'a, 'rf>(
+		list_expr: &'vars crate::common::ast::ListExpr,
+		ctx: &'vars Context,
+		resolver: &'rf dyn VariableResolver<'vars>,
+	) -> ResolveResult<'a> {
+		let list = list_expr
+			.elements
+			.iter()
+			.enumerate()
+			.map(|(idx, element)| {
+				Value::resolve(element, ctx, resolver).map(|value| {
+					if list_expr.optional_indices.contains(&idx) {
+						if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
+							opt_val.value().cloned().map(|v| v.as_static())
+						} else {
+							Some(value)
+						}
+					} else {
+						Some(value)
+					}
+				})
+			})
+			.filter_map(|r| r.transpose())
+			.collect::<Result<Arc<_>, _>>()?;
+		Value::List(ListValue::PartiallyOwned(list)).into()
+	}
+
+	#[inline(never)]
+	fn resolve_map<'vars: 'a, 'rf>(
+		map_expr: &'vars crate::common::ast::MapExpr,
+		ctx: &'vars Context,
+		resolver: &'rf dyn VariableResolver<'vars>,
+	) -> ResolveResult<'a> {
+		let mut map = hashbrown::HashMap::with_capacity(map_expr.entries.len());
+		for entry in map_expr.entries.iter() {
+			let (k, v, is_optional) = match &entry.expr {
+				EntryExpr::StructField(_) => panic!("WAT?"),
+				EntryExpr::MapEntry(e) => (&e.key, &e.value, e.optional),
+			};
+			let key = Value::resolve(k, ctx, resolver)?
+				.as_static()
+				.try_into()
+				.map_err(ExecutionError::UnsupportedKeyType)?;
+			let value = Value::resolve(v, ctx, resolver)?.as_static();
+
+			if is_optional {
+				if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
+					if let Some(inner) = opt_val.value() {
+						map.insert(key, inner.clone());
+					}
+				} else {
+					map.insert(key, value);
+				}
+			} else {
+				map.insert(key, value);
+			}
+		}
+		Ok(Value::Map(MapValue::Owned(Arc::from(map))))
+	}
+
+	#[inline(never)]
+	fn resolve_comprehension<'vars: 'a, 'rf>(
+		comprehension: &'vars crate::common::ast::ComprehensionExpr,
+		ctx: &'vars Context,
+		resolver: &'rf dyn VariableResolver<'vars>,
+	) -> ResolveResult<'a> {
+		let accu_init = Value::resolve(&comprehension.accu_init, ctx, resolver)?;
+		let iter = Value::resolve_materialized(&comprehension.iter_range, ctx, resolver)?;
+		let mut accu = accu_init;
+		match iter {
+			Value::List(items) => {
+				for item in items.as_ref() {
+					let comp_resolver =
+						SingleVarResolver::new(resolver, &comprehension.accu_var, accu.clone());
+					if !Value::resolve(&comprehension.loop_cond, ctx, &comp_resolver)?.to_bool()? {
+						break;
+					}
+					let with_iter =
+						SingleVarResolver::new(&comp_resolver, &comprehension.iter_var, item.clone());
+					accu = Value::resolve(&comprehension.loop_step, ctx, &with_iter)?;
+				}
+			},
+			Value::Map(map) => {
+				for key in map.iter_keys() {
+					let comp_resolver =
+						SingleVarResolver::new(resolver, &comprehension.accu_var, accu.clone());
+					if !Value::resolve(&comprehension.loop_cond, ctx, &comp_resolver)?.to_bool()? {
+						break;
+					}
+					let kv = Value::from(key);
+					let with_iter = SingleVarResolver::new(&comp_resolver, &comprehension.iter_var, kv);
+					accu = Value::resolve(&comprehension.loop_step, ctx, &with_iter)?;
+				}
+			},
+			_ => return Err(crate::ExecutionError::NoSuchOverload),
+		}
+		let comp_resolver = SingleVarResolver::new(resolver, &comprehension.accu_var, accu);
+		Value::resolve(&comprehension.result, ctx, &comp_resolver)
 	}
 
 	fn maybe_optional(is_optional: bool, result: Result<Value, ExecutionError>) -> ResolveResult {
@@ -1007,6 +1110,44 @@ impl<'a> Value<'a> {
 			Value::Bool(v) => Ok(*v),
 			_ => Err(ExecutionError::NoSuchOverload),
 		}
+	}
+}
+
+pub fn standard_type(name: &str) -> Option<Type<'static>> {
+	match name {
+		"bool" => Some(types::BOOL_TYPE),
+		"bytes" => Some(types::BYTES_TYPE),
+		"double" | "float" => Some(types::DOUBLE_TYPE),
+		"duration" | "google.protobuf.Duration" => Some(types::DURATION_TYPE),
+		"dyn" => Some(types::DYN_TYPE),
+		"int" => Some(types::INT_TYPE),
+		"list" => Some(types::LIST_TYPE),
+		"map" => Some(types::MAP_TYPE),
+		"null_type" => Some(types::NULL_TYPE),
+		"string" => Some(types::STRING_TYPE),
+		"timestamp" | "google.protobuf.Timestamp" => Some(types::TIMESTAMP_TYPE),
+		"type" => Some(types::TYPE_TYPE),
+		"uint" => Some(types::UINT_TYPE),
+		_ => None,
+	}
+}
+
+pub fn type_of_value(value: &Value<'_>) -> Type<'static> {
+	match value.always_materialize().as_ref() {
+		Value::List(_) => types::LIST_TYPE,
+		Value::Map(_) => types::MAP_TYPE,
+		Value::Int(_) => types::INT_TYPE,
+		Value::UInt(_) => types::UINT_TYPE,
+		Value::Float(_) => types::DOUBLE_TYPE,
+		Value::String(_) => types::STRING_TYPE,
+		Value::Bytes(_) => types::BYTES_TYPE,
+		Value::Bool(_) => types::BOOL_TYPE,
+		Value::Object(obj) => Type::new_opaque_type(obj.type_name()),
+		Value::Dynamic(d) => type_of_value(&d.materialize()),
+		Value::Duration(_) => types::DURATION_TYPE,
+		Value::Timestamp(_) => types::TIMESTAMP_TYPE,
+		Value::Null => types::NULL_TYPE,
+		Value::Type(_) => types::TYPE_TYPE,
 	}
 }
 
@@ -1548,6 +1689,72 @@ mod tests {
 		let result = p.execute_with(&ctx, &vars);
 
 		assert!(result.is_err(), "Should error on missing map key");
+	}
+
+	mod dynamic {
+		use std::sync::Arc;
+
+		use crate::context::MapResolver;
+		use crate::objects::StringValue;
+		use crate::types::dynamic::{DynamicType, DynamicValue};
+		use crate::{Context, ExecutionError, FunctionContext, Program, Value};
+
+		#[derive(Debug)]
+		struct MyDynamic {
+			field: &'static str,
+		}
+
+		impl DynamicType for MyDynamic {
+			fn materialize(&self) -> Value<'_> {
+				let mut map = vector_map::VecMap::with_capacity(1);
+				map.insert(
+					crate::objects::KeyRef::from("field"),
+					Value::from(self.field),
+				);
+				Value::Map(crate::objects::MapValue::Borrow(map))
+			}
+
+			fn field(&self, field: &str) -> Option<Value<'_>> {
+				match field {
+					"field" => Some(Value::from(self.field)),
+					_ => None,
+				}
+			}
+
+			fn call_function<'a, 'rf>(
+				&self,
+				name: &str,
+				ftx: &mut FunctionContext<'a, 'rf>,
+			) -> Option<crate::ResolveResult<'a>>
+			where
+				Self: 'a,
+			{
+				match name {
+					"next" => Some(if ftx.args.is_empty() {
+						Ok(Value::Dynamic(DynamicValue::new_owned(MyDynamic {
+							field: "next",
+						})))
+					} else {
+						Err(ExecutionError::invalid_argument_count(0, ftx.args.len()))
+					}),
+					_ => None,
+				}
+			}
+		}
+
+		#[test]
+		fn test_dynamic_fn() {
+			let value = MyDynamic { field: "value" };
+
+			let mut vars = MapResolver::new();
+			vars.add_variable_from_value("mine", Value::Dynamic(DynamicValue::new(&value)));
+			let ctx = Context::default();
+			let prog = Program::compile("mine.next().field").unwrap();
+			assert_eq!(
+				Ok(Value::String(StringValue::Owned(Arc::from("next")))),
+				prog.execute_with(&ctx, &vars)
+			);
+		}
 	}
 
 	mod opaque {

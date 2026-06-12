@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/setup"
+	"github.com/agentgateway/agentgateway/controller/pkg/setup"
 	"github.com/agentgateway/agentgateway/controller/pkg/version"
 )
 
@@ -20,7 +20,7 @@ func main() {
 				fmt.Println(version.String())
 				return nil
 			}
-			s, err := setup.New()
+			s, err := setup.New(setup.Options{})
 			if err != nil {
 				return fmt.Errorf("error setting up agentgateway: %w", err)
 			}

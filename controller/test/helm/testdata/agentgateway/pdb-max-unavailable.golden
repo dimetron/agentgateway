@@ -10,7 +10,7 @@ metadata:
     agentgateway: agentgateway
     app.kubernetes.io/name: agentgateway
     app.kubernetes.io/instance: test-release
-    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/version: "0.0.0-dev"
     app.kubernetes.io/managed-by: Helm
 spec:
   selector:
@@ -31,7 +31,7 @@ metadata:
     agentgateway: agentgateway
     app.kubernetes.io/name: agentgateway
     app.kubernetes.io/instance: test-release
-    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/version: "0.0.0-dev"
     app.kubernetes.io/managed-by: Helm
 ---
 # Source: agentgateway/templates/role.yaml
@@ -164,6 +164,7 @@ rules:
   - gateways
   - grpcroutes
   - httproutes
+  - listenersets
   - referencegrants
   - tcproutes
   - tlsroutes
@@ -179,6 +180,7 @@ rules:
   - gateways/status
   - grpcroutes/status
   - httproutes/status
+  - listenersets/status
   - tcproutes/status
   - tlsroutes/status
   verbs:
@@ -195,21 +197,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - gateway.networking.x-k8s.io
-  resources:
-  - xlistenersets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - gateway.networking.x-k8s.io
-  resources:
-  - xlistenersets/status
-  verbs:
-  - patch
-  - update
 - apiGroups:
   - networking.istio.io
   resources:
@@ -266,7 +253,7 @@ metadata:
     agentgateway: agentgateway
     app.kubernetes.io/name: agentgateway
     app.kubernetes.io/instance: test-release
-    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/version: "0.0.0-dev"
     app.kubernetes.io/managed-by: Helm
 spec:
   type: ClusterIP
@@ -299,7 +286,7 @@ metadata:
     agentgateway: agentgateway
     app.kubernetes.io/name: agentgateway
     app.kubernetes.io/instance: test-release
-    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/version: "0.0.0-dev"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -322,7 +309,14 @@ spec:
       serviceAccountName: test-release-agentgateway
       containers:
         - name: controller
-          image: "cr.agentgateway.dev/controller:v0.0.1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+              - ALL
+          image: "cr.agentgateway.dev/controller:v0.0.0-dev"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9978
@@ -372,6 +366,8 @@ spec:
               value: "9978"
             - name: AGW_DISCOVERY_NAMESPACE_SELECTORS
               value: "[]"
+            - name: AGW_XDS_MODE
+              value: "tls"
             - name: AGW_GATEWAY_CLASS_PARAMETERS_REFS
               value: "{}"
             - name: POD_NAMESPACE
@@ -379,4 +375,6 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
           resources:
-            {}
+            requests:
+              cpu: 100m
+              memory: 128Mi

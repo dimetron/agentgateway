@@ -2,66 +2,83 @@ name: Branch
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - "main"
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - "main"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  # GitHub concurrency keeps at most one running and one pending run per group.
+  # Use ref_name for PRs so new commits cancel older PR runs on the same PR,
+  # but key pushes by SHA so postsubmit runs do not cancel each other.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref_name) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   CI: true
-  RUST_VERSION: "1.93.1"
-  GO_VERSION: "1.25.7"
+  RUST_VERSION: "1.96.0"
+  GO_VERSION: "1.26.4"
 
 jobs:
   #### Proxy jobs ####
-  test:
+  proxy-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+        - os: blacksmith-4vcpu-ubuntu-2404
+          name: "Proxy Test"
+        - os: windows-2025
+          name: "Proxy Test (Windows)"
+        - os: macos-15
+          name: "Proxy Test (Mac)"
     runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
         toolchain: "${{ env.RUST_VERSION }}"
-    - uses: Swatinem/rust-cache@v2
-      # Github cache is too tiny to handle the full matrix :-(
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # GHA 10gb cache cannot handle all 3 builds. However, because we put all the heavy linux caches on Blacksmith,
+      # we have space for windows and mac.
+      # If we change up the runners, consider if we have space for all three (note: Blacksmith has 25gb though)
       with:
         # Github cache will restore from 'main' OR the current branch.
         # If we cache PR branches, we may evict the 'main' cache and end up with no cache hits at all.
         # Ideally, we would have main be 'high priority' and not be evicted but I don't think thats possible.
         save-if: ${{ github.ref == 'refs/heads/main' }}
+    - name: Start validation dependencies
+      if: ${{ startsWith(matrix.os, 'blacksmith-') }}
+      run: tools/manage-validation-deps.sh start
     - name: Test
       run: make test
-    - name: Validate
-      if: ${{ matrix.os == 'ubuntu-latest' }}
-      run: make validate
+      env:
+        KEYCLOAK_AVAILABLE: ${{ startsWith(matrix.os, 'blacksmith-') && '1' || '' }}
+    - name: Stop validation dependencies
+      if: ${{ always() && startsWith(matrix.os, 'blacksmith-') }}
+      run: tools/manage-validation-deps.sh stop
 
-  lint:
-    runs-on: ubuntu-latest
+  proxy-lint:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        node-version: 23
+        persist-credentials: false
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
         toolchain: "${{ env.RUST_VERSION }}"
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         # Github cache will restore from 'main' OR the current branch.
         # If we cache PR branches, we may evict the 'main' cache and end up with no cache hits at all.
         # Ideally, we would have main be 'high priority' and not be evicted but I don't think thats possible.
         save-if: ${{ github.ref == 'refs/heads/main' }}
-    - name: Add Go bin to PATH
-      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
     - name: Generation
       run: make generate-schema check-clean-repo
     - name: Lint
@@ -69,15 +86,17 @@ jobs:
 
   #### UI jobs ####
   ui-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: ui
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-node@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        node-version: 23
+        persist-credentials: false
+    - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version: 24
     - name: Lint
       run: |
         npm ci
@@ -85,10 +104,12 @@ jobs:
 
   #### Controller jobs ####
   controller-test:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-go@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
         go-version: "${{ env.GO_VERSION }}"
         cache-dependency-path: |
@@ -98,10 +119,12 @@ jobs:
       run: go test -race ./...
 
   controller-lint:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-go@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
         go-version: "${{ env.GO_VERSION }}"
         cache-dependency-path: |
@@ -114,24 +137,33 @@ jobs:
         go mod tidy
         git diff --exit-code go.mod go.sum
     - name: Gen
-      # TODO: the rest of codegen
-      run: make generate-apis check-clean-repo
+      run: |
+        make generate-apis check-clean-repo
+        make -C controller verify
 
   controller-e2e:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - name: Check Runner Info
+      run: |
+        cat /sys/fs/cgroup/cpu.stat || true
+        cat /proc/pressure/cpu || true
+        lscpu || true
+        openssl speed -seconds 1  -bytes 256 sha256 || rtue
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
         toolchain: "${{ env.RUST_VERSION }}"
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         # Github cache will restore from 'main' OR the current branch.
         # If we cache PR branches, we may evict the 'main' cache and end up with no cache hits at all.
         # Ideally, we would have main be 'high priority' and not be evicted but I don't think thats possible.
         save-if: ${{ github.ref == 'refs/heads/main' }}
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
         go-version: "${{ env.GO_VERSION }}"
         cache-dependency-path: |
@@ -144,16 +176,16 @@ jobs:
       run: TEST_MODE=e2e ./controller/test/setup/setup-kind-ci.sh
     - name: E2E
       run: |
-        CGO_ENABLED=0 PERSIST_INSTALL=true go test -tags=e2e -v ./controller/test/e2e/tests -run '^TestAgentgatewayIntegration'
+        CGO_ENABLED=0 PERSIST_INSTALL=true go test -tags=e2e -v ./controller/test/e2e
     - name: Archive bug report directory on failure
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: bug-report
         path: ./controller/_test/bug_report/kind
         retention-days: 2
     - name: Upload cargo timings
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: cargo-timings-e2e
         path: target/cargo-timings/cargo-timing*.html
@@ -164,19 +196,21 @@ jobs:
         cat controller/_test/ci-step-timings.log >> $GITHUB_STEP_SUMMARY
 
   controller-conformance:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
         toolchain: "${{ env.RUST_VERSION }}"
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         # We only read the cache from 'E2E' job, since they should have identical cache.
         save-if: "false"
         shared-key: "controller-e2e" # Pull E2E job's cache
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
       with:
         go-version: "${{ env.GO_VERSION }}"
         cache-dependency-path: |
@@ -190,8 +224,14 @@ jobs:
     - name: Conformance
       run: |
         make -C controller all-conformance
+    - name: Debug Info
+      if: ${{ failure() }}
+      run: |
+        kubectl describe deployment -A
+        kubectl get pods -A
+        kubectl logs -n agentgateway-system -l app.kubernetes.io/name=agentgateway
     - name: Upload cargo timings
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
         name: cargo-timings-conformance
         path: target/cargo-timings/cargo-timing*.html
@@ -201,12 +241,12 @@ jobs:
         cat-yamls () {
           local files=("$@")
           local count=$#
-          
+
           for ((i=0; i<count-1; i++)); do
           cat "${files[i]}"
           echo -e "\n---"
           done
-          
+
           if [ $count -gt 0 ]; then
           cat "${files[count-1]}"
           fi

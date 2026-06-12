@@ -2,8 +2,8 @@
 DOCKER_REGISTRY ?= ghcr.io
 DOCKER_REPO ?= agentgateway
 IMAGE_NAME ?= agentgateway
-VERSION ?= $(shell git describe --tags --always --dirty)
-GIT_REVISION ?= $(shell git rev-parse HEAD)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || jj log -r @ -T 'commit_id.shortest(12)' --no-graph 2>/dev/null || echo unknown)
+GIT_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || jj log -r @ -T 'commit_id' --no-graph 2>/dev/null || echo unknown)
 IMAGE_TAG ?= $(VERSION)
 IMAGE_FULL_NAME ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO)/$(IMAGE_NAME):$(IMAGE_TAG)
 DOCKER_BUILDER ?= docker
@@ -17,6 +17,14 @@ ifeq ($(OS),Windows_NT)
 	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) -f Dockerfile.windows -t $(IMAGE_FULL_NAME) .
 else
 	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) -t $(IMAGE_FULL_NAME) . --progress=plain
+endif
+
+.PHONY: docker-ci
+docker-ci:
+ifeq ($(OS),Windows_NT)
+	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) --build-arg PROFILE=ci -f Dockerfile.windows -t $(IMAGE_FULL_NAME) .
+else
+	$(DOCKER_BUILDER) build $(DOCKER_BUILD_ARGS) --build-arg PROFILE=ci -t $(IMAGE_FULL_NAME) . --progress=plain
 endif
 
 .PHONY: docker-musl
@@ -35,22 +43,25 @@ build-target:
 # lint
 .PHONY: lint
 lint:
-	cargo fmt --check
+	cargo fmt --check -- --config imports_granularity=Module,group_imports=StdExternalCrate,normalize_comments=true
 	cargo clippy --all-targets -- -D warnings
 
 .PHONY: fix-lint
-fix-lint:
+fix-lint: format
 	cargo clippy --fix --allow-staged --allow-dirty --allow-no-vcs
-	cargo fmt
 
 .PHONY: format
 format:
-	cargo fmt
+	cargo fmt -- --config imports_granularity=Module,group_imports=StdExternalCrate,normalize_comments=true
 
 # test
 .PHONY: test
 test:
 	cargo test --all-targets
+
+.PHONY: test-release
+test-release:
+	cargo test --profile quick-release --all-targets
 
 # clean
 .PHONY: clean
@@ -74,7 +85,7 @@ generate-schema:
 # Code generation for xds apis
 .PHONY: generate-apis
 generate-apis:
-	@PATH="./common/tools:$(PATH)" buf generate --path crates/agentgateway/proto/resource.proto
+	@PATH="./common/tools:$(PATH)" buf generate --path crates/protos/proto/resource.proto --path crates/protos/proto/ext_mcp.proto
 
 .PHONY: run-validation-deps
 run-validation-deps:

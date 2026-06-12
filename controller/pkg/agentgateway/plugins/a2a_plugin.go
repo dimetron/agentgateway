@@ -5,28 +5,30 @@ import (
 
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/krt"
-	"istio.io/istio/pkg/ptr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/agentgateway/agentgateway/api"
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/wellknown"
+	"github.com/agentgateway/agentgateway/controller/pkg/agentgateway/utils"
 	"github.com/agentgateway/agentgateway/controller/pkg/utils/kubeutils"
+	"github.com/agentgateway/agentgateway/controller/pkg/wellknown"
 )
 
 const (
-	a2aProtocol = "kgateway.dev/a2a"
+	legacyA2aProtocol = "kgateway.dev/a2a"
+	a2aProtocol       = "agentgateway.dev/a2a"
 )
 
 // NewA2APlugin creates a new A2A policy plugin
 func NewA2APlugin(agw *AgwCollections) AgwPlugin {
-	policyCol := krt.NewManyCollection(agw.Services, func(krtctx krt.HandlerContext, svc *corev1.Service) []AgwPolicy {
-		return translatePoliciesForService(svc, kubeutils.GetClusterDomainName())
-	})
 	return AgwPlugin{
 		ContributesPolicies: map[schema.GroupKind]PolicyPlugin{
 			wellknown.ServiceGVK.GroupKind(): {
 				Build: func(input PolicyPluginInput) (krt.StatusCollection[controllers.Object, any], krt.Collection[AgwPolicy]) {
+					policyCol := krt.NewManyCollection(agw.Services, func(krtctx krt.HandlerContext, svc *corev1.Service) []AgwPolicy {
+						return translatePoliciesForService(krtctx, svc, kubeutils.GetClusterDomainName(), input.References)
+					}, agw.KrtOpts.ToOptions("policies/A2AService")...)
 					return nil, policyCol
 				},
 			},
@@ -35,11 +37,26 @@ func NewA2APlugin(agw *AgwCollections) AgwPlugin {
 }
 
 // translatePoliciesForService generates A2A policies for a single service
-func translatePoliciesForService(svc *corev1.Service, clusterDomain string) []AgwPolicy {
+func translatePoliciesForService(krtctx krt.HandlerContext, svc *corev1.Service, clusterDomain string, references ReferenceIndex) []AgwPolicy {
 	var a2aPolicies []AgwPolicy
+	// Lazily compute so we don't run it for each Service
+	var computedGatewayTargets *[]types.NamespacedName
+	gatewayTargets := func() []types.NamespacedName {
+		if computedGatewayTargets == nil {
+			computedGatewayTargets = new(references.LookupGatewaysForBackend(krtctx, utils.TypedNamespacedName{
+				Kind: wellknown.ServiceKind,
+				NamespacedName: types.NamespacedName{
+					Namespace: svc.Namespace,
+					Name:      svc.Name,
+				},
+			}).UnsortedList())
+		}
+		return *computedGatewayTargets
+	}
 
 	for _, port := range svc.Spec.Ports {
-		if port.AppProtocol != nil && *port.AppProtocol == a2aProtocol {
+		// support legacy kgateway.dev/a2a and agentgateway.dev/a2a
+		if port.AppProtocol != nil && (*port.AppProtocol == a2aProtocol || *port.AppProtocol == legacyA2aProtocol) {
 			logger.Debug("found A2A service", "service", svc.Name, "namespace", svc.Namespace, "port", port.Port)
 			hostname := fmt.Sprintf("%s.%s.svc.%s", svc.Name, svc.Namespace, clusterDomain)
 			policy := &api.Policy{
@@ -49,7 +66,7 @@ func translatePoliciesForService(svc *corev1.Service, clusterDomain string) []Ag
 				Target: &api.PolicyTarget{Kind: &api.PolicyTarget_Service{Service: &api.PolicyTarget_ServiceTarget{
 					Namespace: svc.Namespace,
 					Hostname:  hostname,
-					Port:      ptr.Of(uint32(port.Port)), // nolint:gosec // G115: kubebuilder validation ensures safe for uint32
+					Port:      new(uint32(port.Port)), // nolint:gosec // G115: kubebuilder validation ensures safe for uint32
 				}}},
 				Kind: &api.Policy_Backend{
 					Backend: &api.BackendPolicySpec{
@@ -60,7 +77,7 @@ func translatePoliciesForService(svc *corev1.Service, clusterDomain string) []Ag
 				},
 			}
 
-			a2aPolicies = append(a2aPolicies, AgwPolicy{Policy: policy})
+			a2aPolicies = appendPolicyForGateways(a2aPolicies, gatewayTargets(), policy)
 		}
 	}
 

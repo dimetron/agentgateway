@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use agent_core::{metrics, strng};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use openapiv3::{OpenAPI, ReferenceOr};
 use prometheus_client::registry::Registry;
 use rmcp::model::Tool;
 use rstest::rstest;
@@ -13,12 +14,18 @@ use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 use super::*;
 use crate::client::Client;
 use crate::proxy::httpproxy::PolicyClient;
+use crate::serdes::FileInlineOrRemote;
 use crate::store::{BackendPolicies, Stores};
-use crate::types::agent::{ResourceName, SimpleBackend, Target};
+use crate::types::agent::{Backend, ResourceName, SimpleBackend, Target};
+use crate::types::local::{
+	LocalBackend, LocalMcpBackend, LocalMcpTarget, LocalMcpTargetSpec, McpBackendHost,
+	McpStatefulMode,
+};
 use crate::{BackendConfig, ProxyInputs, client, mcp};
 
-// Helper to create a handler and mock server for tests
-async fn setup() -> (MockServer, Handler) {
+// Helper to create a handler and mock server for tests.
+// Use prefix "" for no path prefix, or e.g. "/v2" for a path prefix.
+async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 	let server = MockServer::start().await;
 	let host = server.uri();
 	let parsed = reqwest::Url::parse(&host).unwrap();
@@ -37,7 +44,6 @@ async fn setup() -> (MockServer, Handler) {
 	let pi = Arc::new(ProxyInputs {
 		cfg: Arc::new(config),
 		stores: stores.clone(),
-		tracer: None,
 		metrics: Arc::new(crate::metrics::Metrics::new(
 			metrics::sub_registry(&mut Registry::default()),
 			Default::default(),
@@ -48,62 +54,51 @@ async fn setup() -> (MockServer, Handler) {
 		mcp_state: mcp::router::App::new(stores.clone(), encoder),
 	});
 
-	let client = PolicyClient { inputs: pi.clone() };
-	// Define a sample tool for testing
-	let test_tool_get = Tool {
-		name: Cow::Borrowed("get_user"),
-		description: Some(Cow::Borrowed("Get user details")), // Added description
-		icons: None,
-		title: None,
-		meta: None,
-		execution: None,
-		input_schema: Arc::new(
-			json!({ // Define a simple schema for testing
-					"type": "object",
-					"properties": {
-							"path": {
-									"type": "object",
-									"properties": {
-											"user_id": {"type": "string"}
-									},
-									"required": ["user_id"]
-							},
-							"query": {
-									"type": "object",
-									"properties": {
-											"verbose": {"type": "string"}
-									}
-							},
-							"header": {
-									"type": "object",
-									"properties": {
-											"X-Request-ID": {"type": "string"}
-									}
-							}
+	let client = PolicyClient::new(pi.clone());
+	let test_tool_get = Tool::new(
+		Cow::Borrowed("get_user"),
+		Cow::Borrowed("Get user details"),
+		Arc::new(
+			json!({
+				"type": "object",
+				"properties": {
+					"path": {
+						"type": "object",
+						"properties": {
+							"user_id": {"type": "string"}
+						},
+						"required": ["user_id"]
 					},
-					"required": ["path"] // Only path is required for this tool
+					"query": {
+						"type": "object",
+						"properties": {
+							"verbose": {"type": "string"}
+						}
+					},
+					"header": {
+						"type": "object",
+						"properties": {
+							"X-Request-ID": {"type": "string"}
+						}
+					}
+				},
+				"required": ["path"]
 			})
 			.as_object()
 			.unwrap()
 			.clone(),
 		),
-		annotations: None,
-		output_schema: None,
-	};
+	);
 	let upstream_call_get = UpstreamOpenAPICall {
 		method: "GET".to_string(),
 		path: "/users/{user_id}".to_string(),
 		allowed_headers: HashSet::from(["X-Request-ID".to_string()]),
 	};
 
-	let test_tool_post = Tool {
-		name: Cow::Borrowed("create_user"),
-		description: Some(Cow::Borrowed("Create a new user")),
-		icons: None,
-		title: None,
-		meta: None,
-		execution: None,
-		input_schema: Arc::new(
+	let test_tool_post = Tool::new(
+		Cow::Borrowed("create_user"),
+		Cow::Borrowed("Create a new user"),
+		Arc::new(
 			json!({
 				"type": "object",
 				"properties": {
@@ -134,9 +129,7 @@ async fn setup() -> (MockServer, Handler) {
 			.unwrap()
 			.clone(),
 		),
-		output_schema: None,
-		annotations: None,
-	};
+	);
 	let upstream_call_post = UpstreamOpenAPICall {
 		method: "POST".to_string(),
 		path: "/users".to_string(),
@@ -163,10 +156,86 @@ async fn setup() -> (MockServer, Handler) {
 			(test_tool_get, upstream_call_get),
 			(test_tool_post, upstream_call_post),
 		],
-		"".to_string(),
+		prefix.to_string(),
 	);
 
 	(server, handler)
+}
+
+async fn setup() -> (MockServer, Handler) {
+	setup_with_prefix("").await
+}
+
+#[tokio::test]
+async fn test_call_tool_full_url_server_prefix() {
+	// When OpenAPI spec has servers: [{ url: "https://api.example.com/" }],
+	// get_server_prefix returns "" so the request goes to /users/{id} (no double host).
+	let prefix = super::get_server_prefix(&openapi_with_servers(
+		json!([{ "url": "https://api.example.com/" }]),
+	))
+	.expect("should parse");
+	assert_eq!(
+		prefix, "",
+		"full URL with root path should yield empty prefix"
+	);
+
+	let (server, handler) = setup_with_prefix(&prefix).await;
+	let user_id = "123";
+	let expected_response = json!({ "id": user_id, "name": "Test User" });
+
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+		.mount(&server)
+		.await;
+
+	let args = json!({ "path": { "user_id": user_id } });
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(
+		result.is_ok(),
+		"full-URL server prefix should not cause invalid authority"
+	);
+	assert_eq!(result.unwrap(), expected_response);
+}
+
+#[tokio::test]
+async fn test_call_tool_path_prefix_server() {
+	// When OpenAPI spec has servers: [{ url: "https://api.example.com/v2" }],
+	// get_server_prefix returns "/v2" and requests go to /v2/users/{id}.
+	let prefix = super::get_server_prefix(&openapi_with_servers(
+		json!([{ "url": "https://api.example.com/v2" }]),
+	))
+	.expect("should parse");
+	assert_eq!(prefix, "/v2", "full URL with path should yield path prefix");
+
+	let (server, handler) = setup_with_prefix(&prefix).await;
+	let user_id = "456";
+	let expected_response = json!({ "id": user_id, "name": "Versioned User" });
+
+	Mock::given(method("GET"))
+		.and(path(format!("/v2/users/{user_id}")))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+		.mount(&server)
+		.await;
+
+	let args = json!({ "path": { "user_id": user_id } });
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
+	assert!(result.is_ok());
+	assert_eq!(result.unwrap(), expected_response);
 }
 
 #[tokio::test]
@@ -358,9 +427,41 @@ async fn test_call_tool_upstream_error() {
 		)
 		.await;
 
+	assert!(result.is_ok());
+	assert_eq!(result.unwrap(), error_response);
+}
+
+#[tokio::test]
+async fn test_call_tool_upstream_internal_error() {
+	let (server, handler) = setup().await;
+
+	let user_id = "error-user";
+	let error_response = json!({ "error": "Something went wrong accessing Github :unicorn:" });
+
+	Mock::given(method("GET"))
+		.and(path(format!("/users/{user_id}")))
+		.respond_with(ResponseTemplate::new(500).set_body_json(&error_response))
+		.mount(&server)
+		.await;
+
+	let args = json!({ "path": { "user_id": user_id } });
+	let result = handler
+		.call_tool(
+			"get_user",
+			Some(args.as_object().unwrap().clone()),
+			&IncomingRequestContext::empty(),
+		)
+		.await;
+
 	assert!(result.is_err());
 	let err = result.unwrap_err();
-	assert!(err.to_string().contains("failed with status 404 Not Found"));
+	assert!(
+		err
+			.to_string()
+			.contains("failed with status 500 Internal Server Error"),
+		"error was {}",
+		err
+	);
 	assert!(err.to_string().contains(&error_response.to_string()));
 }
 
@@ -455,16 +556,13 @@ async fn test_call_tool_invalid_path_param_value() {
 
 	// Depending on server behavior for the literal path, this might be Ok or Err.
 	// If server returns 404 for the literal path:
-	assert!(result.is_err());
-	assert!(
-		result
-			.as_ref()
-			.unwrap_err()
-			.to_string()
-			.contains("failed with status 404 Not Found"),
-		"{}",
-		result.unwrap_err().to_string()
-	);
+	assert!(result.is_ok());
+	// assert!(
+	// 	result.unwrap()
+	// 		.contains("failed with status 404 Not Found"),
+	// 	"{}",
+	// 	result.unwrap_err().to_string()
+	// );
 
 	// If the request *itself* failed before sending (e.g., invalid URL formed),
 	// the error might be different.
@@ -510,26 +608,33 @@ async fn test_call_tool_with_compressed_response() {
 async fn test_call_tool_response_wrapping() {
 	let (server, handler) = setup().await;
 
-	let test_cases = [
-		(false, Value::Null),
+	// (wrapped, raw_body_bytes, expected_parsed_value)
+	let test_cases: &[(bool, &[u8], Value)] = &[
+		(false, b"null", Value::Null),
 		(
 			false,
+			br#"{"id":"123","name":"Test User","email":"test@example.com"}"#,
 			json!({ "id": "123", "name": "Test User", "email": "test@example.com" }),
 		),
 		(
 			true,
+			br#"[{"id":1,"name":"1"},{"id":2,"name":"2"},{"id":3,"name":"3"}]"#,
 			json!([ { "id": 1, "name": "1" }, { "id": 2, "name": "2" }, { "id": 3, "name": "3" }]),
 		),
-		(true, json!("plain text response")),
-		(true, json!(42)),
-		(true, json!(true)),
+		(
+			false,
+			b"plain text response",
+			json!({"code": 200, "message": "plain text response"}),
+		),
+		(true, b"42", json!(42)),
+		(true, b"true", json!(true)),
 	];
 
-	for (i, (wrapped, response)) in test_cases.iter().enumerate() {
+	for (i, (wrapped, body, response)) in test_cases.iter().enumerate() {
 		let user_id = format!("{}", i);
 		Mock::given(method("GET"))
 			.and(path(format!("/users/{}", user_id)))
-			.respond_with(ResponseTemplate::new(200).set_body_json(response))
+			.respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
 			.expect(1)
 			.mount(&server)
 			.await;
@@ -542,7 +647,8 @@ async fn test_call_tool_response_wrapping() {
 				&IncomingRequestContext::empty(),
 			)
 			.await;
-		assert!(result.is_ok());
+
+		assert!(result.is_ok(), "result {:?}", result);
 
 		// Spec requires an object https://modelcontextprotocol.io/specification/2025-06-18/schema#calltoolresult
 		let expected = if *wrapped {
@@ -553,6 +659,7 @@ async fn test_call_tool_response_wrapping() {
 		assert_eq!(result.unwrap(), expected);
 	}
 }
+
 #[tokio::test]
 async fn test_normalize_url_path_empty_prefix() {
 	// Test the fix for double slash issue when prefix is empty (host/port config)
@@ -590,6 +697,319 @@ async fn test_normalize_url_path_path_without_leading_slash() {
 fn test_normalize_url_path(#[case] prefix: &str, #[case] path: &str, #[case] expected: &str) {
 	let result = super::normalize_url_path(prefix, path);
 	assert_eq!(result, expected);
+}
+
+fn openapi_with_servers(servers: serde_json::Value) -> OpenAPI {
+	let spec = json!({
+		"openapi": "3.0.0",
+		"info": { "title": "Test", "version": "1.0.0" },
+		"servers": servers,
+		"paths": { "/x": { "get": { "operationId": "getX", "responses": { "200": { "description": "ok" } } } } }
+	});
+	serde_json::from_value(spec).expect("valid OpenAPI spec")
+}
+
+#[rstest]
+#[case::full_url_root("https://api.example.com/", "")]
+#[case::full_url_no_trailing_slash("https://api.example.com", "")]
+#[case::full_url_with_path("https://api.example.com/v2", "/v2")]
+#[case::full_url_with_path_trailing_slash("https://api.example.com/v2/", "/v2")]
+#[case::full_url_with_host_variable("https://{tenant}.example.com/v1", "/v1")]
+#[case::full_url_with_host_variable_no_path("https://{tenant}.example.com", "")]
+#[case::full_url_with_host_variable_root("https://{tenant}.example.com/", "")]
+#[case::full_url_with_path_variable("https://api.example.com/v1/{version}", "/v1/{version}")]
+#[case::relative_path("/api/v1", "/api/v1")]
+#[case::empty_string("", "")]
+fn test_get_server_prefix(#[case] server_url: &str, #[case] expected: &str) {
+	let spec = openapi_with_servers(json!([{ "url": server_url }]));
+	let result = super::get_server_prefix(&spec).expect("should succeed");
+	assert_eq!(result, expected, "server_url={server_url}");
+}
+
+#[tokio::test]
+async fn test_get_server_prefix_empty_servers() {
+	let spec = openapi_with_servers(json!([]));
+	let result = super::get_server_prefix(&spec).expect("should succeed");
+	assert_eq!(result, "");
+}
+
+#[tokio::test]
+async fn test_get_server_prefix_multiple_servers_err() {
+	let spec = openapi_with_servers(json!([
+		{ "url": "https://api.example.com/" },
+		{ "url": "https://api2.example.com/" }
+	]));
+	let result = super::get_server_prefix(&spec);
+	assert!(result.is_err(), "multiple servers should yield error");
+}
+
+fn tool_schema_for<'a>(
+	tools: &'a [(Tool, UpstreamOpenAPICall)],
+	tool_name: &str,
+) -> &'a serde_json::Map<String, serde_json::Value> {
+	tools
+		.iter()
+		.find(|(tool, _)| tool.name == tool_name)
+		.map(|(tool, _)| &*tool.input_schema)
+		.expect("tool should exist")
+}
+
+fn nested_schema<'a>(
+	schema: &'a serde_json::Map<String, serde_json::Value>,
+	name: &str,
+) -> &'a serde_json::Map<String, serde_json::Value> {
+	schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.and_then(|props| props.get(name))
+		.and_then(serde_json::Value::as_object)
+		.expect("nested schema should exist")
+}
+
+#[test]
+fn test_parse_openapi_schema_includes_path_level_parameters_in_tool_schema() {
+	let raw = r#"{
+		"openapi": "3.0.0",
+		"info": {"title": "Path Params", "version": "1.0.0"},
+		"paths": {
+			"/workspaces/{workspace_gid}/tags": {
+				"parameters": [
+					{
+						"name": "workspace_gid",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"get": {
+					"operationId": "getTagsForWorkspace",
+					"summary": "Get tags in a workspace",
+					"responses": {
+						"200": {"description": "ok"}
+					}
+				}
+			}
+		}
+	}"#;
+	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
+	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
+	let (_tool, upstream) = tools
+		.iter()
+		.find(|(tool, _)| tool.name == "getTagsForWorkspace")
+		.expect("tool should exist");
+
+	assert_eq!(upstream.path, "/workspaces/{workspace_gid}/tags");
+
+	let schema = tool_schema_for(&tools, "getTagsForWorkspace");
+	let path_schema = nested_schema(schema, "path");
+	let properties = path_schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("path object should include properties");
+	assert!(
+		properties.contains_key("workspace_gid"),
+		"path-level workspace_gid should be exposed in tool schema"
+	);
+	let required = path_schema
+		.get("required")
+		.and_then(serde_json::Value::as_array)
+		.expect("path object should include required array");
+	assert!(
+		required.iter().any(|value| value == "workspace_gid"),
+		"workspace_gid should be required in the path schema"
+	);
+}
+
+#[test]
+fn test_parse_openapi_schema_operation_level_parameter_overrides_path_level_parameter() {
+	let raw = r#"{
+		"openapi": "3.0.0",
+		"info": {"title": "Path Params", "version": "1.0.0"},
+		"paths": {
+			"/workspaces/{workspace_gid}/tags/{tag_gid}": {
+				"parameters": [
+					{
+						"name": "workspace_gid",
+						"in": "path",
+						"required": true,
+						"description": "path-level parameter",
+						"schema": {"type": "string"}
+					},
+					{
+						"name": "tag_gid",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"get": {
+					"operationId": "getWorkspaceTag",
+					"parameters": [
+						{
+							"name": "workspace_gid",
+							"in": "path",
+							"required": true,
+							"description": "operation-level parameter",
+							"schema": {"type": "string", "pattern": "^ws_"}
+						}
+					],
+					"responses": {
+						"200": {"description": "ok"}
+					}
+				}
+			}
+		}
+	}"#;
+	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
+	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
+
+	let schema = tool_schema_for(&tools, "getWorkspaceTag");
+	let path_schema = nested_schema(schema, "path");
+	let path_properties = path_schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("path object should include properties");
+	let workspace_gid = path_properties
+		.get("workspace_gid")
+		.and_then(serde_json::Value::as_object)
+		.expect("workspace_gid property should exist");
+	assert_eq!(
+		workspace_gid.get("description"),
+		Some(&json!("operation-level parameter"))
+	);
+	assert_eq!(workspace_gid.get("pattern"), Some(&json!("^ws_")));
+
+	let required = path_schema
+		.get("required")
+		.and_then(serde_json::Value::as_array)
+		.expect("path object should include required array");
+	assert_eq!(required, &vec![json!("workspace_gid"), json!("tag_gid")]);
+
+	assert!(
+		path_properties.contains_key("tag_gid"),
+		"the unmodified sibling path parameter should keep its slot"
+	);
+}
+
+#[test]
+fn test_parse_openapi_schema_operation_level_header_override_is_case_insensitive() {
+	let raw = r#"{
+		"openapi": "3.0.0",
+		"info": {"title": "Header Params", "version": "1.0.0"},
+		"paths": {
+			"/workspaces": {
+				"parameters": [
+					{
+						"name": "X-Request-Id",
+						"in": "header",
+						"required": true,
+						"description": "path-level header",
+						"schema": {"type": "string"}
+					}
+				],
+				"get": {
+					"operationId": "listWorkspaces",
+					"parameters": [
+						{
+							"name": "x-request-id",
+							"in": "header",
+							"required": true,
+							"description": "operation-level header",
+							"schema": {"type": "string", "pattern": "^req_"}
+						}
+					],
+					"responses": {
+						"200": {"description": "ok"}
+					}
+				}
+			}
+		}
+	}"#;
+	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
+	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
+	let (tool, upstream) = tools
+		.iter()
+		.find(|(tool, _)| tool.name == "listWorkspaces")
+		.expect("tool should exist");
+
+	assert_eq!(
+		upstream.allowed_headers,
+		HashSet::from(["x-request-id".to_string()])
+	);
+
+	let schema = &*tool.input_schema;
+	let header_schema = nested_schema(schema, "header");
+	let header_properties = header_schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("header object should include properties");
+	assert_eq!(header_properties.len(), 1);
+	let request_id = header_properties
+		.get("x-request-id")
+		.and_then(serde_json::Value::as_object)
+		.expect("operation-level header should win");
+	assert_eq!(
+		request_id.get("description"),
+		Some(&json!("operation-level header"))
+	);
+	assert_eq!(request_id.get("pattern"), Some(&json!("^req_")));
+
+	let required = header_schema
+		.get("required")
+		.and_then(serde_json::Value::as_array)
+		.expect("header object should include required array");
+	assert_eq!(required, &vec![json!("x-request-id")]);
+}
+
+#[test]
+fn test_parse_openapi_schema_ignores_path_level_cookie_parameters() {
+	let raw = r#"{
+		"openapi": "3.0.0",
+		"info": {"title": "Cookie Params", "version": "1.0.0"},
+		"paths": {
+			"/workspaces/{workspace_gid}/tags": {
+				"parameters": [
+					{
+						"name": "session",
+						"in": "cookie",
+						"required": false,
+						"schema": {"type": "string"}
+					},
+					{
+						"name": "workspace_gid",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"get": {
+					"operationId": "getTagsForWorkspace",
+					"responses": {
+						"200": {"description": "ok"}
+					}
+				}
+			}
+		}
+	}"#;
+	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
+	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
+
+	let schema = tool_schema_for(&tools, "getTagsForWorkspace");
+	let properties = schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("root schema should include properties");
+	assert!(
+		!properties.contains_key("cookie"),
+		"path-level cookie parameters should not create a cookie schema"
+	);
+
+	let path_schema = nested_schema(schema, "path");
+	let path_properties = path_schema
+		.get("properties")
+		.and_then(serde_json::Value::as_object)
+		.expect("path object should include properties");
+	assert!(path_properties.contains_key("workspace_gid"));
 }
 
 #[rstest]
@@ -837,21 +1257,14 @@ async fn test_call_tool_structured_content_fallback() {
 	let request = JsonRpcRequest {
 		jsonrpc: JsonRpcVersion2_0,
 		id: RequestId::String("test-123".into()),
-		request: ClientRequest::CallToolRequest(CallToolRequest {
-			method: CallToolRequestMethod,
-			params: CallToolRequestParams {
-				meta: None,
-				task: None,
-				name: "get_user".into(),
-				arguments: Some(
-					json!({ "path": { "user_id": user_id } })
-						.as_object()
-						.unwrap()
-						.clone(),
-				),
-			},
-			extensions: Extensions::default(),
-		}),
+		request: ClientRequest::CallToolRequest(CallToolRequest::new(
+			CallToolRequestParams::new("get_user").with_arguments(
+				json!({ "path": { "user_id": user_id } })
+					.as_object()
+					.unwrap()
+					.clone(),
+			),
+		)),
 	};
 
 	let result = handler
@@ -931,4 +1344,213 @@ async fn test_call_tool_structured_content_fallback() {
 		parsed_from_content, *structured_content,
 		"content and structured_content should represent the same data"
 	);
+}
+
+#[tokio::test]
+async fn test_openapi_from_url() {
+	// Test creating LocalMcpTargetSpec::OpenAPI with URL schema and converting to runtime backend
+	let server = MockServer::start().await;
+
+	// Mock OpenAPI schema response
+	let openapi_json = json!({
+		"openapi": "3.0.0",
+		"info": {
+			"title": "User API",
+			"version": "1.0.0"
+		},
+		"paths": {
+			"/users/{user_id}": {
+				"get": {
+					"summary": "Get user details",
+					"parameters": [
+						{
+							"name": "user_id",
+							"in": "path",
+							"required": true,
+							"schema": {
+								"type": "string"
+							}
+						}
+					],
+					"responses": {
+						"200": {
+							"description": "User details",
+							"content": {
+								"application/json": {
+									"schema": {
+										"type": "object",
+										"properties": {
+											"id": {"type": "string"},
+											"name": {"type": "string"}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			"/users": {
+				"post": {
+					"summary": "Create a new user",
+					"requestBody": {
+						"required": true,
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"name": {"type": "string"},
+										"email": {"type": "string"}
+									},
+									"required": ["name", "email"]
+								}
+							}
+						}
+					},
+					"responses": {
+						"201": {
+							"description": "User created",
+							"content": {
+								"application/json": {
+									"schema": {
+										"type": "object",
+										"properties": {
+											"id": {"type": "string"},
+											"name": {"type": "string"},
+											"email": {"type": "string"}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	});
+
+	Mock::given(method("GET"))
+		.and(path("/openapi.json"))
+		.respond_with(ResponseTemplate::new(200).set_body_json(&openapi_json))
+		.mount(&server)
+		.await;
+
+	// Create client
+	let client = Client::new(
+		&client::Config {
+			resolver_cfg: ResolverConfig::default(),
+			resolver_opts: ResolverOpts::default(),
+		},
+		None,
+		BackendConfig::default(),
+		None,
+	);
+
+	// Create LocalMcpTargetSpec::OpenAPI with remote URL schema
+	let schema_url = format!("{}/openapi.json", server.uri());
+
+	// Use serde_json to create McpBackendHost since fields are private
+	let backend_json = json!({
+		"host": "https://api.users.com"
+	});
+	let backend: McpBackendHost = serde_json::from_value(backend_json).unwrap();
+
+	let local_target_spec = LocalMcpTargetSpec::OpenAPI {
+		backend,
+		schema: FileInlineOrRemote::Remote {
+			url: schema_url.parse().unwrap(),
+		},
+	};
+
+	// Create a LocalBackend::MCP to test the full conversion pipeline
+	let local_backend = LocalBackend::MCP(LocalMcpBackend {
+		targets: vec![Arc::new(LocalMcpTarget {
+			name: "users-api".into(),
+			spec: local_target_spec,
+			policies: None,
+		})],
+		stateful_mode: McpStatefulMode::Stateful,
+		prefix_mode: None,
+		failure_mode: None,
+	});
+
+	// Convert to runtime backends
+	let backend_name = ResourceName::new("test-users".into(), "".into());
+	let result = local_backend
+		.as_backends(backend_name, client, crate::mcp::DEFAULT_SESSION_IDLE_TTL)
+		.await;
+
+	// Verify the conversion succeeded
+	assert!(
+		result.is_ok(),
+		"Should successfully convert LocalBackend::MCP with remote OpenAPI schema"
+	);
+	let backends = result.unwrap();
+
+	// Should have at least one backend
+	assert!(!backends.is_empty(), "Should have at least one backend");
+
+	// Find the MCP backend
+	let mcp_backend = backends
+		.iter()
+		.find(|b| matches!(b.backend, Backend::MCP(_, _)));
+	assert!(mcp_backend.is_some(), "Should contain an MCP backend");
+
+	if let Some(backend_with_policies) = mcp_backend
+		&& let Backend::MCP(_, mcp_backend) = &backend_with_policies.backend
+	{
+		assert_eq!(mcp_backend.targets.len(), 1);
+
+		// Verify the target was converted to OpenAPI
+		let target = &mcp_backend.targets[0];
+		assert_eq!(target.name.as_str(), "users-api");
+
+		// Verify it's an OpenAPI target spec with the fetched schema
+		if let crate::types::agent::McpTargetSpec::OpenAPI(openapi_target) = &target.spec {
+			let schema = &openapi_target.schema;
+			assert_eq!(schema.openapi, "3.0.0");
+			assert_eq!(schema.info.title, "User API");
+			assert_eq!(schema.info.version, "1.0.0");
+
+			// Check if paths contains the expected paths
+			let has_users_path = schema.paths.paths.contains_key("/users");
+			assert!(has_users_path, "Schema should contain /users path");
+
+			let has_users_id_path = schema.paths.paths.contains_key("/users/{user_id}");
+			assert!(
+				has_users_id_path,
+				"Schema should contain /users/{{user_id}} path"
+			);
+
+			// Verify the path details were preserved
+			if let Some(path_item_ref) = schema.paths.paths.get("/users/{user_id}") {
+				match path_item_ref {
+					ReferenceOr::Item(path_item) => {
+						if let Some(get_op) = &path_item.get {
+							assert_eq!(get_op.summary.as_deref(), Some("Get user details"));
+						}
+					},
+					ReferenceOr::Reference { reference: _ } => {
+						panic!("Expected path item, got reference");
+					},
+				}
+			}
+
+			if let Some(path_item_ref) = schema.paths.paths.get("/users") {
+				match path_item_ref {
+					ReferenceOr::Item(path_item) => {
+						if let Some(post_op) = &path_item.post {
+							assert_eq!(post_op.summary.as_deref(), Some("Create a new user"));
+						}
+					},
+					ReferenceOr::Reference { reference: _ } => {
+						panic!("Expected path item, got reference");
+					},
+				}
+			}
+		} else {
+			panic!("Expected OpenAPI target spec, got {:?}", target.spec);
+		}
+	}
 }

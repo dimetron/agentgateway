@@ -10,14 +10,14 @@ pub(crate) use client::McpHttpClient;
 pub use openapi::ParseError as OpenAPIParseError;
 use rmcp::model::{ClientNotification, ClientRequest, JsonRpcRequest};
 use rmcp::transport::TokioChildProcess;
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use thiserror::Error;
 use tokio::process::Command;
 
-use crate::http::jwt::Claims;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::router::{McpBackendGroup, McpTarget};
 use crate::mcp::streamablehttp::StreamableHttpPostResponse;
-use crate::mcp::{mergestream, upstream};
+use crate::mcp::{FailureMode, mergestream, upstream};
 use crate::proxy::ProxyError;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::types::agent::McpTargetSpec;
@@ -25,38 +25,84 @@ use crate::*;
 
 #[derive(Debug, Clone)]
 pub struct IncomingRequestContext {
+	method: ::http::Method,
+	uri: ::http::Uri,
 	headers: http::HeaderMap,
-	claims: Option<Claims>,
+	ext: ::http::Extensions,
+	authority: Option<::http::uri::Authority>,
 }
 
 impl IncomingRequestContext {
 	#[cfg(test)]
 	pub fn empty() -> Self {
 		Self {
+			method: ::http::Method::GET,
+			uri: ::http::Uri::from_static("/"),
 			headers: http::HeaderMap::new(),
-			claims: None,
+			ext: ::http::Extensions::new(),
+			authority: None,
 		}
 	}
 	pub fn new(parts: &::http::request::Parts) -> Self {
-		let claims = parts.extensions.get::<Claims>().cloned();
 		Self {
+			method: parts.method.clone(),
+			uri: parts.uri.clone(),
 			headers: parts.headers.clone(),
-			claims,
+			ext: parts.extensions.clone(),
+			authority: parts.uri.authority().cloned(),
 		}
 	}
-	pub fn apply(&self, req: &mut http::Request) {
+	pub fn headers_mut(&mut self) -> &mut http::HeaderMap {
+		&mut self.headers
+	}
+	pub fn extensions_mut(&mut self) -> &mut ::http::Extensions {
+		&mut self.ext
+	}
+	pub fn apply(&self, req: &mut http::Request) -> anyhow::Result<()> {
+		req.extensions_mut().extend(self.ext.clone());
+		let explicit_auto_hostname = req
+			.extensions()
+			.get::<crate::http::filters::AutoHostname>()
+			.is_some_and(|auto| auto.explicit);
+		if explicit_auto_hostname {
+			let authority = req.uri().authority().map(|a| strng::new(a.as_str()));
+			if let Some(authority) = authority
+				&& let Some(auto) = req
+					.extensions_mut()
+					.get_mut::<crate::http::filters::AutoHostname>()
+				&& auto.target.is_none()
+			{
+				auto.target = Some(authority);
+			}
+		}
 		for (k, v) in &self.headers {
 			// Remove headers we do not want to propagate to the backend
-			if k == http::header::CONTENT_ENCODING || k == http::header::CONTENT_LENGTH {
+			if k == http::header::CONTENT_ENCODING
+				|| k == http::header::CONTENT_LENGTH
+				|| k.as_str().eq_ignore_ascii_case(HEADER_SESSION_ID)
+			{
 				continue;
 			}
 			if !req.headers().contains_key(k) {
 				req.headers_mut().insert(k.clone(), v.clone());
 			}
 		}
-		if let Some(claims) = self.claims.as_ref() {
-			req.extensions_mut().insert(claims.clone());
-		}
+		let Some(authority) = self.authority.clone() else {
+			return Ok(());
+		};
+		http::modify_req_uri(req, |uri| {
+			uri.authority = Some(authority);
+			Ok(())
+		})
+	}
+	// Empty-bodied Request mirroring the incoming headers/extensions, for CEL input.
+	pub fn as_request(&self) -> crate::http::Request {
+		let mut req = ::http::Request::new(crate::http::Body::empty());
+		*req.method_mut() = self.method.clone();
+		*req.uri_mut() = self.uri.clone();
+		*req.headers_mut() = self.headers.clone();
+		*req.extensions_mut() = self.ext.clone();
+		req
 	}
 }
 
@@ -67,12 +113,12 @@ pub enum UpstreamError {
 		resource_type: String,
 		resource_name: String,
 	},
+	#[error("mcpGuardrails rejected: {}", .0.message)]
+	McpGuardrails(rmcp::ErrorData),
 	#[error("invalid request: {0}")]
 	InvalidRequest(String),
 	#[error("unsupported method: {0}")]
 	InvalidMethod(String),
-	#[error("method {0} is unsupported with multiplexing")]
-	InvalidMethodWithMultiplexing(String),
 	#[error("stdio upstream error: {0}")]
 	ServiceError(#[from] rmcp::ServiceError),
 	#[error("http upstream error: {0}")]
@@ -83,6 +129,8 @@ pub enum UpstreamError {
 	Proxy(#[from] ProxyError),
 	#[error("stdio upstream error: {0}")]
 	Stdio(#[from] io::Error),
+	#[error("stdio server exited")]
+	StdioShutdown,
 	#[error("upstream closed on send")]
 	Send,
 	#[error("upstream closed on receive")]
@@ -101,17 +149,19 @@ pub(crate) enum Upstream {
 impl Upstream {
 	pub fn get_session_state(&self) -> Option<http::sessionpersistence::MCPSession> {
 		match self {
-			Upstream::McpStreamable(c) => c.get_session_state(),
+			Upstream::McpStreamable(c) => Some(c.get_session_state()),
+			Upstream::McpSSE(c) => Some(c.get_session_state()),
+			Upstream::OpenAPI(c) => Some(c.get_session_state()),
 			_ => None,
 		}
 	}
 
-	pub fn set_session_id(&self, id: &str, pinned: Option<SocketAddr>) {
+	pub fn set_session_id(&self, id: Option<&str>, pinned: Option<SocketAddr>) {
 		match self {
 			Upstream::McpStreamable(c) => c.set_session_id(id, pinned),
-			Upstream::McpSSE(_) => {},
+			Upstream::McpSSE(c) => c.set_session_id(id, pinned),
 			Upstream::McpStdio(_) => {},
-			Upstream::OpenAPI(_) => {},
+			Upstream::OpenAPI(c) => c.set_session_id(id, pinned),
 		}
 	}
 
@@ -121,7 +171,9 @@ impl Upstream {
 				c.stop().await?;
 			},
 			Upstream::McpStreamable(c) => {
-				c.send_delete(ctx).await?;
+				if c.has_session_id() {
+					c.send_delete(ctx).await?;
+				}
 			},
 			Upstream::McpSSE(c) => {
 				c.stop().await?;
@@ -137,7 +189,7 @@ impl Upstream {
 		ctx: &IncomingRequestContext,
 	) -> Result<mergestream::Messages, UpstreamError> {
 		match &self {
-			Upstream::McpStdio(c) => Ok(c.get_event_stream().await),
+			Upstream::McpStdio(c) => Ok(c.get_event_stream().await?),
 			Upstream::McpSSE(c) => c.connect_to_event_stream(ctx).await,
 			Upstream::McpStreamable(c) => c
 				.get_event_stream(ctx)
@@ -168,9 +220,7 @@ impl Upstream {
 						StreamableHttpPostResponse::Json(_, sid) => sid.as_ref(),
 						StreamableHttpPostResponse::Sse(_, sid) => sid.as_ref(),
 					};
-					if let Some(sid) = sid {
-						c.set_session_id(sid.as_ref(), None)
-					}
+					c.set_session_id(sid.map(|s| s.as_str()), None);
 				}
 				res.try_into().map_err(Into::into)
 			},
@@ -209,11 +259,12 @@ pub(crate) struct UpstreamGroup {
 	// Else this is empty
 	pub default_target_name: Option<String>,
 	pub is_multiplexing: bool,
+	pub failure_mode: FailureMode,
 }
 
 impl UpstreamGroup {
 	pub fn size(&self) -> usize {
-		self.backend.targets.len()
+		self.by_name.len()
 	}
 
 	pub(crate) fn new(client: PolicyClient, backend: McpBackendGroup) -> Result<Self, mcp::Error> {
@@ -227,6 +278,7 @@ impl UpstreamGroup {
 			Some(backend.targets[0].name.to_string())
 		};
 		let mut s = Self {
+			failure_mode: backend.failure_mode,
 			backend,
 			client,
 			by_name: IndexMap::new(),
@@ -234,14 +286,36 @@ impl UpstreamGroup {
 			is_multiplexing,
 		};
 		s.setup_connections()?;
+		if s.by_name.is_empty() {
+			if s.backend.targets.is_empty() && s.failure_mode == FailureMode::FailOpen {
+				warn!(
+					"MCP backend configured with zero targets and failure_mode=failOpen; allowing startup to avoid downstream retry loops"
+				);
+				return Ok(s);
+			}
+			return Err(mcp::Error::NoBackends);
+		}
 		Ok(s)
 	}
 
 	pub(crate) fn setup_connections(&mut self) -> Result<(), mcp::Error> {
 		for tgt in &self.backend.targets {
 			debug!("initializing target: {}", tgt.name);
-			let transport = self.setup_upstream(tgt.as_ref())?;
-			self.by_name.insert(tgt.name.clone(), Arc::new(transport));
+			match self.setup_upstream(tgt.as_ref()) {
+				Ok(transport) => {
+					self.by_name.insert(tgt.name.clone(), Arc::new(transport));
+				},
+				Err(e) => {
+					if self.failure_mode == FailureMode::FailOpen {
+						warn!(
+							"failed to initialize target '{}', skipping (failure_mode=FailOpen): {}",
+							tgt.name, e
+						);
+					} else {
+						return Err(e);
+					}
+				},
+			}
 		}
 		Ok(())
 	}
@@ -255,6 +329,15 @@ impl UpstreamGroup {
 			.get(name)
 			.map(|v| v.as_ref())
 			.ok_or_else(|| anyhow::anyhow!("requested target {name} is not initialized",))
+	}
+	/// Returns the stored name key if it exists in the upstream map.
+	/// Used by `parse_resource_uri` to get a stable `&str` reference.
+	pub(crate) fn get_name(&self, name: &str) -> Option<&str> {
+		self.by_name.get_key_value(name).map(|(k, _)| k.as_str())
+	}
+
+	pub(crate) fn stateful(&self) -> bool {
+		self.backend.stateful
 	}
 
 	fn setup_upstream(&self, target: &McpTarget) -> Result<upstream::Upstream, mcp::Error> {
@@ -306,7 +389,12 @@ impl UpstreamGroup {
 
 				upstream::Upstream::McpStreamable(client)
 			},
-			McpTargetSpec::Stdio { cmd, args, env } => {
+			McpTargetSpec::Stdio {
+				cmd,
+				args,
+				env,
+				clear_env,
+			} => {
 				debug!("starting stdio transport for target: {}", target.name);
 				#[cfg(target_os = "windows")]
 				// Command has some weird behavior on Windows where it expects the executable extension to be
@@ -319,6 +407,9 @@ impl UpstreamGroup {
 				#[cfg(target_os = "windows")]
 				let mut c = Command::new(&cmd);
 				c.args(args);
+				if *clear_env {
+					c.env_clear();
+				}
 				for (k, v) in env {
 					c.env(k, v);
 				}
@@ -351,5 +442,97 @@ impl UpstreamGroup {
 		};
 
 		Ok(target)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn incoming_request_context_applies_original_authority() {
+		let parts = ::http::Request::builder()
+			.uri("http://original.example/mcp")
+			.body(())
+			.unwrap()
+			.into_parts()
+			.0;
+		let ctx = IncomingRequestContext::new(&parts);
+		let mut req = ::http::Request::builder()
+			.uri("http://svc.default.svc.cluster.local:80/mcp")
+			.body(crate::http::Body::empty())
+			.unwrap();
+
+		ctx.apply(&mut req).unwrap();
+
+		assert_eq!(
+			req.uri().authority().map(|a| a.as_str()),
+			Some("original.example")
+		);
+		assert_eq!(req.headers().get(http::header::HOST), None);
+		assert_eq!(req.uri().path(), "/mcp");
+	}
+
+	fn ctx_with_headers(headers: &[(&str, &str)]) -> IncomingRequestContext {
+		let mut builder = ::http::Request::builder()
+			.uri("http://example/")
+			.method("GET");
+		for (k, v) in headers {
+			builder = builder.header(*k, *v);
+		}
+		let parts = builder.body(()).unwrap().into_parts().0;
+		IncomingRequestContext::new(&parts)
+	}
+
+	fn empty_upstream_req() -> http::Request {
+		::http::Request::builder()
+			.uri("http://upstream/")
+			.body(http::Body::empty())
+			.unwrap()
+	}
+
+	#[test]
+	fn apply_strips_inbound_mcp_session_id() {
+		let ctx = ctx_with_headers(&[(HEADER_SESSION_ID, "client-sid"), ("x-trace", "abc")]);
+		let mut req = empty_upstream_req();
+		ctx.apply(&mut req).unwrap();
+		assert!(req.headers().get(HEADER_SESSION_ID).is_none());
+		assert_eq!(req.headers().get("x-trace").unwrap(), "abc");
+	}
+
+	#[test]
+	fn apply_preserves_upstream_session_id_when_already_set() {
+		let ctx = ctx_with_headers(&[(HEADER_SESSION_ID, "client-sid")]);
+		let mut req = empty_upstream_req();
+		req.headers_mut().insert(
+			::http::HeaderName::from_static("mcp-session-id"),
+			::http::HeaderValue::from_static("upstream-sid"),
+		);
+		ctx.apply(&mut req).unwrap();
+		assert_eq!(
+			req.headers().get(HEADER_SESSION_ID).unwrap(),
+			"upstream-sid"
+		);
+	}
+
+	#[test]
+	fn apply_strips_content_encoding_and_length() {
+		let ctx = ctx_with_headers(&[
+			(http::header::CONTENT_ENCODING.as_str(), "gzip"),
+			(http::header::CONTENT_LENGTH.as_str(), "42"),
+		]);
+		let mut req = empty_upstream_req();
+		ctx.apply(&mut req).unwrap();
+		assert!(req.headers().get(http::header::CONTENT_ENCODING).is_none());
+		assert!(req.headers().get(http::header::CONTENT_LENGTH).is_none());
+	}
+
+	#[test]
+	fn apply_propagates_other_headers() {
+		let ctx = ctx_with_headers(&[("authorization", "Bearer token"), ("x-request-id", "req-1")]);
+		let mut req = empty_upstream_req();
+		ctx.apply(&mut req).unwrap();
+		assert_eq!(req.headers().get("authorization").unwrap(), "Bearer token");
+		assert_eq!(req.headers().get("x-request-id").unwrap(), "req-1");
 	}
 }

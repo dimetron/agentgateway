@@ -4,12 +4,11 @@ kind: ServiceAccount
 metadata:
   labels:
     app.kubernetes.io/instance: gw
-    app.kubernetes.io/managed-by: kgateway
+    app.kubernetes.io/managed-by: agentgateway
     app.kubernetes.io/name: gw
     app.kubernetes.io/version: 1.0.0-ci1
     gateway.networking.k8s.io/gateway-class-name: agentgateway
     gateway.networking.k8s.io/gateway-name: gw
-    kgateway: kube-gateway
   name: gw
 ---
 apiVersion: v1
@@ -20,12 +19,11 @@ kind: ConfigMap
 metadata:
   labels:
     app.kubernetes.io/instance: gw
-    app.kubernetes.io/managed-by: kgateway
+    app.kubernetes.io/managed-by: agentgateway
     app.kubernetes.io/name: gw
     app.kubernetes.io/version: 1.0.0-ci1
     gateway.networking.k8s.io/gateway-class-name: agentgateway
     gateway.networking.k8s.io/gateway-name: gw
-    kgateway: kube-gateway
   name: gw
 ---
 apiVersion: v1
@@ -49,12 +47,11 @@ kind: ConfigMap
 metadata:
   labels:
     app.kubernetes.io/instance: gw
-    app.kubernetes.io/managed-by: kgateway
+    app.kubernetes.io/managed-by: agentgateway
     app.kubernetes.io/name: gw
     app.kubernetes.io/version: 1.0.0-ci1
     gateway.networking.k8s.io/gateway-class-name: agentgateway
     gateway.networking.k8s.io/gateway-name: gw
-    kgateway: kube-gateway
   name: gw-xds-ca
 ---
 apiVersion: v1
@@ -62,12 +59,11 @@ kind: Service
 metadata:
   labels:
     app.kubernetes.io/instance: gw
-    app.kubernetes.io/managed-by: kgateway
+    app.kubernetes.io/managed-by: agentgateway
     app.kubernetes.io/name: gw
     app.kubernetes.io/version: 1.0.0-ci1
     gateway.networking.k8s.io/gateway-class-name: agentgateway
     gateway.networking.k8s.io/gateway-name: gw
-    kgateway: kube-gateway
   name: gw
 spec:
   ports:
@@ -88,12 +84,11 @@ kind: Deployment
 metadata:
   labels:
     app.kubernetes.io/instance: gw
-    app.kubernetes.io/managed-by: kgateway
+    app.kubernetes.io/managed-by: agentgateway
     app.kubernetes.io/name: gw
     app.kubernetes.io/version: 1.0.0-ci1
     gateway.networking.k8s.io/gateway-class-name: agentgateway
     gateway.networking.k8s.io/gateway-name: gw
-    kgateway: kube-gateway
   name: gw
 spec:
   selector:
@@ -105,8 +100,9 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: bb8bdc8cacbd1ae4af6e9f72baafbd5859e9422ade140b725464c0ec0d7fee9d
-        gateway.kgateway.dev/gateway-full-name: gw
+        checksum/config: 864542ed2e0b0de7cfd066cda1995c0816d7b62bfd2ec96fd7eaa6f50f2624aa
+        checksum/session-key: 2a8abfa8cb9906290437854193ca6bca41d4d4e26d1d454bd66a35158095e737
+        checksum/xds-ca: 6d4952f2d7cf09b5d13c2261e554e5796a2f5f79ce1f875c428f0e257244203f
         prometheus.io/path: /metrics
         prometheus.io/port: "15020"
         prometheus.io/scrape: "true"
@@ -128,7 +124,7 @@ spec:
         - name: NODE_NAME
           valueFrom:
             fieldRef:
-              fieldPath: metadata.name
+              fieldPath: spec.nodeName
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
@@ -141,6 +137,11 @@ spec:
           value: "1"
         - name: RUST_LOG
           value: info
+        - name: SESSION_KEY
+          valueFrom:
+            secretKeyRef:
+              key: key
+              name: gw-session-key
         - name: XDS_ADDRESS
           value: https://xds.cluster.local:9978
         - name: XDS_ROOT_CA
@@ -175,7 +176,10 @@ spec:
             path: /healthz/ready
             port: 15021
           periodSeconds: 10
-        resources: {}
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -217,7 +221,7 @@ spec:
         projected:
           sources:
           - serviceAccountToken:
-              audience: kgateway
+              audience: agentgateway
               expirationSeconds: 43200
               path: xds-token
       - emptyDir: {}
@@ -229,3 +233,15 @@ spec:
           name: gw-xds-ca
         name: xds-ca
 status: {}
+---
+apiVersion: v1
+data:
+  key: MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZg==
+kind: Secret
+metadata:
+  labels:
+    gateway.networking.k8s.io/gateway-class-name: agentgateway
+    gateway.networking.k8s.io/gateway-name: gw
+  name: gw-session-key
+  namespace: default
+type: Opaque

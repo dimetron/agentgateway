@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, RwLock};
 
 use agent_core::strng;
 use divan::Bencher;
@@ -10,31 +11,33 @@ use crate::http::tests_common::*;
 use crate::store::Stores;
 use crate::types::agent::{
 	HeaderMatch, HeaderValueMatch, Listener, ListenerProtocol, MethodMatch, PathMatch, QueryMatch,
-	QueryValueMatch, Route, RouteMatch, RouteSet,
+	QueryValueMatch, Route, RouteMatch,
 };
+use crate::types::discovery::gatewayaddress::Destination;
+use crate::types::discovery::{GatewayAddress, NamespacedHostname, NetworkAddress, Service};
 use crate::*;
 
 fn run_test(req: &Request, routes: &[(&str, Vec<&str>, Vec<RouteMatch>)]) -> Option<String> {
 	let stores = Stores::with_ipv6_enabled(true);
-	let network = strng::literal!("network");
 	let dummy_dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1000);
 
-	let listener = setup_listener(routes);
+	let (listener, routes) = setup_listener(routes);
+	for route in routes {
+		stores
+			.binds
+			.write()
+			.insert_route(route, listener.key.clone());
+	}
 
-	let result = super::select_best_route(
-		stores.clone(),
-		network.clone(),
-		None,
-		dummy_dest,
-		&listener,
-		req,
-	);
+	let result = super::select_best_route(stores.clone(), dummy_dest, &listener, req);
 	result.map(|(r, _)| r.key.to_string())
 }
 
-fn setup_listener(routes: &[(&str, Vec<&str>, Vec<RouteMatch>)]) -> Arc<Listener> {
+fn setup_listener(routes: &[(&str, Vec<&str>, Vec<RouteMatch>)]) -> (Arc<Listener>, Vec<Route>) {
 	let mk_route = |name: &str, hostnames: Vec<&str>, matches: Vec<RouteMatch>| Route {
 		key: name.into(),
+		service_key: None,
+		service_port: 0,
 		hostnames: hostnames.into_iter().map(|s| s.into()).collect(),
 		matches,
 		name: Default::default(),
@@ -42,22 +45,30 @@ fn setup_listener(routes: &[(&str, Vec<&str>, Vec<RouteMatch>)]) -> Arc<Listener
 		inline_policies: vec![],
 	};
 
-	Arc::new(Listener {
-		key: Default::default(),
-		name: Default::default(),
-		hostname: Default::default(),
-		protocol: ListenerProtocol::HTTP,
-		tcp_routes: Default::default(),
-		routes: RouteSet::from_list(
-			routes
-				.iter()
-				.map(|r| {
-					let r = r.clone();
-					mk_route(r.0, r.1, r.2)
-				})
-				.collect(),
-		),
-	})
+	(
+		Arc::new(Listener {
+			key: Default::default(),
+			name: Default::default(),
+			hostname: Default::default(),
+			protocol: ListenerProtocol::HTTP,
+		}),
+		routes
+			.iter()
+			.map(|r| {
+				let r = r.clone();
+				mk_route(r.0, r.1, r.2)
+			})
+			.collect(),
+	)
+}
+
+fn attach_waypoint_service(req: &mut Request, stores: &Stores, service_key: &NamespacedHostname) {
+	let svc = stores
+		.read_discovery()
+		.services
+		.get_by_namespaced_host(service_key)
+		.expect("test service must exist in discovery store");
+	req.extensions_mut().insert(proxy::WaypointService(svc));
 }
 
 #[test]
@@ -154,7 +165,7 @@ fn test_path_matching() {
 		("prefix-path", PathMatch::PathPrefix("/api/".into())),
 		(
 			"regex-path",
-			PathMatch::Regex(Regex::new(r"^/api/v\d+/users$").unwrap(), 18),
+			PathMatch::Regex(Regex::new(r"^/api/v\d+/users$").unwrap()),
 		),
 		("root-prefix", PathMatch::PathPrefix("/".into())),
 	];
@@ -187,6 +198,26 @@ fn test_path_matching() {
 		TestCase {
 			name: "prefix path match with subpath",
 			path: "/api/v1/users/123",
+			expected_route: Some("prefix-path"),
+		},
+		TestCase {
+			name: "prefix path exact segment match without trailing slash",
+			path: "/api",
+			expected_route: Some("prefix-path"),
+		},
+		TestCase {
+			name: "prefix path does not match partial segment",
+			path: "/apiary",
+			expected_route: Some("root-prefix"),
+		},
+		TestCase {
+			name: "prefix path does not match encoded slash as segment boundary",
+			path: "/api%2Fv1",
+			expected_route: Some("root-prefix"),
+		},
+		TestCase {
+			name: "prefix path matches raw double slash segment",
+			path: "/api//v1",
 			expected_route: Some("prefix-path"),
 		},
 		// Test regex path matching
@@ -820,6 +851,598 @@ fn test_route_precedence() {
 	}
 }
 
+// Helper to create a Stores with pre-populated discovery services.
+fn stores_with_services(services: Vec<Service>) -> Stores {
+	let mut discovery_store = crate::store::DiscoveryStore::new();
+	for svc in services {
+		discovery_store.insert_service_internal(svc);
+	}
+	Stores {
+		discovery: crate::store::DiscoveryStoreUpdater::new(Arc::new(RwLock::new(discovery_store))),
+		binds: crate::store::BindStoreUpdater::new(Arc::new(RwLock::new(
+			crate::store::BindStore::with_ipv6_enabled(true),
+		))),
+	}
+}
+
+fn hbone_listener() -> Arc<Listener> {
+	Arc::new(Listener {
+		key: Default::default(),
+		name: Default::default(),
+		hostname: Default::default(),
+		protocol: ListenerProtocol::HBONE,
+	})
+}
+
+fn make_service(
+	name: &str,
+	namespace: &str,
+	hostname: &str,
+	vip: &str,
+	network: &str,
+	waypoint: Option<GatewayAddress>,
+) -> Service {
+	Service {
+		name: strng::new(name),
+		namespace: strng::new(namespace),
+		hostname: strng::new(hostname),
+		vips: vec![NetworkAddress {
+			network: strng::new(network),
+			address: vip.parse().unwrap(),
+		}],
+		ports: std::collections::HashMap::from([(80, 8080)]),
+		waypoint,
+		..Default::default()
+	}
+}
+
+#[tokio::test]
+async fn test_waypoint_hostname_match() {
+	// Service whose waypoint destination is a Hostname matching our identity
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Hostname(NamespacedHostname {
+				namespace: strng::new("istio-system"),
+				hostname: strng::new("my-waypoint.istio-system.svc.cluster.local"),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	let stores = stores_with_services(vec![svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(result.is_some(), "should return default waypoint route");
+	let (route, _) = result.unwrap();
+	assert_eq!(route.key.as_str(), "_waypoint-default");
+}
+
+#[tokio::test]
+async fn test_waypoint_hostname_mismatch() {
+	// Service whose waypoint points to a different gateway
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Hostname(NamespacedHostname {
+				namespace: strng::new("istio-system"),
+				hostname: strng::new("other-waypoint.istio-system.svc.cluster.local"),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	let stores = stores_with_services(vec![svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"should reject service bound to a different waypoint"
+	);
+}
+
+#[tokio::test]
+async fn test_waypoint_hostname_fqdn_match() {
+	// Service whose waypoint hostname is a FQDN in a different namespace
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Hostname(NamespacedHostname {
+				namespace: strng::new("istio-system"),
+				hostname: strng::new("my-waypoint.istio-system.svc.cluster.local"),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	let stores = stores_with_services(vec![svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(result.is_some(), "should match waypoint with FQDN hostname");
+}
+
+#[tokio::test]
+async fn test_waypoint_address_match() {
+	// Service whose waypoint destination is an Address matching our VIP
+	let waypoint_vip = "10.0.1.1";
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Address(NetworkAddress {
+				network: strng::new("network"),
+				address: waypoint_vip.parse().unwrap(),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	// Also add the waypoint's own service so it can look up its VIPs
+	let waypoint_svc = make_service(
+		"my-waypoint",
+		"istio-system",
+		"my-waypoint.istio-system.svc.cluster.local",
+		waypoint_vip,
+		"network",
+		None,
+	);
+	let stores = stores_with_services(vec![svc, waypoint_svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(result.is_some(), "should match waypoint by address VIP");
+	let (route, _) = result.unwrap();
+	assert_eq!(route.key.as_str(), "_waypoint-default");
+}
+
+#[tokio::test]
+async fn test_waypoint_address_mismatch() {
+	// Service whose waypoint destination address doesn't match our VIP
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Address(NetworkAddress {
+				network: strng::new("network"),
+				address: "10.0.1.99".parse().unwrap(), // different from our VIP
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	// Our waypoint service with a different VIP
+	let waypoint_svc = make_service(
+		"my-waypoint",
+		"istio-system",
+		"my-waypoint.istio-system.svc.cluster.local",
+		"10.0.1.1",
+		"network",
+		None,
+	);
+	let stores = stores_with_services(vec![svc, waypoint_svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"should reject service bound to a different waypoint address"
+	);
+}
+
+#[tokio::test]
+async fn test_waypoint_no_waypoint_on_service() {
+	// Service with no waypoint assignment
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		None, // no waypoint
+	);
+	let stores = stores_with_services(vec![svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"should return None for service without waypoint"
+	);
+}
+
+#[tokio::test]
+async fn test_waypoint_no_self_addr() {
+	// HBONE listener without self_addr configured
+	let svc = make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Hostname(NamespacedHostname {
+				namespace: strng::new("istio-system"),
+				hostname: strng::new("my-waypoint.istio-system.svc.cluster.local"),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	);
+	let stores = stores_with_services(vec![svc]);
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+	let req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	let listener = hbone_listener();
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"should return None when self_addr is not configured"
+	);
+}
+
+#[tokio::test]
+async fn test_waypoint_unknown_vip() {
+	// Request to a VIP that doesn't match any known service
+	let stores = stores_with_services(vec![]);
+	let dst = SocketAddr::new("10.0.0.200".parse().unwrap(), 80);
+	let req = request("http://unknown.svc.cluster.local/", http::Method::GET, &[]);
+	let listener = hbone_listener();
+
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(result.is_none(), "should return None for unknown VIP");
+}
+
+/// Create stores with a service and optionally insert service-keyed routes into the bind store.
+fn stores_with_service_routes(svc: Service, routes: Vec<Route>) -> Stores {
+	let stores = stores_with_services(vec![svc]);
+	{
+		let mut binds = stores.binds.write();
+		for r in routes {
+			let sk = r
+				.service_key
+				.clone()
+				.expect("test routes must have service_key");
+			binds.insert_service_route(r, sk);
+		}
+	}
+	stores
+}
+
+fn service_route(key: &str, service_key: NamespacedHostname, matches: Vec<RouteMatch>) -> Route {
+	Route {
+		key: strng::new(key),
+		service_key: Some(service_key),
+		service_port: 0,
+		name: Default::default(),
+		hostnames: vec![], // GAMMA: hostname matching skipped for service routes
+		matches,
+		backends: vec![],
+		inline_policies: vec![],
+	}
+}
+
+fn service_route_port(
+	key: &str,
+	service_key: NamespacedHostname,
+	service_port: u16,
+	matches: Vec<RouteMatch>,
+) -> Route {
+	Route {
+		service_port,
+		..service_route(key, service_key, matches)
+	}
+}
+
+fn prefix_match(prefix: &str) -> Vec<RouteMatch> {
+	vec![RouteMatch {
+		path: PathMatch::PathPrefix(strng::new(prefix)),
+		headers: vec![],
+		method: None,
+		query: vec![],
+	}]
+}
+
+fn svc_nh() -> NamespacedHostname {
+	NamespacedHostname {
+		namespace: strng::new("default"),
+		hostname: strng::new("my-app.default.svc.cluster.local"),
+	}
+}
+
+fn waypoint_svc() -> Service {
+	make_service(
+		"my-app",
+		"default",
+		"my-app.default.svc.cluster.local",
+		"10.0.0.100",
+		"network",
+		Some(GatewayAddress {
+			destination: Destination::Hostname(NamespacedHostname {
+				namespace: strng::new("istio-system"),
+				hostname: strng::new("my-waypoint.istio-system.svc.cluster.local"),
+			}),
+			hbone_mtls_port: 15008,
+		}),
+	)
+}
+
+#[tokio::test]
+async fn test_service_route_path_match() {
+	let stores = stores_with_service_routes(
+		waypoint_svc(),
+		vec![
+			service_route(
+				"api-route",
+				svc_nh(),
+				vec![RouteMatch {
+					path: PathMatch::PathPrefix(strng::new("/api")),
+					headers: vec![],
+					method: None,
+					query: vec![],
+				}],
+			),
+			service_route(
+				"health-route",
+				svc_nh(),
+				vec![RouteMatch {
+					path: PathMatch::Exact(strng::new("/healthz")),
+					headers: vec![],
+					method: None,
+					query: vec![],
+				}],
+			),
+		],
+	);
+	let listener = hbone_listener();
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+
+	// /api/v1 matches the prefix route
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/api/v1",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert_eq!(result.unwrap().0.key.as_str(), "api-route");
+
+	// /healthz matches the exact route (higher priority than prefix)
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/healthz",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert_eq!(result.unwrap().0.key.as_str(), "health-route");
+}
+
+#[tokio::test]
+async fn test_service_route_port_no_wildcard_rejects() {
+	let stores = stores_with_service_routes(
+		waypoint_svc(),
+		vec![service_route_port(
+			"port-80-route",
+			svc_nh(),
+			80,
+			prefix_match("/"),
+		)],
+	);
+	let listener = hbone_listener();
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 443);
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"service routes exist but none match port 443 -> reject"
+	);
+}
+
+#[tokio::test]
+async fn test_service_route_method_match() {
+	let stores = stores_with_service_routes(
+		waypoint_svc(),
+		vec![
+			service_route(
+				"get-route",
+				svc_nh(),
+				vec![RouteMatch {
+					path: PathMatch::PathPrefix(strng::new("/")),
+					headers: vec![],
+					method: Some(MethodMatch {
+						method: strng::new("GET"),
+					}),
+					query: vec![],
+				}],
+			),
+			service_route(
+				"post-route",
+				svc_nh(),
+				vec![RouteMatch {
+					path: PathMatch::PathPrefix(strng::new("/")),
+					headers: vec![],
+					method: Some(MethodMatch {
+						method: strng::new("POST"),
+					}),
+					query: vec![],
+				}],
+			),
+		],
+	);
+	let listener = hbone_listener();
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::POST,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert_eq!(result.unwrap().0.key.as_str(), "post-route");
+}
+
+#[tokio::test]
+async fn test_service_route_header_match() {
+	let stores = stores_with_service_routes(
+		waypoint_svc(),
+		vec![service_route(
+			"header-route",
+			svc_nh(),
+			vec![RouteMatch {
+				path: PathMatch::PathPrefix(strng::new("/")),
+				headers: vec![HeaderMatch {
+					name: crate::http::HeaderOrPseudo::Header(http::HeaderName::from_static("x-custom")),
+					value: HeaderValueMatch::Exact(http::HeaderValue::from_static("special")),
+				}],
+				method: None,
+				query: vec![],
+			}],
+		)],
+	);
+	let listener = hbone_listener();
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+
+	// With matching header -> matches
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[("x-custom", "special")],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert_eq!(result.unwrap().0.key.as_str(), "header-route");
+
+	// Without matching header -> GAMMA reject (service routes exist, none match)
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"should reject when service routes exist but none match"
+	);
+}
+
+#[tokio::test]
+async fn test_service_route_rejects_unmatched() {
+	// GAMMA: if service routes exist but request doesn't match any, reject
+	let stores = stores_with_service_routes(
+		waypoint_svc(),
+		vec![service_route(
+			"only-api",
+			svc_nh(),
+			vec![RouteMatch {
+				path: PathMatch::PathPrefix(strng::new("/api")),
+				headers: vec![],
+				method: None,
+				query: vec![],
+			}],
+		)],
+	);
+	let listener = hbone_listener();
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/other",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores.clone(), dst, &listener, &req);
+	assert!(
+		result.is_none(),
+		"GAMMA: should reject when service routes exist but none match"
+	);
+}
+
+#[tokio::test]
+async fn test_no_service_routes_falls_through_to_default() {
+	// No service-keyed routes -> default passthrough route
+	let stores = stores_with_services(vec![waypoint_svc()]);
+	let listener = hbone_listener();
+	let dst = SocketAddr::new("10.0.0.100".parse().unwrap(), 80);
+
+	let mut req = request(
+		"http://my-app.default.svc.cluster.local/anything",
+		http::Method::GET,
+		&[],
+	);
+	attach_waypoint_service(&mut req, &stores, &svc_nh());
+	let result = super::select_best_route(stores, dst, &listener, &req);
+	assert!(
+		result.is_some(),
+		"should fall through to default route when no service routes"
+	);
+	assert_eq!(result.unwrap().0.key.as_str(), "_waypoint-default");
+}
+
 #[divan::bench(args = [(1,1), (100, 100), (5000,100)])]
 fn bench(b: Bencher, (host, route): (u64, u64)) {
 	let mut routes = vec![];
@@ -844,31 +1467,29 @@ fn bench(b: Bencher, (host, route): (u64, u64)) {
 		name: Default::default(),
 		hostname: Default::default(),
 		protocol: ListenerProtocol::HTTP,
-		tcp_routes: Default::default(),
-		routes: RouteSet::from_list(
-			routes
-				.into_iter()
-				.map(|(name, host, matches)| Route {
-					key: name.into(),
-					name: Default::default(),
-					hostnames: host.into_iter().map(|s| s.into()).collect(),
-					matches,
-					backends: vec![],
-					inline_policies: vec![],
-				})
-				.collect(),
-		),
 	});
 	let stores = Stores::with_ipv6_enabled(true);
-	let network = strng::literal!("network");
+	for route in routes.into_iter().map(|(name, host, matches)| Route {
+		key: name.into(),
+		service_key: None,
+		service_port: 0,
+		name: Default::default(),
+		hostnames: host.into_iter().map(|s| s.into()).collect(),
+		matches,
+		backends: vec![],
+		inline_policies: vec![],
+	}) {
+		stores
+			.binds
+			.write()
+			.insert_route(route, listener.key.clone());
+	}
 	let dummy_dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1000);
 	let req = request("http://example.com", http::Method::GET, &[]);
 
 	b.bench_local(|| {
 		divan::black_box(super::select_best_route(
 			stores.clone(),
-			network.clone(),
-			None,
 			dummy_dest,
 			&listener,
 			divan::black_box(&req),

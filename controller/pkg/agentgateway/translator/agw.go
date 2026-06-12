@@ -67,13 +67,17 @@ func CreateAgwPathMatch(match gwv1.HTTPRouteMatch) (*api.PathMatch, *reporter.Ro
 	if match.Path.Type != nil {
 		tp = *match.Path.Type
 	}
-	// Path value must start with "/". If empty/nil, coerce to "/".
+	// For non-regex path match types, ensure the path starts with "/".
+	// If the value is empty or nil, default to "/".
+	// RegularExpression paths are not modified to support full regex patterns (e.g. "^/.*$").
 	dest := "/"
 	if match.Path.Value != nil && *match.Path.Value != "" {
 		dest = *match.Path.Value
 	}
-	if !strings.HasPrefix(dest, "/") {
-		dest = "/" + dest
+	if tp != gwv1.PathMatchRegularExpression {
+		if !strings.HasPrefix(dest, "/") {
+			dest = "/" + dest
+		}
 	}
 	switch tp {
 	case gwv1.PathMatchPathPrefix:
@@ -218,7 +222,7 @@ func CreateAgwMirrorFilter(
 			BackendObjectReference: filter.BackendRef,
 			Weight:                 &weightOne,
 		},
-	}, ns, k, ctx.Backends)
+	}, ns, k)
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +260,9 @@ func CreateAgwExternalAuthFilter(
 	dst, err := buildAgwDestination(ctx, gwv1.HTTPBackendRef{
 		BackendRef: gwv1.BackendRef{
 			BackendObjectReference: filter.BackendRef,
-			Weight:                 ptr.Of(int32(1)),
+			Weight:                 new(int32(1)),
 		},
-	}, ns, k, ctx.Backends)
+	}, ns, k)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +294,7 @@ func CreateAgwExternalAuthFilter(
 			if !strings.HasPrefix(path, "/") {
 				path = "/" + path
 			}
-			pp.Path = ptr.Of(fmt.Sprintf("%q + request.path", path))
+			pp.Path = new(fmt.Sprintf("%q + request.path", path))
 		}
 		// Per spec, this must always be included
 		pol.IncludeRequestHeaders = []string{
@@ -545,7 +549,7 @@ func buildAgwGRPCDestination(
 			Group:   "gateway.networking.k8s.io",
 			Version: "v1",
 			Kind:    "GRPCRoute",
-		}, ctx.Backends)
+		})
 		if err != nil {
 			logger.Error("error building agent gateway destination", "error", err)
 			if isInvalidBackend(err) {

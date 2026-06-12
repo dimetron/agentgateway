@@ -20,7 +20,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
-	"github.com/agentgateway/agentgateway/controller/pkg/kgateway/wellknown"
+	"github.com/agentgateway/agentgateway/controller/pkg/wellknown"
 )
 
 var AllCRDs = []schema.GroupVersionResource{
@@ -33,7 +33,7 @@ var AllCRDs = []schema.GroupVersionResource{
 	gvr.TLSRoute,
 	gvr.ReferenceGrant,
 	gvr.BackendTLSPolicy,
-	gvr.XListenerSet,
+	gvr.ListenerSet,
 	wellknown.InferencePoolGVR,
 	wellknown.BackendTLSPolicyGVR,
 	// K8s API
@@ -53,21 +53,9 @@ const (
 	AgwCRDPath = "install/helm/agentgateway-crds/templates"
 )
 
-// GetStructuralSchemas returns a map of GroupVersionKind to Structural schemas for all CRDs in the given directories.
-// Deprecated: Use GetStructuralSchemasForBothCharts instead to load both kgateway and agentgateway CRDs.
-func GetStructuralSchemas(
-	crdDir string,
-) (map[schema.GroupVersionKind]*apiserverschema.Structural, error) {
-	crds, err := getCRDs(crdDir)
-	if err != nil {
-		return nil, err
-	}
-	return buildStructuralSchemaMap(crds)
-}
-
-// GetStructuralSchemasForBothCharts returns a map of GroupVersionKind to Structural schemas for all CRDs
-// from both kgateway-crds and agentgateway-crds charts.
-func GetStructuralSchemasForBothCharts() (map[schema.GroupVersionKind]*apiserverschema.Structural, error) {
+// GetStructuralSchemasForAgentgatewayCRDChart returns a map of GroupVersionKind to Structural schemas
+// for the CRDs bundled with the agentgateway CRD chart.
+func GetStructuralSchemasForAgentgatewayCRDChart() (map[schema.GroupVersionKind]*apiserverschema.Structural, error) {
 	gitRoot := ControllerRootDirectory()
 	agwCRDDir := filepath.Join(gitRoot, AgwCRDPath)
 

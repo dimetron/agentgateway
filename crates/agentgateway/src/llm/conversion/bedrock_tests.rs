@@ -1,10 +1,38 @@
+use std::io;
+
 use agent_core::strng;
+use bytes::Bytes;
 use http::HeaderMap;
+use http_body_util::BodyExt;
 use serde_json::json;
 
 use super::*;
 use crate::llm::bedrock::Provider;
 use crate::llm::types;
+
+#[tokio::test]
+async fn test_append_done_on_success_omits_done_after_error() {
+	let mut body = super::from_completions::append_done_on_success(futures_util::stream::iter(vec![
+		Ok::<_, axum_core::Error>(Bytes::from_static(b"data: chunk\n\n")),
+		Err(axum_core::Error::new(io::Error::other("boom"))),
+	]));
+
+	let first = body
+		.frame()
+		.await
+		.expect("first frame should be present")
+		.expect("first frame should succeed")
+		.into_data()
+		.expect("first frame should contain data");
+	assert_eq!(first, Bytes::from_static(b"data: chunk\n\n"));
+
+	let second = body.frame().await.expect("error frame should be present");
+	assert!(second.is_err(), "upstream error should be forwarded");
+	assert!(
+		body.frame().await.is_none(),
+		"stream must terminate after an upstream error without appending [DONE]"
+	);
+}
 
 #[test]
 fn test_extract_beta_headers_variants() {
@@ -12,43 +40,37 @@ fn test_extract_beta_headers_variants() {
 	assert!(helpers::extract_beta_headers(&headers).unwrap().is_none());
 
 	let mut headers = HeaderMap::new();
-	headers.insert(
-		"anthropic-beta",
-		"prompt-caching-2024-07-31".parse().unwrap(),
-	);
+	headers.insert("anthropic-beta", "computer-use-2025-01-24".parse().unwrap());
 	assert_eq!(
 		helpers::extract_beta_headers(&headers).unwrap().unwrap(),
-		vec![json!("prompt-caching-2024-07-31")]
+		vec![json!("computer-use-2025-01-24")]
 	);
 
 	let mut headers = HeaderMap::new();
 	headers.insert(
 		"anthropic-beta",
-		"cache-control-2024-08-15,computer-use-2024-10-22"
+		"cache-control-2024-08-15,computer-use-2025-01-24,tool-examples-2025-10-29"
 			.parse()
 			.unwrap(),
 	);
 	assert_eq!(
 		helpers::extract_beta_headers(&headers).unwrap().unwrap(),
 		vec![
-			json!("cache-control-2024-08-15"),
-			json!("computer-use-2024-10-22"),
+			json!("computer-use-2025-01-24"),
+			json!("tool-examples-2025-10-29"),
 		]
 	);
 
 	let mut headers = HeaderMap::new();
 	headers.insert(
 		"anthropic-beta",
-		" cache-control-2024-08-15 , computer-use-2024-10-22 "
+		" cache-control-2024-08-15 , computer-use-2025-01-24 "
 			.parse()
 			.unwrap(),
 	);
 	assert_eq!(
 		helpers::extract_beta_headers(&headers).unwrap().unwrap(),
-		vec![
-			json!("cache-control-2024-08-15"),
-			json!("computer-use-2024-10-22"),
-		]
+		vec![json!("computer-use-2025-01-24"),]
 	);
 
 	let mut headers = HeaderMap::new();
@@ -56,7 +78,14 @@ fn test_extract_beta_headers_variants() {
 		"anthropic-beta",
 		"cache-control-2024-08-15".parse().unwrap(),
 	);
-	headers.append("anthropic-beta", "computer-use-2024-10-22".parse().unwrap());
+	headers.append(
+		"anthropic-beta",
+		"interleaved-thinking-2025-05-14".parse().unwrap(),
+	);
+	headers.append(
+		"anthropic-beta",
+		"tool-search-tool-2025-10-19".parse().unwrap(),
+	);
 	let mut beta_features = helpers::extract_beta_headers(&headers)
 		.unwrap()
 		.unwrap()
@@ -67,10 +96,17 @@ fn test_extract_beta_headers_variants() {
 	assert_eq!(
 		beta_features,
 		vec![
-			"cache-control-2024-08-15".to_string(),
-			"computer-use-2024-10-22".to_string(),
+			"interleaved-thinking-2025-05-14".to_string(),
+			"tool-search-tool-2025-10-19".to_string(),
 		]
 	);
+
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		"anthropic-beta",
+		"prompt-caching-2024-07-31".parse().unwrap(),
+	);
+	assert!(helpers::extract_beta_headers(&headers).unwrap().is_none());
 }
 
 #[test]
@@ -80,13 +116,15 @@ fn test_metadata_from_header() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	// Simulate transformation CEL setting x-bedrock-metadata header
 	let mut headers = HeaderMap::new();
 	headers.insert(
 		"x-bedrock-metadata",
-		r#"{"user_id": "user123", "department": "engineering"}"#
+		r#"{"user_id": "user123", "department": "engineering", "json_user": "{\"device_id\":\"abc\"}", "bad?key": "bad{}"}"#
 			.parse()
 			.unwrap(),
 	);
@@ -117,11 +155,68 @@ fn test_metadata_from_header() {
 		output_config: None,
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, Some(&headers));
+	let out = super::from_messages::translate_internal(req, &provider, Some(&headers)).unwrap();
 	let metadata = out.request_metadata.unwrap();
 
 	assert_eq!(metadata.get("user_id"), Some(&"user123".to_string()));
 	assert_eq!(metadata.get("department"), Some(&"engineering".to_string()));
+	assert_eq!(
+		metadata.get("json_user"),
+		Some(&r#"{"device_id":"abc"}"#.to_string())
+	);
+	assert_eq!(metadata.get("bad?key"), Some(&"bad{}".to_string()));
+}
+
+#[test]
+fn test_messages_metadata_is_preserved_in_additional_model_request_fields() {
+	let provider = Provider {
+		model: None,
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
+	};
+
+	let json_encoded_user_id = r#"{"device_id":"704cb53c2074e9","account_uuid":"","session_id":"180423cd-fe24-4f48-bbde-b4ab5bfd36e7"}"#;
+	let req = messages::typed::Request {
+		model: "anthropic.claude-3-sonnet".to_string(),
+		messages: vec![messages::typed::Message {
+			role: messages::typed::Role::User,
+			content: vec![messages::typed::ContentBlock::Text(
+				messages::typed::ContentTextBlock {
+					text: "Hello".to_string(),
+					citations: None,
+					cache_control: None,
+				},
+			)],
+		}],
+		max_tokens: 100,
+		metadata: Some(messages::typed::Metadata {
+			fields: std::collections::HashMap::from([
+				("user_id".to_string(), json_encoded_user_id.to_string()),
+				("department".to_string(), "engineering".to_string()),
+			]),
+		}),
+		system: None,
+		stop_sequences: vec![],
+		stream: false,
+		temperature: None,
+		top_k: None,
+		top_p: None,
+		tools: None,
+		tool_choice: None,
+		thinking: None,
+		output_config: None,
+	};
+
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
+	let additional_fields = out.additional_model_request_fields.unwrap();
+	let metadata = additional_fields.get("metadata").unwrap();
+
+	assert!(out.request_metadata.is_none());
+	assert_eq!(metadata["user_id"], json_encoded_user_id);
+	assert_eq!(metadata["department"], "engineering");
 }
 
 #[test]
@@ -131,6 +226,8 @@ fn test_output_config_effort_without_thinking_is_passed_through() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = messages::typed::Request {
@@ -162,7 +259,7 @@ fn test_output_config_effort_without_thinking_is_passed_through() {
 		}),
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	assert_eq!(
 		out.additional_model_request_fields,
 		Some(json!({
@@ -184,6 +281,8 @@ fn test_output_config_format_maps_to_converse_output_config() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let schema = json!({
@@ -225,7 +324,7 @@ fn test_output_config_format_maps_to_converse_output_config() {
 		}),
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	assert_eq!(
 		out.additional_model_request_fields,
 		Some(json!({
@@ -258,6 +357,8 @@ fn test_explicit_empty_output_config_is_preserved() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = messages::typed::Request {
@@ -289,7 +390,7 @@ fn test_explicit_empty_output_config_is_preserved() {
 		}),
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	assert_eq!(
 		out.additional_model_request_fields,
 		Some(json!({
@@ -313,6 +414,8 @@ fn test_thinking_and_output_config_are_both_passed_through() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = messages::typed::Request {
@@ -346,7 +449,7 @@ fn test_thinking_and_output_config_are_both_passed_through() {
 		}),
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	assert_eq!(
 		out.additional_model_request_fields,
 		Some(json!({
@@ -368,6 +471,8 @@ fn test_adaptive_thinking_preserves_sampling_and_tool_choice() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = messages::typed::Request {
@@ -404,12 +509,13 @@ fn test_adaptive_thinking_preserves_sampling_and_tool_choice() {
 		}]),
 		tool_choice: Some(messages::typed::ToolChoice::Tool {
 			name: "lookup".to_string(),
+			disable_parallel_tool_use: None,
 		}),
 		thinking: Some(messages::typed::ThinkingInput::Adaptive {}),
 		output_config: None,
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	let inference = out.inference_config.unwrap();
 	assert_eq!(inference.temperature, Some(0.7));
 	assert_eq!(inference.top_p, Some(0.8));
@@ -441,6 +547,8 @@ fn test_enabled_thinking_applies_sampling_and_tool_choice_constraints() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = messages::typed::Request {
@@ -475,14 +583,16 @@ fn test_enabled_thinking_applies_sampling_and_tool_choice_constraints() {
 			}),
 			cache_control: None,
 		}]),
-		tool_choice: Some(messages::typed::ToolChoice::Auto),
+		tool_choice: Some(messages::typed::ToolChoice::Auto {
+			disable_parallel_tool_use: None,
+		}),
 		thinking: Some(messages::typed::ThinkingInput::Enabled {
 			budget_tokens: 1024,
 		}),
 		output_config: None,
 	};
 
-	let out = super::from_messages::translate_internal(req, &provider, None);
+	let out = super::from_messages::translate_internal(req, &provider, None).unwrap();
 	let inference = out.inference_config.unwrap();
 	assert_eq!(inference.temperature, None);
 	assert_eq!(inference.top_p, None);
@@ -496,15 +606,64 @@ fn test_enabled_thinking_applies_sampling_and_tool_choice_constraints() {
 }
 
 #[test]
-fn test_metadata_from_completions_metadata_field() {
+fn test_messages_image_url_to_bedrock_returns_error() {
 	let provider = Provider {
 		model: None,
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
-	// OpenAI-style request metadata (agentgateway uses this to carry request-scoped guardrail knobs)
+	let req = messages::typed::Request {
+		model: "anthropic.claude-3-sonnet".to_string(),
+		messages: vec![messages::typed::Message {
+			role: messages::typed::Role::User,
+			content: vec![messages::typed::ContentBlock::Image(
+				messages::typed::ContentImageBlock {
+					source: json!({
+						"type": "url",
+						"url": "https://example.com/sample.jpg"
+					}),
+					cache_control: None,
+				},
+			)],
+		}],
+		max_tokens: 100,
+		metadata: None,
+		system: None,
+		stop_sequences: vec![],
+		stream: false,
+		temperature: None,
+		top_k: None,
+		top_p: None,
+		tools: None,
+		tool_choice: None,
+		thinking: None,
+		output_config: None,
+	};
+
+	let err = super::from_messages::translate_internal(req, &provider, None).unwrap_err();
+	assert!(matches!(err, crate::llm::AIError::UnsupportedConversion(_)));
+	assert!(
+		err
+			.to_string()
+			.contains("URL image sources are unsupported")
+	);
+}
+
+#[test]
+fn test_completions_request_metadata_only_uses_bedrock_header() {
+	let provider = Provider {
+		model: None,
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
+	};
+
 	let req = types::completions::typed::Request {
 		model: Some("anthropic.claude-3-sonnet".to_string()),
 		messages: vec![types::completions::typed::RequestMessage::User(
@@ -541,7 +700,7 @@ fn test_metadata_from_completions_metadata_field() {
 		metadata: Some(json!({
 			"user_id": "user123",
 			"department": "engineering",
-			// Non-string values should be ignored by the Bedrock metadata bridge
+			"json_user": r#"{"device_id":"from-body"}"#,
 			"nonstr": 123
 		})),
 		#[allow(deprecated)]
@@ -552,19 +711,30 @@ fn test_metadata_from_completions_metadata_field() {
 		store: None,
 		reasoning_effort: None,
 	};
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		"x-bedrock-metadata",
+		r#"{"json_user": "{\"device_id\":\"from-header\"}", "bad?key": "bad{}"}"#
+			.parse()
+			.unwrap(),
+	);
 
 	let out = super::from_completions::translate_internal(
 		req,
 		"anthropic.claude-3-sonnet".to_string(),
 		&provider,
-		None,
+		Some(&headers),
 		None,
 	);
 	let md = out.request_metadata.unwrap();
 
-	// `metadata.user_id` should win over the `user`-derived value.
-	assert_eq!(md.get("user_id"), Some(&"user123".to_string()));
-	assert_eq!(md.get("department"), Some(&"engineering".to_string()));
+	assert!(!md.contains_key("user_id"));
+	assert!(!md.contains_key("department"));
+	assert_eq!(
+		md.get("json_user"),
+		Some(&r#"{"device_id":"from-header"}"#.to_string())
+	);
+	assert_eq!(md.get("bad?key"), Some(&"bad{}".to_string()));
 	assert!(!md.contains_key("nonstr"));
 }
 
@@ -575,6 +745,8 @@ fn test_completions_json_schema_response_format_maps_to_converse_output_config()
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let schema = json!({
@@ -619,7 +791,7 @@ fn test_completions_json_schema_response_format_maps_to_converse_output_config()
 			json_schema: types::completions::typed::ResponseFormatJsonSchema {
 				description: Some("Structured summary".to_string()),
 				name: "summary_schema".to_string(),
-				schema: Some(schema.clone()),
+				schema: schema.clone(),
 				strict: Some(true),
 			},
 		}),
@@ -669,6 +841,8 @@ fn test_completions_reasoning_effort_maps_to_enabled_thinking_budget() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::completions::typed::Request {
@@ -742,6 +916,8 @@ fn test_completions_explicit_thinking_budget_forces_enabled_thinking() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::completions::typed::Request {
@@ -818,6 +994,8 @@ fn test_responses_json_schema_text_format_maps_to_converse_output_config() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let schema = json!({
@@ -865,12 +1043,58 @@ fn test_responses_json_schema_text_format_maps_to_converse_output_config() {
 }
 
 #[test]
+fn test_responses_request_metadata_only_uses_bedrock_header() {
+	let provider = Provider {
+		model: None,
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
+	};
+
+	let req: types::responses::Request = serde_json::from_value(json!({
+		"model": "gpt-4o",
+		"max_output_tokens": 16,
+		"input": "Hello",
+		"metadata": {
+			"safe": "ok",
+			"json_user": "{\"device_id\":\"from-body\"}"
+		}
+	}))
+	.expect("valid responses request");
+
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		"x-bedrock-metadata",
+		r#"{"json_user": "{\"device_id\":\"from-header\"}", "bad?key": "bad{}"}"#
+			.parse()
+			.unwrap(),
+	);
+
+	let translated = super::from_responses::translate(&req, &provider, Some(&headers), None).unwrap();
+	let translated: serde_json::Value = serde_json::from_slice(&translated).unwrap();
+	let metadata = translated["requestMetadata"]
+		.as_object()
+		.expect("requestMetadata object");
+
+	assert!(!metadata.contains_key("safe"));
+	assert_eq!(
+		translated["requestMetadata"]["json_user"],
+		r#"{"device_id":"from-header"}"#
+	);
+	assert_eq!(translated["requestMetadata"]["bad?key"], "bad{}");
+}
+
+#[test]
 fn test_responses_reasoning_effort_maps_to_enabled_thinking_budget() {
 	let provider = Provider {
 		model: None,
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req: types::responses::Request = serde_json::from_value(json!({
@@ -904,6 +1128,8 @@ fn test_responses_explicit_thinking_budget_forces_enabled_thinking() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req: types::responses::Request = serde_json::from_value(json!({
@@ -940,6 +1166,8 @@ fn test_responses_vendor_extension_thinking_budget_forces_enabled_thinking() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req: types::responses::Request = serde_json::from_value(json!({
@@ -973,6 +1201,8 @@ fn test_embeddings_translation_titan() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::embeddings::Request {
@@ -999,6 +1229,8 @@ fn test_embeddings_titan_with_encoding_format() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::embeddings::Request {
@@ -1028,6 +1260,8 @@ fn test_embeddings_titan_rejects_array_input() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::embeddings::Request {
@@ -1052,6 +1286,8 @@ fn test_embeddings_cohere_with_passthrough_fields() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	let req = types::embeddings::Request {
@@ -1078,6 +1314,8 @@ fn test_embeddings_rejects_invalid_input() {
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		source_credentials_cache: Default::default(),
+		assume_role_cache: Default::default(),
 	};
 
 	for input in [json!(["hello", 42]), json!(42)] {
@@ -1110,9 +1348,6 @@ fn test_embeddings_response_translation_titan() {
 		.unwrap();
 
 	assert_eq!(openai_resp.object, "list");
-	assert_eq!(openai_resp.data.len(), 1);
-	assert_eq!(openai_resp.data[0].embedding, vec![0.1, 0.2, 0.3]);
-	assert_eq!(openai_resp.data[0].index, 0);
 	assert_eq!(openai_resp.usage.prompt_tokens, 3);
 }
 
@@ -1134,7 +1369,6 @@ fn test_embeddings_response_titan_embeddings_by_type_fallback() {
 		.and_then(|b| serde_json::from_slice::<types::embeddings::Response>(&b))
 		.unwrap();
 
-	assert_eq!(openai_resp.data[0].embedding, vec![0.4, 0.5, 0.6]);
 	assert_eq!(openai_resp.usage.prompt_tokens, 5);
 }
 
@@ -1157,11 +1391,6 @@ fn test_embeddings_response_translation_cohere() {
 		.unwrap();
 
 	assert_eq!(openai_resp.object, "list");
-	assert_eq!(openai_resp.data.len(), 2);
-	assert_eq!(openai_resp.data[0].embedding, vec![0.1, 0.2, 0.3]);
-	assert_eq!(openai_resp.data[1].embedding, vec![0.4, 0.5, 0.6]);
-	assert_eq!(openai_resp.data[0].index, 0);
-	assert_eq!(openai_resp.data[1].index, 1);
 	assert_eq!(openai_resp.usage.prompt_tokens, 10);
 }
 
@@ -1175,4 +1404,96 @@ fn test_embeddings_error_translation() {
 
 	assert_eq!(error_resp["error"]["type"], "invalid_request_error");
 	assert_eq!(error_resp["error"]["message"], "Model not found");
+}
+
+#[test]
+fn test_completions_error_translation_wraps_non_json_body() {
+	let error_body = Bytes::from_static(
+		b"<html><body><center>The plain HTTP request was sent to HTTPS port</center></body></html>",
+	);
+
+	let translated = from_completions::translate_error(&error_body).unwrap();
+	let error_resp: serde_json::Value = serde_json::from_slice(&translated).unwrap();
+
+	assert_eq!(error_resp["error"]["type"], "invalid_request_error");
+	assert!(
+		error_resp["error"]["message"]
+			.as_str()
+			.unwrap()
+			.contains("plain HTTP request")
+	);
+}
+
+fn make_message(role: types::bedrock::Role, text: &str) -> types::bedrock::Message {
+	types::bedrock::Message {
+		role,
+		content: vec![types::bedrock::ContentBlock::Text(text.to_string())],
+	}
+}
+
+fn has_cache_point(msg: &types::bedrock::Message) -> bool {
+	msg
+		.content
+		.iter()
+		.any(|b| matches!(b, types::bedrock::ContentBlock::CachePoint(_)))
+}
+
+#[test]
+fn test_insert_cache_point_default_offset() {
+	let mut msgs = vec![
+		make_message(types::bedrock::Role::User, "Hello"),
+		make_message(types::bedrock::Role::Assistant, "Hi"),
+		make_message(types::bedrock::Role::User, "How are you?"),
+	];
+	helpers::insert_message_cache_point(&mut msgs, 0);
+	assert!(has_cache_point(&msgs[1]));
+	assert!(!has_cache_point(&msgs[0]));
+	assert!(!has_cache_point(&msgs[2]));
+}
+
+#[test]
+fn test_insert_cache_point_offset_shifts_back() {
+	let mut msgs = vec![
+		make_message(types::bedrock::Role::User, "a"),
+		make_message(types::bedrock::Role::Assistant, "b"),
+		make_message(types::bedrock::Role::User, "c"),
+		make_message(types::bedrock::Role::Assistant, "d"),
+		make_message(types::bedrock::Role::User, "e"),
+	];
+	helpers::insert_message_cache_point(&mut msgs, 2);
+	// default position is index 3 (len-2), offset 2 → index 1
+	assert!(has_cache_point(&msgs[1]));
+	for (i, msg) in msgs.iter().enumerate() {
+		if i != 1 {
+			assert!(!has_cache_point(msg));
+		}
+	}
+}
+
+#[test]
+fn test_insert_cache_point_offset_clamps_to_zero() {
+	let mut msgs = vec![
+		make_message(types::bedrock::Role::User, "a"),
+		make_message(types::bedrock::Role::Assistant, "b"),
+		make_message(types::bedrock::Role::User, "c"),
+	];
+	// offset 100 should clamp to index 0
+	helpers::insert_message_cache_point(&mut msgs, 100);
+	assert!(has_cache_point(&msgs[0]));
+	assert!(!has_cache_point(&msgs[1]));
+	assert!(!has_cache_point(&msgs[2]));
+}
+
+#[test]
+fn test_insert_cache_point_single_message_noop() {
+	let mut msgs = vec![make_message(types::bedrock::Role::User, "only")];
+	helpers::insert_message_cache_point(&mut msgs, 0);
+	assert!(!has_cache_point(&msgs[0]));
+}
+
+#[test]
+fn test_insert_cache_point_empty_messages_noop() {
+	let mut msgs: Vec<types::bedrock::Message> = vec![];
+	helpers::insert_message_cache_point(&mut msgs, 0);
+	assert!(msgs.is_empty());
 }

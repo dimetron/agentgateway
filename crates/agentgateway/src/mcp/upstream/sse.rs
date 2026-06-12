@@ -10,6 +10,7 @@ use rmcp::model::{
 use rmcp::transport::common::http_header::EVENT_STREAM_MIME_TYPE;
 use sse_stream::{Sse, SseStream};
 
+use crate::client::ResolvedDestination;
 use crate::mcp::ClientError;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::streamablehttp::StreamableHttpPostResponse;
@@ -89,7 +90,7 @@ impl ClientCore {
 			.body(body.into())
 			.map_err(ClientError::new)?;
 
-		ctx.apply(&mut req);
+		ctx.apply(&mut req).map_err(ClientError::new)?;
 
 		let resp = self.http_client.call(req).await.map_err(ClientError::new)?;
 
@@ -112,7 +113,7 @@ impl ClientCore {
 			.body(http::Body::empty())
 			.map_err(ClientError::new)?;
 
-		ctx.apply(&mut req);
+		ctx.apply(&mut req).map_err(ClientError::new)?;
 
 		let resp = self.http_client.call(req).await?;
 
@@ -152,6 +153,24 @@ impl Client {
 			active_stream: Default::default(),
 		}
 	}
+
+	pub fn get_session_state(&self) -> http::sessionpersistence::MCPSession {
+		http::sessionpersistence::MCPSession {
+			target_name: Some(self.client.http_client.target_name().to_string()),
+			session: None,
+			backend: self.client.http_client.pinned_backend(),
+		}
+	}
+
+	pub fn set_session_id(&self, _: Option<&str>, pinned: Option<SocketAddr>) {
+		if let Some(pinned) = pinned {
+			self
+				.client
+				.http_client
+				.pin_backend(ResolvedDestination(pinned));
+		}
+	}
+
 	pub async fn stop(&self) -> Result<(), UpstreamError> {
 		let mut stream = self.active_stream.lock().await;
 		if let Some(s) = stream.as_ref() {
@@ -163,21 +182,21 @@ impl Client {
 	async fn get_stream(&self, ctx: &IncomingRequestContext) -> Result<Arc<Process>, UpstreamError> {
 		let mut stream = self.active_stream.lock().await;
 		if let Some(s) = stream.clone() {
-			Ok(s)
-		} else {
-			let (post_uri, sse) = self.establish_sse(ctx).await?;
-			let transport = SseClient {
-				client: ClientCore {
-					uri: post_uri,
-					..self.client.clone()
-				},
-				events: sse,
-			};
-
-			let proc = Arc::new(Process::new(transport));
-			*stream = Some(proc.clone());
-			Ok(proc)
+			return Ok(s);
 		}
+
+		let (post_uri, sse) = self.establish_sse(ctx).await?;
+		let transport = SseClient {
+			client: ClientCore {
+				uri: post_uri,
+				..self.client.clone()
+			},
+			events: sse,
+		};
+
+		let proc = Arc::new(Process::new(transport));
+		*stream = Some(proc.clone());
+		Ok(proc)
 	}
 	async fn establish_sse(
 		&self,
@@ -207,7 +226,7 @@ impl Client {
 		ctx: &IncomingRequestContext,
 	) -> Result<Messages, UpstreamError> {
 		let stream = self.get_stream(ctx).await?;
-		Ok(stream.get_event_stream().await)
+		stream.get_event_stream().await
 	}
 	pub async fn send_message(
 		&self,

@@ -728,6 +728,7 @@ mod tests {
 	use prometheus_client::registry::Registry;
 
 	use super::*;
+	use crate::llm::cost::ModelCatalog;
 	use crate::telemetry::log::{
 		CelLogging, CelLoggingExecutor, LoggingFields, MetricFields, RequestLog,
 	};
@@ -777,12 +778,14 @@ mod tests {
 			filter: None,
 			fields: LoggingFields::default(),
 			metric_fields: MetricFields::default(),
+			database_fields: LoggingFields::default(),
 		};
 		let mut registry = Registry::default();
 		let metrics = Arc::new(Metrics::new(&mut registry, Default::default()));
 		RequestLog::new(
 			cel,
 			metrics,
+			ModelCatalog::empty(),
 			Timestamp::now(),
 			TCPConnectionInfo {
 				peer_addr: "127.0.0.1:12345".parse::<SocketAddr>().unwrap(),
@@ -810,11 +813,13 @@ mod tests {
 		let filter = None;
 		let fields = LoggingFields::default();
 		let metric_fields = Arc::new(MetricFields::default());
+		let database_fields = LoggingFields::default();
 		let cel_exec = CelLoggingExecutor {
 			executor: crate::cel::Executor::new_empty(),
 			filter: &filter,
 			fields: &fields,
 			metric_fields: &metric_fields,
+			database_fields: &database_fields,
 		};
 
 		tracer.send(&request, &Timestamp::now(), &cel_exec, &[]);

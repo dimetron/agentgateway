@@ -5865,6 +5865,8 @@ spec:
                                     default: global
                                     description: |-
                                       The location of the Google Cloud Project that you use for the Vertex AI.
+                                      Special values: `global` uses the global endpoint, while `us` and `eu` use restricted
+                                      multi-region endpoints. Other values are treated as regional locations.
                                       Defaults to `global` if not specified.
                                     maxLength: 64
                                     minLength: 1
@@ -6230,6 +6232,8 @@ spec:
                             default: global
                             description: |-
                               The location of the Google Cloud Project that you use for the Vertex AI.
+                              Special values: `global` uses the global endpoint, while `us` and `eu` use restricted
+                              multi-region endpoints. Other values are treated as regional locations.
                               Defaults to `global` if not specified.
                             maxLength: 64
                             minLength: 1
@@ -11557,7 +11561,7 @@ spec:
                             ? has(self.port) : true'
                       cache:
                         description: |-
-                          Caches gRPC authorization results.
+                          Caches authorization results.
 
                           WARNING: the safety of this feature depends on the cache key accurately
                           capturing every request property that the authorization service uses to
@@ -11740,9 +11744,6 @@ spec:
                             type: object
                         type: object
                     type: object
-                    x-kubernetes-validations:
-                    - message: cache requires grpc
-                      rule: '!has(self.cache) || has(self.grpc)'
                   health:
                     description: Settings for passive and active health checking.
                     properties:

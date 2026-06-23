@@ -198,7 +198,6 @@ pub struct RawConfig {
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	connection_min_termination_deadline: Option<Duration>,
 
-	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	worker_threads: Option<StringOrInt>,
 
 	tracing: Option<RawTracing>,
@@ -443,6 +442,23 @@ impl<'de> Deserialize<'de> for StringOrInt {
 	}
 }
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for StringOrInt {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		"StringOrInt".into()
+	}
+
+	fn schema_id() -> std::borrow::Cow<'static, str> {
+		"StringOrInt".into()
+	}
+
+	fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		schemars::json_schema!({
+			"type": ["string", "integer"]
+		})
+	}
+}
+
 #[derive(Clone, Debug)]
 pub struct StringBoolFloat(String);
 
@@ -560,6 +576,7 @@ pub struct ModelCatalogConfig {
 pub enum ModelCatalogSource {
 	File { file: PathBuf },
 	Inline { inline: String },
+	InlineCatalog { inline: llm::cost::Catalog },
 }
 
 #[apply(schema!)]

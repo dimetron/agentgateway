@@ -11,6 +11,8 @@
 |`config.modelCatalog`|[]object|Model cost catalog sources; entries are merged in order, with later entries taking precedence.|
 |`config.modelCatalog[].file`|string||
 |`config.modelCatalog[].inline`|string||
+|`config.modelCatalog[].inline`|object||
+|`config.modelCatalog[].inline.providers`|object||
 |`config.database`|object|Primary database used by local runtime features.|
 |`config.database.url`|string||
 |`config.caAddress`|string||
@@ -143,11 +145,9 @@
 |`binds[].listeners[].routes[].policies.urlRewrite.path.full`|string|Replace the full request path.|
 |`binds[].listeners[].routes[].policies.urlRewrite.path.prefix`|string|Replace only the matched path prefix.|
 |`binds[].listeners[].routes[].policies.requestMirror`|object|Send a copy of matching requests to another backend.|
-|`binds[].listeners[].routes[].policies.requestMirror.backend`|object|Backend that receives mirrored request copies.|
+|`binds[].listeners[].routes[].policies.requestMirror.backend`|object|Backend that receives mirrored request copies.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.requestMirror.backend.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.requestMirror.backend.service.name`|object||
-|`binds[].listeners[].routes[].policies.requestMirror.backend.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.requestMirror.backend.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.requestMirror.backend.service.name`|string||
 |`binds[].listeners[].routes[].policies.requestMirror.backend.service.port`|integer||
 |`binds[].listeners[].routes[].policies.requestMirror.backend.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.requestMirror.backend.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -178,9 +178,7 @@
 |`binds[].listeners[].routes[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service.name`|object||
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service.name`|string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -213,6 +211,8 @@
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -278,11 +278,9 @@
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -334,11 +332,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -379,6 +375,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -444,11 +442,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -485,6 +481,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -550,11 +548,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -591,6 +587,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -656,11 +654,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -695,6 +691,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -760,11 +758,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -789,11 +785,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -836,6 +830,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -901,11 +897,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -942,6 +936,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1007,11 +1003,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1046,6 +1040,8 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1111,11 +1107,9 @@
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1162,15 +1156,15 @@
 |`binds[].listeners[].routes[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.backendTunnel`|object|Tunnel settings used when connecting to the backend.|
-|`binds[].listeners[].routes[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
 |`binds[].listeners[].routes[].policies.backendAuth`|object|Authentication credentials sent to the backend.|
+|`binds[].listeners[].routes[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1237,9 +1231,7 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit`|object|Remote rate limit checks for incoming requests.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service.name`|object||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service.name`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].service.port`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1274,6 +1266,8 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1339,11 +1333,9 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1356,9 +1348,7 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].descriptors[].limitOverride`|string|limitOverride determines the optional expression to determine the limit of the request.<br>This tells the remote server what limit to apply to the request.<br>Note: this does not specify the *cost* of the request, which is done by the `cost` field.<br>The expression must evaluate to a map with `unit` and `requestsPerUnit` keys. For example:<br>`{"unit":"second","requestsPerUnit":100}`.<br>Valid units: second, minute, hour, day, month, year<br>If the expression fails to evaluate, the descriptor is skipped.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.conditional[].failureMode`|enum|Behavior when the remote rate limit service is unavailable or returns an error.<br>Defaults to failClosed, denying requests with a 500 status on service failure.<br>Possible values: `failClosed`, `FailClosed`, `failOpen`, `FailOpen`.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.service.name`|object||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.service.name`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.service.port`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1392,6 +1382,8 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1457,11 +1449,9 @@
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1548,9 +1538,7 @@
 |`binds[].listeners[].routes[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].service.name`|object||
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].service.name`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].service.port`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1584,6 +1572,8 @@
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1649,11 +1639,9 @@
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1674,14 +1662,12 @@
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].routes[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extAuthz.service.name`|object||
-|`binds[].listeners[].routes[].policies.extAuthz.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extAuthz.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extAuthz.service.name`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1714,6 +1700,8 @@
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1779,11 +1767,9 @@
 |`binds[].listeners[].routes[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1804,16 +1790,14 @@
 |`binds[].listeners[].routes[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].routes[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].routes[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].routes[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].routes[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].routes[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].routes[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].routes[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].routes[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].routes[].policies.extProc`|object|Send request and response data to an external processing service.|
 |`binds[].listeners[].routes[].policies.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extProc.conditional[].service.name`|object||
-|`binds[].listeners[].routes[].policies.extProc.conditional[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extProc.conditional[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extProc.conditional[].service.name`|string||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].service.port`|integer||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1847,6 +1831,8 @@
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -1912,11 +1898,9 @@
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1933,9 +1917,7 @@
 |`binds[].listeners[].routes[].policies.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`binds[].listeners[].routes[].policies.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`binds[].listeners[].routes[].policies.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extProc.service.name`|object||
-|`binds[].listeners[].routes[].policies.extProc.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extProc.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extProc.service.name`|string||
 |`binds[].listeners[].routes[].policies.extProc.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extProc.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -1968,6 +1950,8 @@
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].policies.extProc.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].policies.extProc.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].policies.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2033,11 +2017,9 @@
 |`binds[].listeners[].routes[].policies.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].policies.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].policies.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2098,9 +2080,7 @@
 |`binds[].listeners[].routes[].policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`binds[].listeners[].routes[].backends`|[]object||
 |`binds[].listeners[].routes[].backends[].service`|object||
-|`binds[].listeners[].routes[].backends[].service.name`|object||
-|`binds[].listeners[].routes[].backends[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].service.name`|string||
 |`binds[].listeners[].routes[].backends[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].backend`|string||
 |`binds[].listeners[].routes[].backends[].host`|string||
@@ -2160,6 +2140,8 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2225,11 +2207,9 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2241,9 +2221,7 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|object||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2276,6 +2254,8 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2341,11 +2321,9 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2368,7 +2346,7 @@
 |`binds[].listeners[].routes[].backends[].ai.provider.gemini.model`|string||
 |`binds[].listeners[].routes[].backends[].ai.provider.vertex`|object||
 |`binds[].listeners[].routes[].backends[].ai.provider.vertex.model`|string||
-|`binds[].listeners[].routes[].backends[].ai.provider.vertex.region`|string||
+|`binds[].listeners[].routes[].backends[].ai.provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`binds[].listeners[].routes[].backends[].ai.provider.vertex.projectId`|string||
 |`binds[].listeners[].routes[].backends[].ai.provider.anthropic`|object||
 |`binds[].listeners[].routes[].backends[].ai.provider.anthropic.model`|string||
@@ -2424,6 +2402,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2489,11 +2469,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2520,9 +2498,7 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2555,6 +2531,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2620,11 +2598,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2645,8 +2621,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -2657,9 +2633,7 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails`|object|External MCP policy processors.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2692,6 +2666,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2757,11 +2733,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2774,11 +2748,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2793,11 +2765,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2838,6 +2808,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -2903,11 +2875,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -2944,6 +2914,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3009,11 +2981,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3050,6 +3020,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3115,11 +3087,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3154,6 +3124,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3219,11 +3191,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3248,11 +3218,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3295,6 +3263,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3360,11 +3330,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3401,6 +3369,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3466,11 +3436,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3505,6 +3473,8 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3570,11 +3540,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3620,7 +3588,7 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.gemini.model`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.vertex`|object||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.vertex.model`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.vertex.region`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.vertex.projectId`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.anthropic`|object||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].provider.anthropic.model`|string||
@@ -3676,6 +3644,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3741,11 +3711,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3772,9 +3740,7 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3807,6 +3773,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -3872,11 +3840,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3897,8 +3863,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -3909,9 +3875,7 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -3944,6 +3908,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4009,11 +3975,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4026,11 +3990,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4045,11 +4007,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4090,6 +4050,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4155,11 +4117,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4196,6 +4156,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4261,11 +4223,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4302,6 +4262,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4367,11 +4329,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4406,6 +4366,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4471,11 +4433,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4500,11 +4460,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4547,6 +4505,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4612,11 +4572,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4653,6 +4611,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4718,11 +4678,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4757,6 +4715,8 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4822,11 +4782,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4898,6 +4856,8 @@
 |`binds[].listeners[].routes[].backends[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -4963,11 +4923,9 @@
 |`binds[].listeners[].routes[].backends[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -4994,9 +4952,7 @@
 |`binds[].listeners[].routes[].backends[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5029,6 +4985,8 @@
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5094,11 +5052,9 @@
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5119,8 +5075,8 @@
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].routes[].backends[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].routes[].backends[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -5131,9 +5087,7 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5166,6 +5120,8 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5231,11 +5187,9 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5248,11 +5202,9 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5267,11 +5219,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5312,6 +5262,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5377,11 +5329,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5418,6 +5368,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5483,11 +5435,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5524,6 +5474,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5589,11 +5541,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5628,6 +5578,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5693,11 +5645,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5722,11 +5672,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5769,6 +5717,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5834,11 +5784,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5875,6 +5823,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -5940,11 +5890,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -5979,6 +5927,8 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6044,11 +5994,9 @@
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6102,9 +6050,7 @@
 |`binds[].listeners[].tcpRoutes[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].tcpRoutes[].backends`|[]object||
 |`binds[].listeners[].tcpRoutes[].backends[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].tcpRoutes[].backends[].service.name`|object||
-|`binds[].listeners[].tcpRoutes[].backends[].service.name.namespace`|string||
-|`binds[].listeners[].tcpRoutes[].backends[].service.name.hostname`|string||
+|`binds[].listeners[].tcpRoutes[].backends[].service.name`|string||
 |`binds[].listeners[].tcpRoutes[].backends[].service.port`|integer||
 |`binds[].listeners[].tcpRoutes[].backends[].host`|string|Hostname or IP address|
 |`binds[].listeners[].tcpRoutes[].backends[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6121,11 +6067,9 @@
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].tcpRoutes[].backends[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6180,9 +6124,7 @@
 |`binds[].listeners[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`binds[].listeners[].policies.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].policies.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extAuthz.conditional[].service.name`|object||
-|`binds[].listeners[].policies.extAuthz.conditional[].service.name.namespace`|string||
-|`binds[].listeners[].policies.extAuthz.conditional[].service.name.hostname`|string||
+|`binds[].listeners[].policies.extAuthz.conditional[].service.name`|string||
 |`binds[].listeners[].policies.extAuthz.conditional[].service.port`|integer||
 |`binds[].listeners[].policies.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6216,6 +6158,8 @@
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6281,11 +6225,9 @@
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6306,14 +6248,12 @@
 |`binds[].listeners[].policies.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].policies.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].policies.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].policies.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].policies.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].policies.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].policies.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].policies.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].policies.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extAuthz.service.name`|object||
-|`binds[].listeners[].policies.extAuthz.service.name.namespace`|string||
-|`binds[].listeners[].policies.extAuthz.service.name.hostname`|string||
+|`binds[].listeners[].policies.extAuthz.service.name`|string||
 |`binds[].listeners[].policies.extAuthz.service.port`|integer||
 |`binds[].listeners[].policies.extAuthz.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6346,6 +6286,8 @@
 |`binds[].listeners[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].policies.extAuthz.policies.backendAuth.key`|object||
+|`binds[].listeners[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6411,11 +6353,9 @@
 |`binds[].listeners[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6436,16 +6376,14 @@
 |`binds[].listeners[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`binds[].listeners[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`binds[].listeners[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`binds[].listeners[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`binds[].listeners[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`binds[].listeners[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`binds[].listeners[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`binds[].listeners[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`binds[].listeners[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`binds[].listeners[].policies.extProc`|object|Send request and response data to an external processing service.|
 |`binds[].listeners[].policies.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].policies.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extProc.conditional[].service.name`|object||
-|`binds[].listeners[].policies.extProc.conditional[].service.name.namespace`|string||
-|`binds[].listeners[].policies.extProc.conditional[].service.name.hostname`|string||
+|`binds[].listeners[].policies.extProc.conditional[].service.name`|string||
 |`binds[].listeners[].policies.extProc.conditional[].service.port`|integer||
 |`binds[].listeners[].policies.extProc.conditional[].host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6479,6 +6417,8 @@
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth.key`|object||
+|`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6544,11 +6484,9 @@
 |`binds[].listeners[].policies.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].policies.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6565,9 +6503,7 @@
 |`binds[].listeners[].policies.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`binds[].listeners[].policies.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`binds[].listeners[].policies.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extProc.service.name`|object||
-|`binds[].listeners[].policies.extProc.service.name.namespace`|string||
-|`binds[].listeners[].policies.extProc.service.name.hostname`|string||
+|`binds[].listeners[].policies.extProc.service.name`|string||
 |`binds[].listeners[].policies.extProc.service.port`|integer||
 |`binds[].listeners[].policies.extProc.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6600,6 +6536,8 @@
 |`binds[].listeners[].policies.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`binds[].listeners[].policies.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`binds[].listeners[].policies.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`binds[].listeners[].policies.extProc.policies.backendAuth.key`|object||
+|`binds[].listeners[].policies.extProc.policies.backendAuth.key.file`|string||
 |`binds[].listeners[].policies.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`binds[].listeners[].policies.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`binds[].listeners[].policies.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6665,11 +6603,9 @@
 |`binds[].listeners[].policies.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`binds[].listeners[].policies.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`binds[].listeners[].policies.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`binds[].listeners[].policies.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6795,9 +6731,7 @@
 |`frontendPolicies.accessLog.remove`|[]string|Access log field names to remove.|
 |`frontendPolicies.accessLog.otlp`|object|OTLP log export settings.|
 |`frontendPolicies.accessLog.otlp.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.accessLog.otlp.service.name`|object||
-|`frontendPolicies.accessLog.otlp.service.name.namespace`|string||
-|`frontendPolicies.accessLog.otlp.service.name.hostname`|string||
+|`frontendPolicies.accessLog.otlp.service.name`|string||
 |`frontendPolicies.accessLog.otlp.service.port`|integer||
 |`frontendPolicies.accessLog.otlp.host`|string|Hostname or IP address|
 |`frontendPolicies.accessLog.otlp.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6830,6 +6764,8 @@
 |`frontendPolicies.accessLog.otlp.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`frontendPolicies.accessLog.otlp.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`frontendPolicies.accessLog.otlp.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`frontendPolicies.accessLog.otlp.policies.backendAuth.key`|object||
+|`frontendPolicies.accessLog.otlp.policies.backendAuth.key.file`|string||
 |`frontendPolicies.accessLog.otlp.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`frontendPolicies.accessLog.otlp.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`frontendPolicies.accessLog.otlp.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -6895,11 +6831,9 @@
 |`frontendPolicies.accessLog.otlp.policies.tcp.connectTimeout.secs`|integer||
 |`frontendPolicies.accessLog.otlp.policies.tcp.connectTimeout.nanos`|integer||
 |`frontendPolicies.accessLog.otlp.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service.name`|object||
-|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service.name`|string||
 |`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.service.port`|integer||
 |`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`frontendPolicies.accessLog.otlp.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6913,9 +6847,7 @@
 |`frontendPolicies.logging.remove`|[]string|Access log field names to remove.|
 |`frontendPolicies.logging.otlp`|object|OTLP log export settings.|
 |`frontendPolicies.logging.otlp.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.logging.otlp.service.name`|object||
-|`frontendPolicies.logging.otlp.service.name.namespace`|string||
-|`frontendPolicies.logging.otlp.service.name.hostname`|string||
+|`frontendPolicies.logging.otlp.service.name`|string||
 |`frontendPolicies.logging.otlp.service.port`|integer||
 |`frontendPolicies.logging.otlp.host`|string|Hostname or IP address|
 |`frontendPolicies.logging.otlp.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -6948,6 +6880,8 @@
 |`frontendPolicies.logging.otlp.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`frontendPolicies.logging.otlp.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`frontendPolicies.logging.otlp.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`frontendPolicies.logging.otlp.policies.backendAuth.key`|object||
+|`frontendPolicies.logging.otlp.policies.backendAuth.key.file`|string||
 |`frontendPolicies.logging.otlp.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`frontendPolicies.logging.otlp.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`frontendPolicies.logging.otlp.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7013,11 +6947,9 @@
 |`frontendPolicies.logging.otlp.policies.tcp.connectTimeout.secs`|integer||
 |`frontendPolicies.logging.otlp.policies.tcp.connectTimeout.nanos`|integer||
 |`frontendPolicies.logging.otlp.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service.name`|object||
-|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service.name`|string||
 |`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.service.port`|integer||
 |`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`frontendPolicies.logging.otlp.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7027,9 +6959,7 @@
 |`frontendPolicies.logging.database.add`|object|Database-only fields to add, computed from CEL expressions.|
 |`frontendPolicies.tracing`|object|Settings for exporting request traces.|
 |`frontendPolicies.tracing.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.tracing.service.name`|object||
-|`frontendPolicies.tracing.service.name.namespace`|string||
-|`frontendPolicies.tracing.service.name.hostname`|string||
+|`frontendPolicies.tracing.service.name`|string||
 |`frontendPolicies.tracing.service.port`|integer||
 |`frontendPolicies.tracing.host`|string|Hostname or IP address|
 |`frontendPolicies.tracing.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7062,6 +6992,8 @@
 |`frontendPolicies.tracing.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`frontendPolicies.tracing.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`frontendPolicies.tracing.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`frontendPolicies.tracing.policies.backendAuth.key`|object||
+|`frontendPolicies.tracing.policies.backendAuth.key.file`|string||
 |`frontendPolicies.tracing.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`frontendPolicies.tracing.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`frontendPolicies.tracing.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7127,11 +7059,9 @@
 |`frontendPolicies.tracing.policies.tcp.connectTimeout.secs`|integer||
 |`frontendPolicies.tracing.policies.tcp.connectTimeout.nanos`|integer||
 |`frontendPolicies.tracing.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`frontendPolicies.tracing.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`frontendPolicies.tracing.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`frontendPolicies.tracing.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`frontendPolicies.tracing.policies.backendTunnel.proxy.service.name`|object||
-|`frontendPolicies.tracing.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`frontendPolicies.tracing.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`frontendPolicies.tracing.policies.backendTunnel.proxy.service.name`|string||
 |`frontendPolicies.tracing.policies.backendTunnel.proxy.service.port`|integer||
 |`frontendPolicies.tracing.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`frontendPolicies.tracing.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7199,11 +7129,9 @@
 |`policies[].policy.urlRewrite.path.full`|string|Replace the full request path.|
 |`policies[].policy.urlRewrite.path.prefix`|string|Replace only the matched path prefix.|
 |`policies[].policy.requestMirror`|object|Send a copy of matching requests to another backend.|
-|`policies[].policy.requestMirror.backend`|object|Backend that receives mirrored request copies.|
+|`policies[].policy.requestMirror.backend`|object|Backend that receives mirrored request copies.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.requestMirror.backend.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.requestMirror.backend.service.name`|object||
-|`policies[].policy.requestMirror.backend.service.name.namespace`|string||
-|`policies[].policy.requestMirror.backend.service.name.hostname`|string||
+|`policies[].policy.requestMirror.backend.service.name`|string||
 |`policies[].policy.requestMirror.backend.service.port`|integer||
 |`policies[].policy.requestMirror.backend.host`|string|Hostname or IP address|
 |`policies[].policy.requestMirror.backend.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7234,9 +7162,7 @@
 |`policies[].policy.mcpGuardrails`|object|External MCP policy processors.|
 |`policies[].policy.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`policies[].policy.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.mcpGuardrails.processors[].service.name`|object||
-|`policies[].policy.mcpGuardrails.processors[].service.name.namespace`|string||
-|`policies[].policy.mcpGuardrails.processors[].service.name.hostname`|string||
+|`policies[].policy.mcpGuardrails.processors[].service.name`|string||
 |`policies[].policy.mcpGuardrails.processors[].service.port`|integer||
 |`policies[].policy.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`policies[].policy.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7269,6 +7195,8 @@
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`policies[].policy.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`policies[].policy.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7334,11 +7262,9 @@
 |`policies[].policy.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7390,11 +7316,9 @@
 |`policies[].policy.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`policies[].policy.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`policies[].policy.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`policies[].policy.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`policies[].policy.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`policies[].policy.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`policies[].policy.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`policies[].policy.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7435,6 +7359,8 @@
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7500,11 +7426,9 @@
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7541,6 +7465,8 @@
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7606,11 +7532,9 @@
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7647,6 +7571,8 @@
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7712,11 +7638,9 @@
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7751,6 +7675,8 @@
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7816,11 +7742,9 @@
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7845,11 +7769,9 @@
 |`policies[].policy.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`policies[].policy.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`policies[].policy.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`policies[].policy.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`policies[].policy.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`policies[].policy.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`policies[].policy.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`policies[].policy.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7892,6 +7814,8 @@
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -7957,11 +7881,9 @@
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -7998,6 +7920,8 @@
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8063,11 +7987,9 @@
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8102,6 +8024,8 @@
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8167,11 +8091,9 @@
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8218,15 +8140,15 @@
 |`policies[].policy.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.backendTunnel`|object|Tunnel settings used when connecting to the backend.|
-|`policies[].policy.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
 |`policies[].policy.backendAuth`|object|Authentication credentials sent to the backend.|
+|`policies[].policy.backendAuth.key`|object||
+|`policies[].policy.backendAuth.key.file`|string||
 |`policies[].policy.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8293,9 +8215,7 @@
 |`policies[].policy.remoteRateLimit`|object|Remote rate limit checks for incoming requests.|
 |`policies[].policy.remoteRateLimit.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`policies[].policy.remoteRateLimit.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.remoteRateLimit.conditional[].service.name`|object||
-|`policies[].policy.remoteRateLimit.conditional[].service.name.namespace`|string||
-|`policies[].policy.remoteRateLimit.conditional[].service.name.hostname`|string||
+|`policies[].policy.remoteRateLimit.conditional[].service.name`|string||
 |`policies[].policy.remoteRateLimit.conditional[].service.port`|integer||
 |`policies[].policy.remoteRateLimit.conditional[].host`|string|Hostname or IP address|
 |`policies[].policy.remoteRateLimit.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8330,6 +8250,8 @@
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth.key`|object||
+|`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth.key.file`|string||
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8395,11 +8317,9 @@
 |`policies[].policy.remoteRateLimit.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.remoteRateLimit.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.remoteRateLimit.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8412,9 +8332,7 @@
 |`policies[].policy.remoteRateLimit.conditional[].descriptors[].limitOverride`|string|limitOverride determines the optional expression to determine the limit of the request.<br>This tells the remote server what limit to apply to the request.<br>Note: this does not specify the *cost* of the request, which is done by the `cost` field.<br>The expression must evaluate to a map with `unit` and `requestsPerUnit` keys. For example:<br>`{"unit":"second","requestsPerUnit":100}`.<br>Valid units: second, minute, hour, day, month, year<br>If the expression fails to evaluate, the descriptor is skipped.|
 |`policies[].policy.remoteRateLimit.conditional[].failureMode`|enum|Behavior when the remote rate limit service is unavailable or returns an error.<br>Defaults to failClosed, denying requests with a 500 status on service failure.<br>Possible values: `failClosed`, `FailClosed`, `failOpen`, `FailOpen`.|
 |`policies[].policy.remoteRateLimit.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.remoteRateLimit.service.name`|object||
-|`policies[].policy.remoteRateLimit.service.name.namespace`|string||
-|`policies[].policy.remoteRateLimit.service.name.hostname`|string||
+|`policies[].policy.remoteRateLimit.service.name`|string||
 |`policies[].policy.remoteRateLimit.service.port`|integer||
 |`policies[].policy.remoteRateLimit.host`|string|Hostname or IP address|
 |`policies[].policy.remoteRateLimit.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8448,6 +8366,8 @@
 |`policies[].policy.remoteRateLimit.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.remoteRateLimit.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.remoteRateLimit.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.remoteRateLimit.policies.backendAuth.key`|object||
+|`policies[].policy.remoteRateLimit.policies.backendAuth.key.file`|string||
 |`policies[].policy.remoteRateLimit.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.remoteRateLimit.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.remoteRateLimit.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8513,11 +8433,9 @@
 |`policies[].policy.remoteRateLimit.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.remoteRateLimit.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.remoteRateLimit.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.remoteRateLimit.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8604,9 +8522,7 @@
 |`policies[].policy.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`policies[].policy.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`policies[].policy.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extAuthz.conditional[].service.name`|object||
-|`policies[].policy.extAuthz.conditional[].service.name.namespace`|string||
-|`policies[].policy.extAuthz.conditional[].service.name.hostname`|string||
+|`policies[].policy.extAuthz.conditional[].service.name`|string||
 |`policies[].policy.extAuthz.conditional[].service.port`|integer||
 |`policies[].policy.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`policies[].policy.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8640,6 +8556,8 @@
 |`policies[].policy.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`policies[].policy.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`policies[].policy.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8705,11 +8623,9 @@
 |`policies[].policy.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8730,14 +8646,12 @@
 |`policies[].policy.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`policies[].policy.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`policies[].policy.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`policies[].policy.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`policies[].policy.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`policies[].policy.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`policies[].policy.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`policies[].policy.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`policies[].policy.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`policies[].policy.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extAuthz.service.name`|object||
-|`policies[].policy.extAuthz.service.name.namespace`|string||
-|`policies[].policy.extAuthz.service.name.hostname`|string||
+|`policies[].policy.extAuthz.service.name`|string||
 |`policies[].policy.extAuthz.service.port`|integer||
 |`policies[].policy.extAuthz.host`|string|Hostname or IP address|
 |`policies[].policy.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8770,6 +8684,8 @@
 |`policies[].policy.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.extAuthz.policies.backendAuth.key`|object||
+|`policies[].policy.extAuthz.policies.backendAuth.key.file`|string||
 |`policies[].policy.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8835,11 +8751,9 @@
 |`policies[].policy.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8860,16 +8774,14 @@
 |`policies[].policy.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`policies[].policy.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`policies[].policy.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`policies[].policy.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`policies[].policy.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`policies[].policy.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`policies[].policy.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`policies[].policy.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`policies[].policy.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`policies[].policy.extProc`|object|Send request and response data to an external processing service.|
 |`policies[].policy.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`policies[].policy.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extProc.conditional[].service.name`|object||
-|`policies[].policy.extProc.conditional[].service.name.namespace`|string||
-|`policies[].policy.extProc.conditional[].service.name.hostname`|string||
+|`policies[].policy.extProc.conditional[].service.name`|string||
 |`policies[].policy.extProc.conditional[].service.port`|integer||
 |`policies[].policy.extProc.conditional[].host`|string|Hostname or IP address|
 |`policies[].policy.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8903,6 +8815,8 @@
 |`policies[].policy.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.extProc.conditional[].policies.backendAuth.key`|object||
+|`policies[].policy.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`policies[].policy.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -8968,11 +8882,9 @@
 |`policies[].policy.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -8989,9 +8901,7 @@
 |`policies[].policy.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`policies[].policy.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`policies[].policy.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extProc.service.name`|object||
-|`policies[].policy.extProc.service.name.namespace`|string||
-|`policies[].policy.extProc.service.name.hostname`|string||
+|`policies[].policy.extProc.service.name`|string||
 |`policies[].policy.extProc.service.port`|integer||
 |`policies[].policy.extProc.host`|string|Hostname or IP address|
 |`policies[].policy.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9024,6 +8934,8 @@
 |`policies[].policy.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`policies[].policy.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`policies[].policy.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`policies[].policy.extProc.policies.backendAuth.key`|object||
+|`policies[].policy.extProc.policies.backendAuth.key.file`|string||
 |`policies[].policy.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`policies[].policy.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`policies[].policy.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9089,11 +9001,9 @@
 |`policies[].policy.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`policies[].policy.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`policies[].policy.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`policies[].policy.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`policies[].policy.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`policies[].policy.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`policies[].policy.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`policies[].policy.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`policies[].policy.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`policies[].policy.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`policies[].policy.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`policies[].policy.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`policies[].policy.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9152,8 +9062,8 @@
 |`policies[].policy.retry.codes`|[]integer|HTTP response status codes that should be retried.|
 |`policies[].policy.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`policies[].policy.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
-|`workloads`|any||
-|`services`|any||
+|`workloads`|[]object||
+|`services`|[]object||
 |`backends`|[]object||
 |`backends[].host`|string||
 |`backends[].mcp`|object||
@@ -9211,6 +9121,8 @@
 |`backends[].mcp.targets[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].mcp.targets[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].mcp.targets[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].mcp.targets[].policies.backendAuth.key`|object||
+|`backends[].mcp.targets[].policies.backendAuth.key.file`|string||
 |`backends[].mcp.targets[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].mcp.targets[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].mcp.targets[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9276,11 +9188,9 @@
 |`backends[].mcp.targets[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].mcp.targets[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].mcp.targets[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].mcp.targets[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].mcp.targets[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].mcp.targets[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].mcp.targets[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9292,9 +9202,7 @@
 |`backends[].mcp.targets[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|object||
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9327,6 +9235,8 @@
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9392,11 +9302,9 @@
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9419,7 +9327,7 @@
 |`backends[].ai.provider.gemini.model`|string||
 |`backends[].ai.provider.vertex`|object||
 |`backends[].ai.provider.vertex.model`|string||
-|`backends[].ai.provider.vertex.region`|string||
+|`backends[].ai.provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`backends[].ai.provider.vertex.projectId`|string||
 |`backends[].ai.provider.anthropic`|object||
 |`backends[].ai.provider.anthropic.model`|string||
@@ -9475,6 +9383,8 @@
 |`backends[].ai.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.backendAuth.key`|object||
+|`backends[].ai.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9540,11 +9450,9 @@
 |`backends[].ai.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9571,9 +9479,7 @@
 |`backends[].ai.policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`backends[].ai.policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`backends[].ai.policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.extAuthz.service.name`|object||
-|`backends[].ai.policies.extAuthz.service.name.namespace`|string||
-|`backends[].ai.policies.extAuthz.service.name.hostname`|string||
+|`backends[].ai.policies.extAuthz.service.name`|string||
 |`backends[].ai.policies.extAuthz.service.port`|integer||
 |`backends[].ai.policies.extAuthz.host`|string|Hostname or IP address|
 |`backends[].ai.policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9606,6 +9512,8 @@
 |`backends[].ai.policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.extAuthz.policies.backendAuth.key`|object||
+|`backends[].ai.policies.extAuthz.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9671,11 +9579,9 @@
 |`backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9696,8 +9602,8 @@
 |`backends[].ai.policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`backends[].ai.policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`backends[].ai.policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`backends[].ai.policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`backends[].ai.policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`backends[].ai.policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`backends[].ai.policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`backends[].ai.policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`backends[].ai.policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`backends[].ai.policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -9708,9 +9614,7 @@
 |`backends[].ai.policies.mcpGuardrails`|object|External MCP policy processors.|
 |`backends[].ai.policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`backends[].ai.policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.mcpGuardrails.processors[].service.name`|object||
-|`backends[].ai.policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`backends[].ai.policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].service.name`|string||
 |`backends[].ai.policies.mcpGuardrails.processors[].service.port`|integer||
 |`backends[].ai.policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`backends[].ai.policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9743,6 +9647,8 @@
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9808,11 +9714,9 @@
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9825,11 +9729,9 @@
 |`backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|object||
-|`backends[].ai.policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`backends[].ai.policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|string||
 |`backends[].ai.policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`backends[].ai.policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`backends[].ai.policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9844,11 +9746,9 @@
 |`backends[].ai.policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].ai.policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].ai.policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9889,6 +9789,8 @@
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -9954,11 +9856,9 @@
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -9995,6 +9895,8 @@
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10060,11 +9962,9 @@
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10101,6 +10001,8 @@
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10166,11 +10068,9 @@
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10205,6 +10105,8 @@
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10270,11 +10172,9 @@
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10299,11 +10199,9 @@
 |`backends[].ai.policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].ai.policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].ai.policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10346,6 +10244,8 @@
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10411,11 +10311,9 @@
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10452,6 +10350,8 @@
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10517,11 +10417,9 @@
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10556,6 +10454,8 @@
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10621,11 +10521,9 @@
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10671,7 +10569,7 @@
 |`backends[].ai.groups[].providers[].provider.gemini.model`|string||
 |`backends[].ai.groups[].providers[].provider.vertex`|object||
 |`backends[].ai.groups[].providers[].provider.vertex.model`|string||
-|`backends[].ai.groups[].providers[].provider.vertex.region`|string||
+|`backends[].ai.groups[].providers[].provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`backends[].ai.groups[].providers[].provider.vertex.projectId`|string||
 |`backends[].ai.groups[].providers[].provider.anthropic`|object||
 |`backends[].ai.groups[].providers[].provider.anthropic.model`|string||
@@ -10727,6 +10625,8 @@
 |`backends[].ai.groups[].providers[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10792,11 +10692,9 @@
 |`backends[].ai.groups[].providers[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10823,9 +10721,7 @@
 |`backends[].ai.groups[].providers[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`backends[].ai.groups[].providers[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.extAuthz.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.extAuthz.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.extAuthz.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.extAuthz.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.extAuthz.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.extAuthz.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10858,6 +10754,8 @@
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -10923,11 +10821,9 @@
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10948,8 +10844,8 @@
 |`backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`backends[].ai.groups[].providers[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -10960,9 +10856,7 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|object||
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -10995,6 +10889,8 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11060,11 +10956,9 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11077,11 +10971,9 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11096,11 +10988,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11141,6 +11031,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11206,11 +11098,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11247,6 +11137,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11312,11 +11204,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11353,6 +11243,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11418,11 +11310,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11457,6 +11347,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11522,11 +11414,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11551,11 +11441,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11598,6 +11486,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11663,11 +11553,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11704,6 +11592,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11769,11 +11659,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11808,6 +11696,8 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -11873,11 +11763,9 @@
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -11947,6 +11835,8 @@
 |`backends[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.backendAuth.key`|object||
+|`backends[].policies.backendAuth.key.file`|string||
 |`backends[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12012,11 +11902,9 @@
 |`backends[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12043,9 +11931,7 @@
 |`backends[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`backends[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`backends[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.extAuthz.service.name`|object||
-|`backends[].policies.extAuthz.service.name.namespace`|string||
-|`backends[].policies.extAuthz.service.name.hostname`|string||
+|`backends[].policies.extAuthz.service.name`|string||
 |`backends[].policies.extAuthz.service.port`|integer||
 |`backends[].policies.extAuthz.host`|string|Hostname or IP address|
 |`backends[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12078,6 +11964,8 @@
 |`backends[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.extAuthz.policies.backendAuth.key`|object||
+|`backends[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`backends[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12143,11 +12031,9 @@
 |`backends[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12168,8 +12054,8 @@
 |`backends[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`backends[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`backends[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`backends[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`backends[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`backends[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`backends[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`backends[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`backends[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`backends[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -12180,9 +12066,7 @@
 |`backends[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`backends[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`backends[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.mcpGuardrails.processors[].service.name`|object||
-|`backends[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`backends[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`backends[].policies.mcpGuardrails.processors[].service.name`|string||
 |`backends[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`backends[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`backends[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12215,6 +12099,8 @@
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12280,11 +12166,9 @@
 |`backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12297,11 +12181,9 @@
 |`backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`backends[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`backends[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`backends[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`backends[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`backends[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`backends[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12316,11 +12198,9 @@
 |`backends[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`backends[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`backends[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`backends[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12361,6 +12241,8 @@
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12426,11 +12308,9 @@
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12467,6 +12347,8 @@
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12532,11 +12414,9 @@
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12573,6 +12453,8 @@
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12638,11 +12520,9 @@
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12677,6 +12557,8 @@
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12742,11 +12624,9 @@
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12771,11 +12651,9 @@
 |`backends[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`backends[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`backends[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`backends[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`backends[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`backends[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12818,6 +12696,8 @@
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12883,11 +12763,9 @@
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -12924,6 +12802,8 @@
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -12989,11 +12869,9 @@
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13028,6 +12906,8 @@
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13093,11 +12973,9 @@
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13184,11 +13062,9 @@
 |`routeGroups[].routes[].policies.urlRewrite.path.full`|string|Replace the full request path.|
 |`routeGroups[].routes[].policies.urlRewrite.path.prefix`|string|Replace only the matched path prefix.|
 |`routeGroups[].routes[].policies.requestMirror`|object|Send a copy of matching requests to another backend.|
-|`routeGroups[].routes[].policies.requestMirror.backend`|object|Backend that receives mirrored request copies.|
+|`routeGroups[].routes[].policies.requestMirror.backend`|object|Backend that receives mirrored request copies.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.requestMirror.backend.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.requestMirror.backend.service.name`|object||
-|`routeGroups[].routes[].policies.requestMirror.backend.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.requestMirror.backend.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.requestMirror.backend.service.name`|string||
 |`routeGroups[].routes[].policies.requestMirror.backend.service.port`|integer||
 |`routeGroups[].routes[].policies.requestMirror.backend.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.requestMirror.backend.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13219,9 +13095,7 @@
 |`routeGroups[].routes[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].service.name`|object||
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].service.name`|string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13254,6 +13128,8 @@
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13319,11 +13195,9 @@
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13375,11 +13249,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13420,6 +13292,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13485,11 +13359,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13526,6 +13398,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13591,11 +13465,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13632,6 +13504,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13697,11 +13571,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13736,6 +13608,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13801,11 +13675,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13830,11 +13702,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13877,6 +13747,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -13942,11 +13814,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -13983,6 +13853,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14048,11 +13920,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14087,6 +13957,8 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14152,11 +14024,9 @@
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14203,15 +14073,15 @@
 |`routeGroups[].routes[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.backendTunnel`|object|Tunnel settings used when connecting to the backend.|
-|`routeGroups[].routes[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
 |`routeGroups[].routes[].policies.backendAuth`|object|Authentication credentials sent to the backend.|
+|`routeGroups[].routes[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14278,9 +14148,7 @@
 |`routeGroups[].routes[].policies.remoteRateLimit`|object|Remote rate limit checks for incoming requests.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service.name`|object||
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service.name.namespace`|string||
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service.name.hostname`|string||
+|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service.name`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].service.port`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14315,6 +14183,8 @@
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14380,11 +14250,9 @@
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14397,9 +14265,7 @@
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].descriptors[].limitOverride`|string|limitOverride determines the optional expression to determine the limit of the request.<br>This tells the remote server what limit to apply to the request.<br>Note: this does not specify the *cost* of the request, which is done by the `cost` field.<br>The expression must evaluate to a map with `unit` and `requestsPerUnit` keys. For example:<br>`{"unit":"second","requestsPerUnit":100}`.<br>Valid units: second, minute, hour, day, month, year<br>If the expression fails to evaluate, the descriptor is skipped.|
 |`routeGroups[].routes[].policies.remoteRateLimit.conditional[].failureMode`|enum|Behavior when the remote rate limit service is unavailable or returns an error.<br>Defaults to failClosed, denying requests with a 500 status on service failure.<br>Possible values: `failClosed`, `FailClosed`, `failOpen`, `FailOpen`.|
 |`routeGroups[].routes[].policies.remoteRateLimit.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.remoteRateLimit.service.name`|object||
-|`routeGroups[].routes[].policies.remoteRateLimit.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.remoteRateLimit.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.remoteRateLimit.service.name`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.service.port`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.remoteRateLimit.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14433,6 +14299,8 @@
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14498,11 +14366,9 @@
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.remoteRateLimit.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14589,9 +14455,7 @@
 |`routeGroups[].routes[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`routeGroups[].routes[].policies.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extAuthz.conditional[].service.name`|object||
-|`routeGroups[].routes[].policies.extAuthz.conditional[].service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extAuthz.conditional[].service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extAuthz.conditional[].service.name`|string||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].service.port`|integer||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14625,6 +14489,8 @@
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14690,11 +14556,9 @@
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14715,14 +14579,12 @@
 |`routeGroups[].routes[].policies.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`routeGroups[].routes[].policies.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`routeGroups[].routes[].policies.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`routeGroups[].routes[].policies.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`routeGroups[].routes[].policies.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`routeGroups[].routes[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extAuthz.service.name`|object||
-|`routeGroups[].routes[].policies.extAuthz.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extAuthz.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extAuthz.service.name`|string||
 |`routeGroups[].routes[].policies.extAuthz.service.port`|integer||
 |`routeGroups[].routes[].policies.extAuthz.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14755,6 +14617,8 @@
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.extAuthz.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14820,11 +14684,9 @@
 |`routeGroups[].routes[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14845,16 +14707,14 @@
 |`routeGroups[].routes[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`routeGroups[].routes[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`routeGroups[].routes[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`routeGroups[].routes[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`routeGroups[].routes[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`routeGroups[].routes[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`routeGroups[].routes[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`routeGroups[].routes[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`routeGroups[].routes[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`routeGroups[].routes[].policies.extProc`|object|Send request and response data to an external processing service.|
 |`routeGroups[].routes[].policies.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`routeGroups[].routes[].policies.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extProc.conditional[].service.name`|object||
-|`routeGroups[].routes[].policies.extProc.conditional[].service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extProc.conditional[].service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extProc.conditional[].service.name`|string||
 |`routeGroups[].routes[].policies.extProc.conditional[].service.port`|integer||
 |`routeGroups[].routes[].policies.extProc.conditional[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14888,6 +14748,8 @@
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -14953,11 +14815,9 @@
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -14974,9 +14834,7 @@
 |`routeGroups[].routes[].policies.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`routeGroups[].routes[].policies.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`routeGroups[].routes[].policies.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extProc.service.name`|object||
-|`routeGroups[].routes[].policies.extProc.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extProc.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extProc.service.name`|string||
 |`routeGroups[].routes[].policies.extProc.service.port`|integer||
 |`routeGroups[].routes[].policies.extProc.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15009,6 +14867,8 @@
 |`routeGroups[].routes[].policies.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].policies.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].policies.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].policies.extProc.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].policies.extProc.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].policies.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].policies.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].policies.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15074,11 +14934,9 @@
 |`routeGroups[].routes[].policies.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].policies.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].policies.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].policies.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15139,9 +14997,7 @@
 |`routeGroups[].routes[].policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`routeGroups[].routes[].backends`|[]object||
 |`routeGroups[].routes[].backends[].service`|object||
-|`routeGroups[].routes[].backends[].service.name`|object||
-|`routeGroups[].routes[].backends[].service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].service.name`|string||
 |`routeGroups[].routes[].backends[].service.port`|integer||
 |`routeGroups[].routes[].backends[].backend`|string||
 |`routeGroups[].routes[].backends[].host`|string||
@@ -15201,6 +15057,8 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15266,11 +15124,9 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15282,9 +15138,7 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|object||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.name`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15317,6 +15171,8 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15382,11 +15238,9 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15409,7 +15263,7 @@
 |`routeGroups[].routes[].backends[].ai.provider.gemini.model`|string||
 |`routeGroups[].routes[].backends[].ai.provider.vertex`|object||
 |`routeGroups[].routes[].backends[].ai.provider.vertex.model`|string||
-|`routeGroups[].routes[].backends[].ai.provider.vertex.region`|string||
+|`routeGroups[].routes[].backends[].ai.provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`routeGroups[].routes[].backends[].ai.provider.vertex.projectId`|string||
 |`routeGroups[].routes[].backends[].ai.provider.anthropic`|object||
 |`routeGroups[].routes[].backends[].ai.provider.anthropic.model`|string||
@@ -15465,6 +15319,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15530,11 +15386,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15561,9 +15415,7 @@
 |`routeGroups[].routes[].backends[].ai.policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15596,6 +15448,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15661,11 +15515,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15686,8 +15538,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -15698,9 +15550,7 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails`|object|External MCP policy processors.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15733,6 +15583,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15798,11 +15650,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15815,11 +15665,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15834,11 +15682,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15879,6 +15725,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -15944,11 +15792,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -15985,6 +15831,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16050,11 +15898,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16091,6 +15937,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16156,11 +16004,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16195,6 +16041,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16260,11 +16108,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16289,11 +16135,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16336,6 +16180,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16401,11 +16247,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16442,6 +16286,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16507,11 +16353,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16546,6 +16390,8 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16611,11 +16457,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16661,7 +16505,7 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.gemini.model`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.vertex`|object||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.vertex.model`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.vertex.region`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.vertex.region`|string|Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`<br>use restricted multi-region endpoints. Other values are treated as regional locations.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.vertex.projectId`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.anthropic`|object||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].provider.anthropic.model`|string||
@@ -16717,6 +16561,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16782,11 +16628,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16813,9 +16657,7 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16848,6 +16690,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -16913,11 +16757,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16938,8 +16780,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -16950,9 +16792,7 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -16985,6 +16825,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17050,11 +16892,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17067,11 +16907,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17086,11 +16924,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17131,6 +16967,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17196,11 +17034,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17237,6 +17073,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17302,11 +17140,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17343,6 +17179,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17408,11 +17246,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17447,6 +17283,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17512,11 +17350,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17541,11 +17377,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17588,6 +17422,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17653,11 +17489,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17694,6 +17528,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17759,11 +17595,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17798,6 +17632,8 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -17863,11 +17699,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -17939,6 +17773,8 @@
 |`routeGroups[].routes[].backends[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18004,11 +17840,9 @@
 |`routeGroups[].routes[].backends[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18035,9 +17869,7 @@
 |`routeGroups[].routes[].backends[].policies.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`routeGroups[].routes[].backends[].policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service after this backend is selected.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.extAuthz.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.extAuthz.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.extAuthz.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.extAuthz.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.extAuthz.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.extAuthz.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18070,6 +17902,8 @@
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18135,11 +17969,9 @@
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18160,8 +17992,8 @@
 |`routeGroups[].routes[].backends[].policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`routeGroups[].routes[].backends[].policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`routeGroups[].routes[].backends[].policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`routeGroups[].routes[].backends[].policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`routeGroups[].routes[].backends[].policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`routeGroups[].routes[].backends[].policies.mcpAuthorization`|object|Authorization rules for MCP requests.|
@@ -18172,9 +18004,7 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service.name`|object||
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service.name`|string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18207,6 +18037,8 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18272,11 +18104,9 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18289,11 +18119,9 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
-|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.|
+|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker`|object|Endpoint picker backend that selects the destination endpoint.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.inferenceRouting.endpointPicker.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18308,11 +18136,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18353,6 +18179,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18418,11 +18246,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18459,6 +18285,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18524,11 +18352,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18565,6 +18391,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18630,11 +18458,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18669,6 +18495,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18734,11 +18562,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18763,11 +18589,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18810,6 +18634,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18875,11 +18701,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -18916,6 +18740,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -18981,11 +18807,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19020,6 +18844,8 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19085,11 +18911,9 @@
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`routeGroups[].routes[].backends[].policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19197,6 +19021,8 @@
 |`llm.providers[].defaults.tls.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.providers[].defaults.tls.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.providers[].defaults.auth`|object||
+|`llm.providers[].defaults.auth.key`|object||
+|`llm.providers[].defaults.auth.key.file`|string||
 |`llm.providers[].defaults.auth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.providers[].defaults.auth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.providers[].defaults.auth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19257,11 +19083,9 @@
 |`llm.providers[].defaults.health.eviction.consecutiveFailures`|integer|Consecutive unhealthy responses required before eviction.|
 |`llm.providers[].defaults.health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`llm.providers[].defaults.backendTunnel`|object||
-|`llm.providers[].defaults.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.providers[].defaults.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.providers[].defaults.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.providers[].defaults.backendTunnel.proxy.service.name`|object||
-|`llm.providers[].defaults.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.providers[].defaults.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.providers[].defaults.backendTunnel.proxy.service.name`|string||
 |`llm.providers[].defaults.backendTunnel.proxy.service.port`|integer||
 |`llm.providers[].defaults.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.providers[].defaults.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19336,6 +19160,8 @@
 |`llm.models[].tls.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].tls.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].auth`|object|auth configures authentication when connecting to the LLM provider.|
+|`llm.models[].auth.key`|object||
+|`llm.models[].auth.key.file`|string||
 |`llm.models[].auth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].auth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].auth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19396,11 +19222,9 @@
 |`llm.models[].health.eviction.consecutiveFailures`|integer|Consecutive unhealthy responses required before eviction.|
 |`llm.models[].health.eviction.healthThreshold`|number|Health score threshold below which an unhealthy response can evict the backend.|
 |`llm.models[].backendTunnel`|object|backendTunnel configures tunneling when connecting to the LLM provider.|
-|`llm.models[].backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].backendTunnel.proxy.service.name`|object||
-|`llm.models[].backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].backendTunnel.proxy.service.name`|string||
 |`llm.models[].backendTunnel.proxy.service.port`|integer||
 |`llm.models[].backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19413,11 +19237,9 @@
 |`llm.models[].guardrails.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`llm.models[].guardrails.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`llm.models[].guardrails.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`llm.models[].guardrails.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`llm.models[].guardrails.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.request[].webhook.target.service.name`|object||
-|`llm.models[].guardrails.request[].webhook.target.service.name.namespace`|string||
-|`llm.models[].guardrails.request[].webhook.target.service.name.hostname`|string||
+|`llm.models[].guardrails.request[].webhook.target.service.name`|string||
 |`llm.models[].guardrails.request[].webhook.target.service.port`|integer||
 |`llm.models[].guardrails.request[].webhook.target.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19458,6 +19280,8 @@
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19523,11 +19347,9 @@
 |`llm.models[].guardrails.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19564,6 +19386,8 @@
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19629,11 +19453,9 @@
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19670,6 +19492,8 @@
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19735,11 +19559,9 @@
 |`llm.models[].guardrails.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19774,6 +19596,8 @@
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19839,11 +19663,9 @@
 |`llm.models[].guardrails.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19868,11 +19690,9 @@
 |`llm.models[].guardrails.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`llm.models[].guardrails.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`llm.models[].guardrails.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`llm.models[].guardrails.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`llm.models[].guardrails.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.response[].webhook.target.service.name`|object||
-|`llm.models[].guardrails.response[].webhook.target.service.name.namespace`|string||
-|`llm.models[].guardrails.response[].webhook.target.service.name.hostname`|string||
+|`llm.models[].guardrails.response[].webhook.target.service.name`|string||
 |`llm.models[].guardrails.response[].webhook.target.service.port`|integer||
 |`llm.models[].guardrails.response[].webhook.target.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -19915,6 +19735,8 @@
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -19980,11 +19802,9 @@
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20021,6 +19841,8 @@
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20086,11 +19908,9 @@
 |`llm.models[].guardrails.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20125,6 +19945,8 @@
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20190,11 +20012,9 @@
 |`llm.models[].guardrails.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`llm.models[].guardrails.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.models[].guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20290,9 +20110,7 @@
 |`llm.policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`llm.policies.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`llm.policies.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extAuthz.conditional[].service.name`|object||
-|`llm.policies.extAuthz.conditional[].service.name.namespace`|string||
-|`llm.policies.extAuthz.conditional[].service.name.hostname`|string||
+|`llm.policies.extAuthz.conditional[].service.name`|string||
 |`llm.policies.extAuthz.conditional[].service.port`|integer||
 |`llm.policies.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`llm.policies.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20326,6 +20144,8 @@
 |`llm.policies.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`llm.policies.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`llm.policies.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20391,11 +20211,9 @@
 |`llm.policies.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20416,14 +20234,12 @@
 |`llm.policies.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`llm.policies.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`llm.policies.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`llm.policies.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`llm.policies.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`llm.policies.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`llm.policies.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`llm.policies.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`llm.policies.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`llm.policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extAuthz.service.name`|object||
-|`llm.policies.extAuthz.service.name.namespace`|string||
-|`llm.policies.extAuthz.service.name.hostname`|string||
+|`llm.policies.extAuthz.service.name`|string||
 |`llm.policies.extAuthz.service.port`|integer||
 |`llm.policies.extAuthz.host`|string|Hostname or IP address|
 |`llm.policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20456,6 +20272,8 @@
 |`llm.policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.extAuthz.policies.backendAuth.key`|object||
+|`llm.policies.extAuthz.policies.backendAuth.key.file`|string||
 |`llm.policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20521,11 +20339,9 @@
 |`llm.policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20546,16 +20362,14 @@
 |`llm.policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`llm.policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`llm.policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`llm.policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`llm.policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`llm.policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`llm.policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`llm.policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`llm.policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`llm.policies.extProc`|object|Send request and response data to an external processing service.|
 |`llm.policies.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`llm.policies.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extProc.conditional[].service.name`|object||
-|`llm.policies.extProc.conditional[].service.name.namespace`|string||
-|`llm.policies.extProc.conditional[].service.name.hostname`|string||
+|`llm.policies.extProc.conditional[].service.name`|string||
 |`llm.policies.extProc.conditional[].service.port`|integer||
 |`llm.policies.extProc.conditional[].host`|string|Hostname or IP address|
 |`llm.policies.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20589,6 +20403,8 @@
 |`llm.policies.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.extProc.conditional[].policies.backendAuth.key`|object||
+|`llm.policies.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`llm.policies.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20654,11 +20470,9 @@
 |`llm.policies.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20675,9 +20489,7 @@
 |`llm.policies.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`llm.policies.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`llm.policies.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extProc.service.name`|object||
-|`llm.policies.extProc.service.name.namespace`|string||
-|`llm.policies.extProc.service.name.hostname`|string||
+|`llm.policies.extProc.service.name`|string||
 |`llm.policies.extProc.service.port`|integer||
 |`llm.policies.extProc.host`|string|Hostname or IP address|
 |`llm.policies.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20710,6 +20522,8 @@
 |`llm.policies.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.extProc.policies.backendAuth.key`|object||
+|`llm.policies.extProc.policies.backendAuth.key.file`|string||
 |`llm.policies.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20775,11 +20589,9 @@
 |`llm.policies.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20868,11 +20680,9 @@
 |`llm.policies.guardrails.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`llm.policies.guardrails.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`llm.policies.guardrails.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`llm.policies.guardrails.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`llm.policies.guardrails.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.request[].webhook.target.service.name`|object||
-|`llm.policies.guardrails.request[].webhook.target.service.name.namespace`|string||
-|`llm.policies.guardrails.request[].webhook.target.service.name.hostname`|string||
+|`llm.policies.guardrails.request[].webhook.target.service.name`|string||
 |`llm.policies.guardrails.request[].webhook.target.service.port`|integer||
 |`llm.policies.guardrails.request[].webhook.target.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -20913,6 +20723,8 @@
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -20978,11 +20790,9 @@
 |`llm.policies.guardrails.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21019,6 +20829,8 @@
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21084,11 +20896,9 @@
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21125,6 +20935,8 @@
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21190,11 +21002,9 @@
 |`llm.policies.guardrails.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21229,6 +21039,8 @@
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21294,11 +21106,9 @@
 |`llm.policies.guardrails.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21323,11 +21133,9 @@
 |`llm.policies.guardrails.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`llm.policies.guardrails.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`llm.policies.guardrails.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`llm.policies.guardrails.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`llm.policies.guardrails.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.response[].webhook.target.service.name`|object||
-|`llm.policies.guardrails.response[].webhook.target.service.name.namespace`|string||
-|`llm.policies.guardrails.response[].webhook.target.service.name.hostname`|string||
+|`llm.policies.guardrails.response[].webhook.target.service.name`|string||
 |`llm.policies.guardrails.response[].webhook.target.service.port`|integer||
 |`llm.policies.guardrails.response[].webhook.target.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21370,6 +21178,8 @@
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21435,11 +21245,9 @@
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21476,6 +21284,8 @@
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21541,11 +21351,9 @@
 |`llm.policies.guardrails.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21580,6 +21388,8 @@
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21645,11 +21455,9 @@
 |`llm.policies.guardrails.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.guardrails.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.guardrails.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21674,9 +21482,7 @@
 |`llm.policies.localRateLimit[].type`|enum|Whether this limit counts requests or LLM tokens.<br>Possible values: `requests`, `tokens`.|
 |`llm.policies.remoteRateLimit`|object|Remote rate limit checks for incoming requests.|
 |`llm.policies.remoteRateLimit.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.remoteRateLimit.service.name`|object||
-|`llm.policies.remoteRateLimit.service.name.namespace`|string||
-|`llm.policies.remoteRateLimit.service.name.hostname`|string||
+|`llm.policies.remoteRateLimit.service.name`|string||
 |`llm.policies.remoteRateLimit.service.port`|integer||
 |`llm.policies.remoteRateLimit.host`|string|Hostname or IP address|
 |`llm.policies.remoteRateLimit.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21710,6 +21516,8 @@
 |`llm.policies.remoteRateLimit.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`llm.policies.remoteRateLimit.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`llm.policies.remoteRateLimit.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`llm.policies.remoteRateLimit.policies.backendAuth.key`|object||
+|`llm.policies.remoteRateLimit.policies.backendAuth.key.file`|string||
 |`llm.policies.remoteRateLimit.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`llm.policies.remoteRateLimit.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`llm.policies.remoteRateLimit.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21775,11 +21583,9 @@
 |`llm.policies.remoteRateLimit.policies.tcp.connectTimeout.secs`|integer||
 |`llm.policies.remoteRateLimit.policies.tcp.connectTimeout.nanos`|integer||
 |`llm.policies.remoteRateLimit.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|object||
-|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|string||
 |`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.service.port`|integer||
 |`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`llm.policies.remoteRateLimit.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21847,6 +21653,8 @@
 |`mcp.targets[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.targets[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.targets[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.targets[].policies.backendAuth.key`|object||
+|`mcp.targets[].policies.backendAuth.key.file`|string||
 |`mcp.targets[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.targets[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.targets[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -21912,11 +21720,9 @@
 |`mcp.targets[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.targets[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.targets[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.targets[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.targets[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.targets[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.targets[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.targets[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.targets[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.targets[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.targets[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.targets[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21928,9 +21734,7 @@
 |`mcp.targets[].policies.mcpGuardrails`|object|External MCP policy processors.|
 |`mcp.targets[].policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.targets[].policies.mcpGuardrails.processors[].service.name`|object||
-|`mcp.targets[].policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`mcp.targets[].policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].service.name`|string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].service.port`|integer||
 |`mcp.targets[].policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`mcp.targets[].policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -21963,6 +21767,8 @@
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22028,11 +21834,9 @@
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.targets[].policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22074,11 +21878,9 @@
 |`mcp.policies.urlRewrite.path.full`|string|Replace the full request path.|
 |`mcp.policies.urlRewrite.path.prefix`|string|Replace only the matched path prefix.|
 |`mcp.policies.requestMirror`|object|Send a copy of matching requests to another backend.|
-|`mcp.policies.requestMirror.backend`|object|Backend that receives mirrored request copies.|
+|`mcp.policies.requestMirror.backend`|object|Backend that receives mirrored request copies.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.requestMirror.backend.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.requestMirror.backend.service.name`|object||
-|`mcp.policies.requestMirror.backend.service.name.namespace`|string||
-|`mcp.policies.requestMirror.backend.service.name.hostname`|string||
+|`mcp.policies.requestMirror.backend.service.name`|string||
 |`mcp.policies.requestMirror.backend.service.port`|integer||
 |`mcp.policies.requestMirror.backend.host`|string|Hostname or IP address|
 |`mcp.policies.requestMirror.backend.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22109,9 +21911,7 @@
 |`mcp.policies.mcpGuardrails`|object|External MCP policy processors.|
 |`mcp.policies.mcpGuardrails.processors`|[]object|Ordered list of policy processors applied to matched methods; the first<br>to reject a request short-circuits the chain. Processors may run on the<br>request or response side, or both; see `Processor.methods`.|
 |`mcp.policies.mcpGuardrails.processors[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.mcpGuardrails.processors[].service.name`|object||
-|`mcp.policies.mcpGuardrails.processors[].service.name.namespace`|string||
-|`mcp.policies.mcpGuardrails.processors[].service.name.hostname`|string||
+|`mcp.policies.mcpGuardrails.processors[].service.name`|string||
 |`mcp.policies.mcpGuardrails.processors[].service.port`|integer||
 |`mcp.policies.mcpGuardrails.processors[].host`|string|Hostname or IP address|
 |`mcp.policies.mcpGuardrails.processors[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22144,6 +21944,8 @@
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.mcpGuardrails.processors[].policies.backendAuth.key`|object||
+|`mcp.policies.mcpGuardrails.processors[].policies.backendAuth.key.file`|string||
 |`mcp.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22209,11 +22011,9 @@
 |`mcp.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.mcpGuardrails.processors[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.mcpGuardrails.processors[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22265,11 +22065,9 @@
 |`mcp.policies.ai.promptGuard.request[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`mcp.policies.ai.promptGuard.request[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`mcp.policies.ai.promptGuard.request[].webhook`|object|Call a webhook to evaluate the prompt.|
-|`mcp.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`mcp.policies.ai.promptGuard.request[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.request[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.request[].webhook.target.service.name`|object||
-|`mcp.policies.ai.promptGuard.request[].webhook.target.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.request[].webhook.target.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.request[].webhook.target.service.name`|string||
 |`mcp.policies.ai.promptGuard.request[].webhook.target.service.port`|integer||
 |`mcp.policies.ai.promptGuard.request[].webhook.target.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.request[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22310,6 +22108,8 @@
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22375,11 +22175,9 @@
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.request[].openAIModeration.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22416,6 +22214,8 @@
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22481,11 +22281,9 @@
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.request[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22522,6 +22320,8 @@
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22587,11 +22387,9 @@
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.request[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22626,6 +22424,8 @@
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22691,11 +22491,9 @@
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.request[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22720,11 +22518,9 @@
 |`mcp.policies.ai.promptGuard.response[].regex.rules[].builtin`|enum|Use a built-in sensitive data pattern.<br>Built-in pattern name.<br>Possible values: `ssn`, `creditCard`, `phoneNumber`, `email`, `caSin`.|
 |`mcp.policies.ai.promptGuard.response[].regex.rules[].pattern`|string|Use a custom regular expression.<br>Regular expression pattern to evaluate.|
 |`mcp.policies.ai.promptGuard.response[].webhook`|object|Call a webhook to evaluate the response.|
-|`mcp.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.|
+|`mcp.policies.ai.promptGuard.response[].webhook.target`|object|Backend that receives guardrail webhook requests.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.response[].webhook.target.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.response[].webhook.target.service.name`|object||
-|`mcp.policies.ai.promptGuard.response[].webhook.target.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.response[].webhook.target.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.response[].webhook.target.service.name`|string||
 |`mcp.policies.ai.promptGuard.response[].webhook.target.service.port`|integer||
 |`mcp.policies.ai.promptGuard.response[].webhook.target.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.response[].webhook.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22767,6 +22563,8 @@
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22832,11 +22630,9 @@
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.response[].bedrockGuardrails.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22873,6 +22669,8 @@
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -22938,11 +22736,9 @@
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.response[].googleModelArmor.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -22977,6 +22773,8 @@
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key`|object||
+|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.key.file`|string||
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23042,11 +22840,9 @@
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.ai.promptGuard.response[].azureContentSafety.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23093,15 +22889,15 @@
 |`mcp.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.backendTunnel`|object|Tunnel settings used when connecting to the backend.|
-|`mcp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
 |`mcp.policies.backendAuth`|object|Authentication credentials sent to the backend.|
+|`mcp.policies.backendAuth.key`|object||
+|`mcp.policies.backendAuth.key.file`|string||
 |`mcp.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23168,9 +22964,7 @@
 |`mcp.policies.remoteRateLimit`|object|Remote rate limit checks for incoming requests.|
 |`mcp.policies.remoteRateLimit.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`mcp.policies.remoteRateLimit.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.remoteRateLimit.conditional[].service.name`|object||
-|`mcp.policies.remoteRateLimit.conditional[].service.name.namespace`|string||
-|`mcp.policies.remoteRateLimit.conditional[].service.name.hostname`|string||
+|`mcp.policies.remoteRateLimit.conditional[].service.name`|string||
 |`mcp.policies.remoteRateLimit.conditional[].service.port`|integer||
 |`mcp.policies.remoteRateLimit.conditional[].host`|string|Hostname or IP address|
 |`mcp.policies.remoteRateLimit.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23205,6 +22999,8 @@
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth.key`|object||
+|`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth.key.file`|string||
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23270,11 +23066,9 @@
 |`mcp.policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.remoteRateLimit.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.remoteRateLimit.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23287,9 +23081,7 @@
 |`mcp.policies.remoteRateLimit.conditional[].descriptors[].limitOverride`|string|limitOverride determines the optional expression to determine the limit of the request.<br>This tells the remote server what limit to apply to the request.<br>Note: this does not specify the *cost* of the request, which is done by the `cost` field.<br>The expression must evaluate to a map with `unit` and `requestsPerUnit` keys. For example:<br>`{"unit":"second","requestsPerUnit":100}`.<br>Valid units: second, minute, hour, day, month, year<br>If the expression fails to evaluate, the descriptor is skipped.|
 |`mcp.policies.remoteRateLimit.conditional[].failureMode`|enum|Behavior when the remote rate limit service is unavailable or returns an error.<br>Defaults to failClosed, denying requests with a 500 status on service failure.<br>Possible values: `failClosed`, `FailClosed`, `failOpen`, `FailOpen`.|
 |`mcp.policies.remoteRateLimit.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.remoteRateLimit.service.name`|object||
-|`mcp.policies.remoteRateLimit.service.name.namespace`|string||
-|`mcp.policies.remoteRateLimit.service.name.hostname`|string||
+|`mcp.policies.remoteRateLimit.service.name`|string||
 |`mcp.policies.remoteRateLimit.service.port`|integer||
 |`mcp.policies.remoteRateLimit.host`|string|Hostname or IP address|
 |`mcp.policies.remoteRateLimit.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23323,6 +23115,8 @@
 |`mcp.policies.remoteRateLimit.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.remoteRateLimit.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.remoteRateLimit.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.remoteRateLimit.policies.backendAuth.key`|object||
+|`mcp.policies.remoteRateLimit.policies.backendAuth.key.file`|string||
 |`mcp.policies.remoteRateLimit.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.remoteRateLimit.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.remoteRateLimit.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23388,11 +23182,9 @@
 |`mcp.policies.remoteRateLimit.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.remoteRateLimit.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.remoteRateLimit.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.remoteRateLimit.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23479,9 +23271,7 @@
 |`mcp.policies.extAuthz`|object|Authorize incoming requests by calling an external authorization service.|
 |`mcp.policies.extAuthz.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`mcp.policies.extAuthz.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extAuthz.conditional[].service.name`|object||
-|`mcp.policies.extAuthz.conditional[].service.name.namespace`|string||
-|`mcp.policies.extAuthz.conditional[].service.name.hostname`|string||
+|`mcp.policies.extAuthz.conditional[].service.name`|string||
 |`mcp.policies.extAuthz.conditional[].service.port`|integer||
 |`mcp.policies.extAuthz.conditional[].host`|string|Hostname or IP address|
 |`mcp.policies.extAuthz.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23515,6 +23305,8 @@
 |`mcp.policies.extAuthz.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.extAuthz.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.extAuthz.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.extAuthz.conditional[].policies.backendAuth.key`|object||
+|`mcp.policies.extAuthz.conditional[].policies.backendAuth.key.file`|string||
 |`mcp.policies.extAuthz.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.extAuthz.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.extAuthz.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23580,11 +23372,9 @@
 |`mcp.policies.extAuthz.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.extAuthz.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.extAuthz.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.extAuthz.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23605,14 +23395,12 @@
 |`mcp.policies.extAuthz.conditional[].includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`mcp.policies.extAuthz.conditional[].includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`mcp.policies.extAuthz.conditional[].includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`mcp.policies.extAuthz.conditional[].cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`mcp.policies.extAuthz.conditional[].cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`mcp.policies.extAuthz.conditional[].cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`mcp.policies.extAuthz.conditional[].cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`mcp.policies.extAuthz.conditional[].cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`mcp.policies.extAuthz.conditional[].cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`mcp.policies.extAuthz.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extAuthz.service.name`|object||
-|`mcp.policies.extAuthz.service.name.namespace`|string||
-|`mcp.policies.extAuthz.service.name.hostname`|string||
+|`mcp.policies.extAuthz.service.name`|string||
 |`mcp.policies.extAuthz.service.port`|integer||
 |`mcp.policies.extAuthz.host`|string|Hostname or IP address|
 |`mcp.policies.extAuthz.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23645,6 +23433,8 @@
 |`mcp.policies.extAuthz.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.extAuthz.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.extAuthz.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.extAuthz.policies.backendAuth.key`|object||
+|`mcp.policies.extAuthz.policies.backendAuth.key.file`|string||
 |`mcp.policies.extAuthz.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.extAuthz.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.extAuthz.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23710,11 +23500,9 @@
 |`mcp.policies.extAuthz.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.extAuthz.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.extAuthz.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.extAuthz.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.extAuthz.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extAuthz.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.extAuthz.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.extAuthz.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.extAuthz.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.extAuthz.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.extAuthz.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.extAuthz.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23735,16 +23523,14 @@
 |`mcp.policies.extAuthz.includeRequestBody.maxRequestBytes`|integer|Maximum request body size to send to the authorization service. Defaults to 8192 bytes.|
 |`mcp.policies.extAuthz.includeRequestBody.allowPartialMessage`|boolean|Whether to send a partial body when the request exceeds `maxRequestBytes`.|
 |`mcp.policies.extAuthz.includeRequestBody.packAsBytes`|boolean|Whether to send the body as raw bytes for gRPC authorization checks.|
-|`mcp.policies.extAuthz.cache`|object|Cache gRPC authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
-|`mcp.policies.extAuthz.cache.key`|[]string|Non-empty list of CEL expressions that make up the cache key.|
+|`mcp.policies.extAuthz.cache`|object|Cache authorization results using CEL expressions as the cache key.<br>Warning: the safety of this feature depends on the cache key accurately capturing the fields<br>the server operates on. For example, if you return a different result based on header A but only<br>cache header B, users may get incorrect cache hits.|
+|`mcp.policies.extAuthz.cache.key`|[]string|CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.|
 |`mcp.policies.extAuthz.cache.ttl`|string|CEL expression that returns how long cached authorization results are reused.<br>The expression is evaluated after the authorization response has been applied<br>to the request, and must return either a duration or timestamp.|
 |`mcp.policies.extAuthz.cache.maxEntries`|integer|Maximum number of authorization results to keep in the cache.|
 |`mcp.policies.extProc`|object|Send request and response data to an external processing service.|
 |`mcp.policies.extProc.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`mcp.policies.extProc.conditional[].service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extProc.conditional[].service.name`|object||
-|`mcp.policies.extProc.conditional[].service.name.namespace`|string||
-|`mcp.policies.extProc.conditional[].service.name.hostname`|string||
+|`mcp.policies.extProc.conditional[].service.name`|string||
 |`mcp.policies.extProc.conditional[].service.port`|integer||
 |`mcp.policies.extProc.conditional[].host`|string|Hostname or IP address|
 |`mcp.policies.extProc.conditional[].backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23778,6 +23564,8 @@
 |`mcp.policies.extProc.conditional[].policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.extProc.conditional[].policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.extProc.conditional[].policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.extProc.conditional[].policies.backendAuth.key`|object||
+|`mcp.policies.extProc.conditional[].policies.backendAuth.key.file`|string||
 |`mcp.policies.extProc.conditional[].policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.extProc.conditional[].policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.extProc.conditional[].policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23843,11 +23631,9 @@
 |`mcp.policies.extProc.conditional[].policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.extProc.conditional[].policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.extProc.conditional[].policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.extProc.conditional[].policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23864,9 +23650,7 @@
 |`mcp.policies.extProc.conditional[].processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`mcp.policies.extProc.conditional[].processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
 |`mcp.policies.extProc.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extProc.service.name`|object||
-|`mcp.policies.extProc.service.name.namespace`|string||
-|`mcp.policies.extProc.service.name.hostname`|string||
+|`mcp.policies.extProc.service.name`|string||
 |`mcp.policies.extProc.service.port`|integer||
 |`mcp.policies.extProc.host`|string|Hostname or IP address|
 |`mcp.policies.extProc.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
@@ -23899,6 +23683,8 @@
 |`mcp.policies.extProc.policies.backendTLS.subjectAltNames`|[]string|Additional subject alternative names accepted for the backend certificate.|
 |`mcp.policies.extProc.policies.backendTLS.keyExchangeGroups`|[]enum|Key exchange groups allowed for negotiating TLS.<br>Possible values: `X25519`, `P-256`, `P-384`, `X25519_MLKEM768`.|
 |`mcp.policies.extProc.policies.backendAuth`|object|Authentication credentials sent to this backend.|
+|`mcp.policies.extProc.policies.backendAuth.key`|object||
+|`mcp.policies.extProc.policies.backendAuth.key.file`|string||
 |`mcp.policies.extProc.policies.backendAuth.passthrough`|object|Forward the validated incoming JWT to the backend.|
 |`mcp.policies.extProc.policies.backendAuth.passthrough.location`|object|Where to place the forwarded credential in the backend request.|
 |`mcp.policies.extProc.policies.backendAuth.passthrough.location.header`|object|Read the credential from an HTTP header.|
@@ -23964,11 +23750,9 @@
 |`mcp.policies.extProc.policies.tcp.connectTimeout.secs`|integer||
 |`mcp.policies.extProc.policies.tcp.connectTimeout.nanos`|integer||
 |`mcp.policies.extProc.policies.backendTunnel`|object|Tunnel settings used when connecting to this backend.|
-|`mcp.policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.|
+|`mcp.policies.extProc.policies.backendTunnel.proxy`|object|Proxy backend used to tunnel the connection.<br>Exactly one of service, host, or backend may be set.|
 |`mcp.policies.extProc.policies.backendTunnel.proxy.service`|object|Service reference. Service must be defined in the top level services list.|
-|`mcp.policies.extProc.policies.backendTunnel.proxy.service.name`|object||
-|`mcp.policies.extProc.policies.backendTunnel.proxy.service.name.namespace`|string||
-|`mcp.policies.extProc.policies.backendTunnel.proxy.service.name.hostname`|string||
+|`mcp.policies.extProc.policies.backendTunnel.proxy.service.name`|string||
 |`mcp.policies.extProc.policies.backendTunnel.proxy.service.port`|integer||
 |`mcp.policies.extProc.policies.backendTunnel.proxy.host`|string|Hostname or IP address|
 |`mcp.policies.extProc.policies.backendTunnel.proxy.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|

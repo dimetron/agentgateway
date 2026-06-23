@@ -4,7 +4,14 @@
   "type": "object",
   "properties": {
     "config": {
-      "$ref": "#/$defs/RawConfig",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "default": null
     },
     "binds": {
@@ -24,9 +31,19 @@
       }
     },
     "workloads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
       "default": []
     },
     "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      },
       "default": []
     },
     "backends": {
@@ -255,9 +272,13 @@
           "default": null
         },
         "workerThreads": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StringOrInt"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "tracing": {
@@ -395,7 +416,156 @@
           "required": [
             "inline"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "inline": {
+              "$ref": "#/$defs/Catalog"
+            }
+          },
+          "required": [
+            "inline"
+          ]
         }
+      ]
+    },
+    "Catalog": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Provider"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "Provider": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Model"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "Model": {
+      "type": "object",
+      "properties": {
+        "rates": {
+          "$ref": "#/$defs/Rates"
+        },
+        "tiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tier"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Rates": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheRead": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheWrite": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputAudio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputAudio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Money": {
+      "type": "string"
+    },
+    "Tier": {
+      "type": "object",
+      "properties": {
+        "contextOver": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rates": {
+          "$ref": "#/$defs/Rates"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "contextOver",
+        "rates"
       ]
     },
     "Config": {
@@ -455,6 +625,12 @@
         }
       },
       "additionalProperties": false
+    },
+    "StringOrInt": {
+      "type": [
+        "string",
+        "integer"
+      ]
     },
     "RawTracing": {
       "type": "object",
@@ -1412,7 +1588,7 @@
           "description": "Authentication credentials sent to the backend.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"
@@ -1761,7 +1937,7 @@
       "properties": {
         "backend": {
           "description": "Backend that receives mirrored request copies.",
-          "$ref": "#/$defs/SimpleLocalBackend"
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
         },
         "percentage": {
           "description": "Fraction of matching requests to mirror, from 0.0 to 1.0.",
@@ -1775,12 +1951,8 @@
         "percentage"
       ]
     },
-    "SimpleLocalBackend": {
+    "SimpleLocalBackendSerde": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": []
-        },
         {
           "description": "Service reference. Service must be defined in the top level services list.",
           "type": "object",
@@ -1840,19 +2012,7 @@
       ]
     },
     "NamespacedHostname": {
-      "type": "object",
-      "properties": {
-        "namespace": {
-          "type": "string"
-        },
-        "hostname": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "namespace",
-        "hostname"
-      ]
+      "type": "string"
     },
     "LocalExplicitOrConditional_DirectResponse": {
       "anyOf": [
@@ -2110,8 +2270,7 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Processor"
-          },
-          "minItems": 1
+          }
         }
       },
       "additionalProperties": false,
@@ -2278,7 +2437,7 @@
           "description": "Authentication credentials sent to this backend.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"
@@ -2483,6 +2642,42 @@
         "P-256",
         "P-384",
         "X25519_MLKEM768"
+      ]
+    },
+    "BackendAuthCompat": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/FileOrInline"
+            }
+          },
+          "required": [
+            "key"
+          ]
+        },
+        {
+          "$ref": "#/$defs/BackendAuth"
+        }
+      ]
+    },
+    "FileOrInline": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "type": "string"
+        }
       ]
     },
     "BackendAuth": {
@@ -2694,24 +2889,6 @@
             "expression"
           ],
           "additionalProperties": false
-        }
-      ]
-    },
-    "FileOrInline": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "file": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "file"
-          ]
-        },
-        {
-          "type": "string"
         }
       ]
     },
@@ -3082,7 +3259,7 @@
       "properties": {
         "proxy": {
           "description": "Proxy backend used to tunnel the connection.",
-          "$ref": "#/$defs/SimpleLocalBackend"
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
         }
       },
       "additionalProperties": false,
@@ -3643,7 +3820,7 @@
       "properties": {
         "target": {
           "description": "Backend that receives guardrail webhook requests.",
-          "$ref": "#/$defs/SimpleLocalBackend"
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
         },
         "forwardHeaderMatches": {
           "description": "Incoming request headers to forward to the webhook.",
@@ -3967,8 +4144,7 @@
           }
         }
       },
-      "additionalProperties": false,
-      "minProperties": 1
+      "additionalProperties": false
     },
     "SimpleChatCompletionMessage": {
       "description": "SimpleChatCompletionMessage is a simplified chat message",
@@ -4936,7 +5112,7 @@
           ]
         },
         "cache": {
-          "description": "Cache gRPC authorization results using CEL expressions as the cache key.\nWarning: the safety of this feature depends on the cache key accurately capturing the fields\nthe server operates on. For example, if you return a different result based on header A but only\ncache header B, users may get incorrect cache hits.",
+          "description": "Cache authorization results using CEL expressions as the cache key.\nWarning: the safety of this feature depends on the cache key accurately capturing the fields\nthe server operates on. For example, if you return a different result based on header A but only\ncache header B, users may get incorrect cache hits.",
           "anyOf": [
             {
               "$ref": "#/$defs/CacheConfig"
@@ -5159,12 +5335,11 @@
       "type": "object",
       "properties": {
         "key": {
-          "description": "Non-empty list of CEL expressions that make up the cache key.",
+          "description": "CEL expressions that make up the cache key. Empty keys are accepted, but do not produce cache hits.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Expression"
-          },
-          "minItems": 1
+          }
         },
         "ttl": {
           "description": "CEL expression that returns how long cached authorization results are reused.\nThe expression is evaluated after the authorization response has been applied\nto the request, and must return either a duration or timestamp.",
@@ -5229,7 +5404,7 @@
           ]
         },
         "cache": {
-          "description": "Cache gRPC authorization results using CEL expressions as the cache key.\nWarning: the safety of this feature depends on the cache key accurately capturing the fields\nthe server operates on. For example, if you return a different result based on header A but only\ncache header B, users may get incorrect cache hits.",
+          "description": "Cache authorization results using CEL expressions as the cache key.\nWarning: the safety of this feature depends on the cache key accurately capturing the fields\nthe server operates on. For example, if you return a different result based on header A but only\ncache header B, users may get incorrect cache hits.",
           "anyOf": [
             {
               "$ref": "#/$defs/CacheConfig"
@@ -6092,36 +6267,59 @@
           "properties": {
             "sse": {
               "type": "object",
-              "properties": {
-                "host": {
-                  "type": [
-                    "string",
-                    "null"
+              "unevaluatedProperties": false,
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host"
                   ]
                 },
-                "port": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "format": "uint16",
-                  "minimum": 0,
-                  "maximum": 65535
-                },
-                "path": {
-                  "type": [
-                    "string",
-                    "null"
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host",
+                    "port",
+                    "path"
                   ]
                 },
-                "backend": {
-                  "type": [
-                    "string",
-                    "null"
+                {
+                  "type": "object",
+                  "properties": {
+                    "backend": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "backend"
                   ]
                 }
-              },
-              "additionalProperties": false
+              ]
             }
           },
           "required": [
@@ -6133,36 +6331,59 @@
           "properties": {
             "mcp": {
               "type": "object",
-              "properties": {
-                "host": {
-                  "type": [
-                    "string",
-                    "null"
+              "unevaluatedProperties": false,
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host"
                   ]
                 },
-                "port": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "format": "uint16",
-                  "minimum": 0,
-                  "maximum": 65535
-                },
-                "path": {
-                  "type": [
-                    "string",
-                    "null"
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host",
+                    "port",
+                    "path"
                   ]
                 },
-                "backend": {
-                  "type": [
-                    "string",
-                    "null"
+                {
+                  "type": "object",
+                  "properties": {
+                    "backend": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "backend"
                   ]
                 }
-              },
-              "additionalProperties": false
+              ]
             }
           },
           "required": [
@@ -6210,38 +6431,63 @@
             "openapi": {
               "type": "object",
               "properties": {
-                "host": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "port": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "format": "uint16",
-                  "minimum": 0,
-                  "maximum": 65535
-                },
-                "path": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "backend": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
                 "schema": {
                   "$ref": "#/$defs/FileInlineOrRemote"
                 }
               },
-              "additionalProperties": false,
+              "unevaluatedProperties": false,
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host",
+                    "port",
+                    "path"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "backend": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "backend"
+                  ]
+                }
+              ],
               "required": [
                 "schema"
               ]
@@ -6295,7 +6541,7 @@
           "description": "Authentication credentials sent to this backend.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"
@@ -6601,6 +6847,7 @@
           ]
         },
         "region": {
+          "description": "Vertex AI region. Special values: `global` uses the global endpoint, while `us` and `eu`\nuse restricted multi-region endpoints. Other values are treated as regional locations.",
           "type": [
             "string",
             "null"
@@ -6825,7 +7072,7 @@
           "description": "Authentication credentials sent to this backend.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"
@@ -7047,7 +7294,7 @@
       "properties": {
         "endpointPicker": {
           "description": "Endpoint picker backend that selects the destination endpoint.",
-          "$ref": "#/$defs/SimpleLocalBackend"
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
         },
         "destinationMode": {
           "description": "How to use the destination returned by the endpoint picker.",
@@ -8028,7 +8275,7 @@
           "description": "Optional per-policy override for random sampling. If set, overrides global config for\nrequests that use this frontend policy.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Expression"
+              "$ref": "#/$defs/StringBoolFloat"
             },
             {
               "type": "null"
@@ -8040,7 +8287,7 @@
           "description": "Optional per-policy override for client sampling. If set, overrides global config for\nrequests that use this frontend policy.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Expression"
+              "$ref": "#/$defs/StringBoolFloat"
             },
             {
               "type": "null"
@@ -8804,7 +9051,7 @@
         "auth": {
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"
@@ -8973,7 +9220,7 @@
           "description": "auth configures authentication when connecting to the LLM provider.",
           "anyOf": [
             {
-              "$ref": "#/$defs/BackendAuth"
+              "$ref": "#/$defs/BackendAuthCompat"
             },
             {
               "type": "null"

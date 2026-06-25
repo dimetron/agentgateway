@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::{fmt, io, str};
@@ -190,6 +191,15 @@ pub struct RawConfig {
 
 	/// MCP gateway settings.
 	mcp: Option<RawMcpConfig>,
+
+	/// Custom CEL functions available to all CEL expressions. These can define re-usable snippets that
+	/// can be used in any expressions.
+	/// Configure as a block string containing one or more definitions, for example:
+	/// `customFunctions: |`
+	/// `  isInternal() { request.headers["x-env"] == "internal" }`
+	/// `  this.joined(prefix, parts...) { prefix + this + parts.join("") }`
+	#[serde(default)]
+	custom_functions: String,
 
 	#[serde(default, with = "serde_dur_option")]
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
@@ -687,6 +697,7 @@ pub struct ProxyInputs {
 	pub metrics: Arc<metrics::Metrics>,
 	pub model_catalog: Arc<llm::cost::ModelCatalog>,
 
+	pub admin: Option<management::admin::AdminService>,
 	pub mcp_state: mcp::App,
 	pub ca: Option<Arc<CaClient>>,
 }
@@ -712,6 +723,7 @@ impl ProxyInputs {
 			upstream,
 			metrics,
 			model_catalog: Arc::new(model_catalog.unwrap_or_default()),
+			admin: None,
 			mcp_state,
 			ca,
 		}

@@ -37,6 +37,7 @@
 |`config.session.key`|string|The AES-256-GCM session protection key to be used for session tokens.<br>If not set, sessions will not be encrypted.<br>For example, generated via `openssl rand -hex 32`.|
 |`config.mcp`|object|MCP gateway settings.|
 |`config.mcp.sessionTtl`|string||
+|`config.customFunctions`|string|Custom CEL functions available to all CEL expressions. These can define re-usable snippets that<br>can be used in any expressions.<br>Configure as a block string containing one or more definitions, for example:<br>`customFunctions: |`<br>`  isInternal() { request.headers["x-env"] == "internal" }`<br>`  this.joined(prefix, parts...) { prefix + this + parts.join("") }`|
 |`config.connectionTerminationDeadline`|string||
 |`config.connectionMinTerminationDeadline`|string||
 |`config.workerThreads`|string||
@@ -1524,6 +1525,7 @@
 |`binds[].listeners[].routes[].policies.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`binds[].listeners[].routes[].policies.apiKey.keys[].key`|string|API key value to accept.|
 |`binds[].listeners[].routes[].policies.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`binds[].listeners[].routes[].policies.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`binds[].listeners[].routes[].policies.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`binds[].listeners[].routes[].policies.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`binds[].listeners[].routes[].policies.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -1652,6 +1654,7 @@
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].routes[].policies.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -1780,6 +1783,7 @@
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].routes[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].routes[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -2084,6 +2088,7 @@
 |`binds[].listeners[].routes[].backends[].service.port`|integer||
 |`binds[].listeners[].routes[].backends[].backend`|string||
 |`binds[].listeners[].routes[].backends[].host`|string||
+|`binds[].listeners[].routes[].backends[].internal`|string|Route to the in-process admin service instead of a network upstream.<br>Selects how an internal backend maps proxy requests to the admin API.|
 |`binds[].listeners[].routes[].backends[].dynamic`|object||
 |`binds[].listeners[].routes[].backends[].mcp`|object||
 |`binds[].listeners[].routes[].backends[].mcp.targets`|[]object||
@@ -2611,6 +2616,7 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].routes[].backends[].ai.policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -3853,6 +3859,7 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -5065,6 +5072,7 @@
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].routes[].backends[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -6238,6 +6246,7 @@
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].policies.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -6366,6 +6375,7 @@
 |`binds[].listeners[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`binds[].listeners[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`binds[].listeners[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`binds[].listeners[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`binds[].listeners[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`binds[].listeners[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`binds[].listeners[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -6674,6 +6684,7 @@
 |`binds[].listeners[].policies.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`binds[].listeners[].policies.apiKey.keys[].key`|string|API key value to accept.|
 |`binds[].listeners[].policies.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`binds[].listeners[].policies.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`binds[].listeners[].policies.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`binds[].listeners[].policies.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`binds[].listeners[].policies.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -7070,6 +7081,7 @@
 |`frontendPolicies.tracing.remove`|[]string|Attribute keys to remove from the emitted span attributes.<br><br>This is applied before `attributes` are evaluated/added, so it can be used to drop<br>default attributes or avoid duplication.|
 |`frontendPolicies.tracing.randomSampling`|string|Optional per-policy override for random sampling. If set, overrides global config for<br>requests that use this frontend policy.|
 |`frontendPolicies.tracing.clientSampling`|string|Optional per-policy override for client sampling. If set, overrides global config for<br>requests that use this frontend policy.|
+|`frontendPolicies.tracing.filter`|string|Optional CEL filter with KEEP semantics. When set, only requests for which the expression<br>evaluates to `true` have their trace span(s) exported; all other spans are dropped. When<br>unset, no filtering is applied (all sampled spans are exported). Composes after sampling<br>(only sampled spans are evaluated). This matches `accessLog.filter` (keep-semantics):<br>`true` keeps. Missing/errored fields evaluate to `false`, so on eval error the span is<br>dropped (fail closed).|
 |`frontendPolicies.tracing.path`|string|OTLP HTTP path used to export traces.|
 |`frontendPolicies.tracing.protocol`|enum|OTLP protocol used to export traces. Defaults to HTTP.<br>Possible values: `grpc`, `http`.|
 |`policies`|[]object|policies defines additional policies that can be attached to various other configurations.<br>This is an advanced feature; users should typically use the inline `policies` field under route/gateway.|
@@ -8508,6 +8520,7 @@
 |`policies[].policy.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`policies[].policy.apiKey.keys[].key`|string|API key value to accept.|
 |`policies[].policy.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`policies[].policy.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`policies[].policy.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`policies[].policy.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`policies[].policy.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -8636,6 +8649,7 @@
 |`policies[].policy.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`policies[].policy.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`policies[].policy.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`policies[].policy.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`policies[].policy.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`policies[].policy.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`policies[].policy.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -8764,6 +8778,7 @@
 |`policies[].policy.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`policies[].policy.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`policies[].policy.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`policies[].policy.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`policies[].policy.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`policies[].policy.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`policies[].policy.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -9066,6 +9081,7 @@
 |`services`|[]object||
 |`backends`|[]object||
 |`backends[].host`|string||
+|`backends[].internal`|string|Route to the in-process admin service instead of a network upstream.<br>Selects how an internal backend maps proxy requests to the admin API.|
 |`backends[].mcp`|object||
 |`backends[].mcp.targets`|[]object||
 |`backends[].mcp.targets[].sse`|object||
@@ -9592,6 +9608,7 @@
 |`backends[].ai.policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`backends[].ai.policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`backends[].ai.policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`backends[].ai.policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`backends[].ai.policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`backends[].ai.policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`backends[].ai.policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -10834,6 +10851,7 @@
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -12044,6 +12062,7 @@
 |`backends[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`backends[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`backends[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`backends[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`backends[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`backends[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`backends[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -14441,6 +14460,7 @@
 |`routeGroups[].routes[].policies.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`routeGroups[].routes[].policies.apiKey.keys[].key`|string|API key value to accept.|
 |`routeGroups[].routes[].policies.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`routeGroups[].routes[].policies.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`routeGroups[].routes[].policies.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`routeGroups[].routes[].policies.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`routeGroups[].routes[].policies.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -14569,6 +14589,7 @@
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`routeGroups[].routes[].policies.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -14697,6 +14718,7 @@
 |`routeGroups[].routes[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`routeGroups[].routes[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`routeGroups[].routes[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`routeGroups[].routes[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`routeGroups[].routes[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`routeGroups[].routes[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`routeGroups[].routes[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -15001,6 +15023,7 @@
 |`routeGroups[].routes[].backends[].service.port`|integer||
 |`routeGroups[].routes[].backends[].backend`|string||
 |`routeGroups[].routes[].backends[].host`|string||
+|`routeGroups[].routes[].backends[].internal`|string|Route to the in-process admin service instead of a network upstream.<br>Selects how an internal backend maps proxy requests to the admin API.|
 |`routeGroups[].routes[].backends[].dynamic`|object||
 |`routeGroups[].routes[].backends[].mcp`|object||
 |`routeGroups[].routes[].backends[].mcp.targets`|[]object||
@@ -15528,6 +15551,7 @@
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`routeGroups[].routes[].backends[].ai.policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -16770,6 +16794,7 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -17982,6 +18007,7 @@
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`routeGroups[].routes[].backends[].policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -20224,6 +20250,7 @@
 |`llm.policies.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`llm.policies.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`llm.policies.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`llm.policies.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`llm.policies.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`llm.policies.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`llm.policies.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -20352,6 +20379,7 @@
 |`llm.policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`llm.policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`llm.policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`llm.policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`llm.policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`llm.policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`llm.policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -20660,6 +20688,7 @@
 |`llm.policies.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`llm.policies.apiKey.keys[].key`|string|API key value to accept.|
 |`llm.policies.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`llm.policies.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`llm.policies.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`llm.policies.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`llm.policies.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -23257,6 +23286,7 @@
 |`mcp.policies.apiKey.keys`|[]object|API keys that are accepted by this policy.|
 |`mcp.policies.apiKey.keys[].key`|string|API key value to accept.|
 |`mcp.policies.apiKey.keys[].metadata`|any|Optional metadata attached to requests authenticated with this key.|
+|`mcp.policies.apiKey.keys[].keyHash`|string|SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.|
 |`mcp.policies.apiKey.mode`|enum|Controls whether requests must include a valid API key.<br>Possible values: `strict`, `optional`, `permissive`.|
 |`mcp.policies.apiKey.location`|object|Where to read the API key from in incoming requests.<br>Exactly one of header, queryParameter, cookie, or expression may be set.|
 |`mcp.policies.apiKey.location.header`|object|Read the credential from an HTTP header.|
@@ -23385,6 +23415,7 @@
 |`mcp.policies.extAuthz.conditional[].protocol.http`|object|Call the authorization service using HTTP.|
 |`mcp.policies.extAuthz.conditional[].protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`mcp.policies.extAuthz.conditional[].protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`mcp.policies.extAuthz.conditional[].protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`mcp.policies.extAuthz.conditional[].protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`mcp.policies.extAuthz.conditional[].protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`mcp.policies.extAuthz.conditional[].protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|
@@ -23513,6 +23544,7 @@
 |`mcp.policies.extAuthz.protocol.http`|object|Call the authorization service using HTTP.|
 |`mcp.policies.extAuthz.protocol.http.path`|string|CEL expression that computes the authorization request path.|
 |`mcp.policies.extAuthz.protocol.http.redirect`|string|CEL expression that computes a redirect URL when authorization fails.<br>When the authorization service returns unauthorized, this redirects instead of returning the error directly.|
+|`mcp.policies.extAuthz.protocol.http.body`|string|CEL expression that computes the authorization request body.<br>Strings and bytes are used directly; other values are JSON-encoded.<br>If set, this replaces forwarding the incoming request body.|
 |`mcp.policies.extAuthz.protocol.http.includeResponseHeaders`|[]string|Authorization response headers to copy into the backend request.|
 |`mcp.policies.extAuthz.protocol.http.addRequestHeaders`|object|Headers to add to the authorization request using CEL expressions. Empty means all headers.|
 |`mcp.policies.extAuthz.protocol.http.metadata`|object|Metadata values to expose under the `extauthz` variable after authorization.|

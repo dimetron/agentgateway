@@ -257,6 +257,11 @@
             }
           ]
         },
+        "customFunctions": {
+          "description": "Custom CEL functions available to all CEL expressions. These can define re-usable snippets that\ncan be used in any expressions.\nConfigure as a block string containing one or more definitions, for example:\n`customFunctions: |`\n`  isInternal() { request.headers[\"x-env\"] == \"internal\" }`\n`  this.joined(prefix, parts...) { prefix + this + parts.join(\"\") }`",
+          "type": "string",
+          "default": ""
+        },
         "connectionTerminationDeadline": {
           "type": [
             "string",
@@ -4991,22 +4996,45 @@
       ]
     },
     "LocalAPIKey": {
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "API key value to accept.",
-          "$ref": "#/$defs/APIKey"
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "description": "API key value to accept.",
+              "$ref": "#/$defs/APIKey"
+            },
+            "metadata": {
+              "description": "Optional metadata attached to requests authenticated with this key."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "key"
+          ]
         },
-        "metadata": {
-          "description": "Optional metadata attached to requests authenticated with this key."
+        {
+          "type": "object",
+          "properties": {
+            "keyHash": {
+              "description": "SHA-256 hash of an API key value to accept, in `sha256:<hex>` format.",
+              "$ref": "#/$defs/APIKeyHash"
+            },
+            "metadata": {
+              "description": "Optional metadata attached to requests authenticated with this key."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "keyHash"
+          ]
         }
-      },
-      "additionalProperties": false,
-      "required": [
-        "key"
       ]
     },
     "APIKey": {
+      "type": "string"
+    },
+    "APIKeyHash": {
       "type": "string"
     },
     "APIKeyMode": {
@@ -5237,6 +5265,17 @@
                 },
                 "redirect": {
                   "description": "CEL expression that computes a redirect URL when authorization fails.\nWhen the authorization service returns unauthorized, this redirects instead of returning the error directly.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "description": "CEL expression that computes the authorization request body.\nStrings and bytes are used directly; other values are JSON-encoded.\nIf set, this replaces forwarding the incoming request body.",
                   "anyOf": [
                     {
                       "$ref": "#/$defs/Expression"
@@ -6133,6 +6172,18 @@
           ]
         },
         {
+          "description": "Route to the in-process admin service instead of a network upstream.",
+          "type": "object",
+          "properties": {
+            "internal": {
+              "$ref": "#/$defs/InternalBackend"
+            }
+          },
+          "required": [
+            "internal"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "dynamic": {
@@ -6198,6 +6249,20 @@
           "required": [
             "invalid"
           ]
+        }
+      ]
+    },
+    "InternalBackend": {
+      "description": "Selects how an internal backend maps proxy requests to the admin API.",
+      "anyOf": [
+        {
+          "description": "Forward the request to the admin API using the request's current path and query.",
+          "type": "string",
+          "const": "forward"
+        },
+        {
+          "description": "Rewrite all requests to this admin API path, preserving the original query string.",
+          "type": "string"
         }
       ]
     },
@@ -8295,6 +8360,17 @@
           ],
           "default": null
         },
+        "filter": {
+          "description": "Optional CEL filter with KEEP semantics. When set, only requests for which the expression\nevaluates to `true` have their trace span(s) exported; all other spans are dropped. When\nunset, no filtering is applied (all sampled spans are exported). Composes after sampling\n(only sampled spans are evaluated). This matches `accessLog.filter` (keep-semantics):\n`true` keeps. Missing/errored fields evaluate to `false`, so on eval error the span is\ndropped (fail closed).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "path": {
           "description": "OTLP HTTP path used to export traces.",
           "type": "string",
@@ -8659,6 +8735,18 @@
           },
           "required": [
             "host"
+          ]
+        },
+        {
+          "description": "Route to the in-process admin service instead of a network upstream.",
+          "type": "object",
+          "properties": {
+            "internal": {
+              "$ref": "#/$defs/InternalBackend"
+            }
+          },
+          "required": [
+            "internal"
           ]
         },
         {

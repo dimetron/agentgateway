@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_core::drain::{DrainUpgrader, DrainWatcher};
+use agent_core::prelude::AssertSize;
 use agent_core::{drain, strng, telemetry};
 use agent_hbone::server::H2Request;
 use anyhow::anyhow;
@@ -731,8 +732,11 @@ impl Gateway {
 						Some(authority) => authority.as_str(),
 						None => return Ok(ProxyError::InvalidRequest.into_response_with_grpc(false)),
 					};
+					let binds = inputs.stores.read_binds();
 					let (target_address, bind) = if let Ok(addr) = authority.parse::<SocketAddr>() {
-						let Some(bind) = inputs.stores.read_binds().find_bind(addr) else {
+						// Match an exact bind for this address; otherwise fall back to the internal
+						// wildcard bind, preserving the requested address as the tunnel target.
+						let Some(bind) = binds.find_bind(addr).or_else(|| binds.find_wildcard_bind()) else {
 							return Ok(ProxyError::BindNotFound.into_response_with_grpc(false));
 						};
 						(addr, bind)
@@ -740,7 +744,12 @@ impl Gateway {
 						let Some(port) = req.uri().port_u16() else {
 							return Ok(ProxyError::InvalidRequest.into_response_with_grpc(false));
 						};
-						let Some(bind) = inputs.stores.read_binds().find_bind_by_port(port) else {
+						// Match a bind by the requested port; otherwise fall back to the internal
+						// wildcard bind, which serves any destination port via a dynamic backend.
+						let Some(bind) = binds
+							.find_bind_by_port(port)
+							.or_else(|| binds.find_wildcard_bind())
+						else {
 							return Ok(ProxyError::BindNotFound.into_response_with_grpc(false));
 						};
 						let target_ip = if bind.address.ip().is_unspecified() {
@@ -753,6 +762,8 @@ impl Gateway {
 						};
 						(SocketAddr::new(target_ip, port), bind)
 					};
+					// Release the binds read lock before spawning the tunnel task.
+					drop(binds);
 
 					tokio::task::spawn(async move {
 						let downstream = match upgrade.await {
@@ -764,6 +775,7 @@ impl Gateway {
 						};
 						let mut downstream = Socket::from_upgraded(connection, target_address, downstream);
 						downstream.ext_mut().insert(ConnectHeaders(connect_headers));
+						downstream.ext_mut().insert(BufferLimit::new(buffer));
 						Self::proxy_bind(bind.key.clone(), bind.protocol, downstream, inputs, drain).await;
 					});
 
@@ -832,6 +844,7 @@ impl Gateway {
 			tls.and_then(|t| t.src_identity.clone()),
 			unverified_workload,
 		);
+		let dst = crate::cel::DestinationContext::from_tcp_connection(tcp);
 		// Surface CONNECT tunnel headers (captured in `terminate_connect_tunnel`) on
 		// the source context so request policies can reference `source.connectHeaders`.
 		// Move the map out of the stream extension (it has no other consumer) to avoid
@@ -845,6 +858,7 @@ impl Gateway {
 			anyhow::bail!("network authorization denied: {e}");
 		}
 		stream.ext_mut().insert(src);
+		stream.ext_mut().insert(dst);
 
 		let transport_metrics = inputs.metrics.clone();
 		let _max_dur_metrics = transport_metrics.clone();
@@ -861,10 +875,12 @@ impl Gateway {
 		stream.set_transport_metrics(transport_metrics, transport_labels);
 
 		let def = frontend::HTTP::default();
+		let tunneled_buffer = stream.ext::<BufferLimit>().map(|b| b.0);
 		let buffer = policies
 			.http
 			.as_ref()
 			.map(|h| h.max_buffer_size)
+			.or(tunneled_buffer)
 			.unwrap_or(def.max_buffer_size);
 
 		let max_connection_duration = policies
@@ -880,9 +896,14 @@ impl Gateway {
 				let connection = connection.clone();
 				req.extensions_mut().insert(BufferLimit::new(buffer));
 				let req = req.map(crate::http::Body::new);
-				telemetry::request_scope(dtrace::DebugTracer::maybe_scope(req, |req| async move {
-					proxy.proxy(connection, req).map(Ok::<_, Infallible>).await
-				}))
+				telemetry::request_scope(
+					// This is the per-request HTTP flow future. It is the baseline task state
+					// multiplied by concurrent in-flight requests on this connection.
+					dtrace::DebugTracer::maybe_scope(req, |req| async move {
+						proxy.proxy(connection, req).map(Ok::<_, Infallible>).await
+					})
+					.assert_size::<{ 16 * 1024 }>(),
+				)
 			}),
 		);
 		let (connection_drain_tx, connection_drain_rx) = drain::new();

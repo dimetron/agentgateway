@@ -11,11 +11,15 @@ pub struct AwsRegion {
 #[apply(schema!)]
 #[cfg_attr(feature = "schema", schemars(rename = "BedrockProviderConfig"))]
 pub struct Provider {
+	/// Model ID to send to Bedrock, overriding the model in the client request.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub model: Option<Strng>, // Optional: model override for Bedrock API path
+	/// AWS region for the Bedrock endpoint.
 	pub region: Strng, // Required: AWS region
+	/// Identifier of the Bedrock guardrail to apply.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub guardrail_identifier: Option<Strng>,
+	/// Version of the Bedrock guardrail to apply.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub guardrail_version: Option<Strng>,
 }
@@ -41,7 +45,6 @@ impl Provider {
 		streaming: bool,
 		model: &str,
 	) -> Strng {
-		let model = self.model.as_deref().unwrap_or(model);
 		const MODEL_SEGMENT: &percent_encoding::AsciiSet =
 			&percent_encoding::CONTROLS.add(b'/').add(b'%');
 		let model = percent_encoding::utf8_percent_encode(model, MODEL_SEGMENT);

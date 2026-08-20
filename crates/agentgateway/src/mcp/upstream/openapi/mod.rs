@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use ::http::header::{HeaderName, HeaderValue};
+use agent_core::version::BuildInfo;
 use headers::HeaderMapExt;
 use http::Method;
 use http::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, HOST, TRANSFER_ENCODING};
@@ -450,7 +451,7 @@ pub(crate) fn parse_openapi_schema(
 									"final schema is not an object".to_string(),
 								))?
 								.clone();
-							let tool = Tool::new_with_raw(
+							let mut tool = Tool::new_with_raw(
 								Cow::Owned(name.clone()),
 								Some(Cow::Owned(
 									op.description
@@ -460,6 +461,10 @@ pub(crate) fn parse_openapi_schema(
 								)),
 								Arc::new(final_json),
 							);
+							if let Some(summary) = op.summary.as_ref().filter(|s| !s.is_empty()) {
+								let end = std::cmp::min(64, summary.len());
+								tool = tool.with_title(summary[..summary.floor_char_boundary(end)].to_string());
+							}
 							let upstream = UpstreamOpenAPICall {
 								// method: Method::from_bytes(method.as_ref()).expect("todo"),
 								method: method.to_string(),
@@ -671,25 +676,19 @@ impl Handler {
 				id,
 				ListPromptsResult {
 					..Default::default()
-				}
-				.with_ttl_ms(0)
-				.with_cache_scope(CacheScope::Private),
+				},
 			),
 			ClientRequest::ListResourcesRequest(_) => Messages::from_result(
 				id,
 				ListResourcesResult {
 					..Default::default()
-				}
-				.with_ttl_ms(0)
-				.with_cache_scope(CacheScope::Private),
+				},
 			),
 			ClientRequest::ListResourceTemplatesRequest(_) => Messages::from_result(
 				id,
 				ListResourceTemplatesResult {
 					..Default::default()
-				}
-				.with_ttl_ms(0)
-				.with_cache_scope(CacheScope::Private),
+				},
 			),
 			ClientRequest::DiscoverRequest(_) => Messages::from_result(
 				id,
@@ -697,23 +696,42 @@ impl Handler {
 					ProtocolVersion::KNOWN_VERSIONS.to_vec(),
 					ServerCapabilities::builder().enable_tools().build(),
 				)
-				.with_cache(0, CacheScope::Private),
+				.with_server_info(Implementation::new(
+					"agentgateway",
+					BuildInfo::new().version.to_string(),
+				)),
 			),
-			ClientRequest::ListTasksRequest(_) => Messages::from_result(id, ListTasksResult::new(vec![])),
-			ClientRequest::GetTaskRequest(_) => {
-				Messages::from_result(id, GetTaskResult::new(Task::default()))
+			ClientRequest::GetTaskRequest(r) => {
+				return Err(UpstreamError::InvalidRequest(format!(
+					"unknown task {}",
+					r.params.task_id
+				)));
 			},
-			ClientRequest::GetTaskPayloadRequest(_) => {
-				return Err(UpstreamError::InvalidMethod(method.to_string()));
+			ClientRequest::UpdateTaskRequest(r) => {
+				return Err(UpstreamError::InvalidRequest(format!(
+					"unknown task {}",
+					r.params.task_id
+				)));
 			},
-			ClientRequest::CancelTaskRequest(_) => Messages::empty(),
+			ClientRequest::CancelTaskRequest(r) => {
+				return Err(UpstreamError::InvalidRequest(format!(
+					"unknown task {}",
+					r.params.task_id
+				)));
+			},
 			ClientRequest::ReadResourceRequest(_) => {
 				Messages::from_result(id, ReadResourceResult::new(vec![]))
 			},
 			ClientRequest::PingRequest(_) => Messages::from_result(id, ServerResult::empty(())),
 			ClientRequest::SubscriptionsListenRequest(_) => {
-				let subscription_id = id.clone();
-				Messages::from_result(id, SubscriptionsListenResult::new(subscription_id))
+				Messages::from(ServerJsonRpcMessage::notification(
+					ServerNotification::SubscriptionsAcknowledgedNotification(
+						SubscriptionsAcknowledgedNotification::new(
+							SubscriptionsAcknowledgedNotificationParams::new(SubscriptionFilter::new()),
+						),
+					),
+				))
+				.then_pending()
 			},
 			ClientRequest::CustomRequest(_)
 			| ClientRequest::SetLevelRequest(_)
@@ -743,10 +761,9 @@ impl Handler {
 				ListToolsResult {
 					tools: self.tools(),
 					..Default::default()
-				}
-				.with_ttl_ms(0)
-				.with_cache_scope(CacheScope::Private),
+				},
 			),
+			_ => return Err(UpstreamError::InvalidMethod(method.to_string())),
 		};
 		Ok(res)
 	}

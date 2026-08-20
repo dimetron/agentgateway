@@ -1,142 +1,83 @@
-# Cost-Based Semantic Routing with vLLM Semantic Router
+# Semantic Routing Examples
 
-This example configures agentgateway and [vLLM Semantic Router (vSR)](https://vllm-semantic-router.com/)
-to route OpenAI-compatible chat traffic to a lower-cost or higher-capability
-model. vLLM Semantic Router classifies the request, selects a model, and
-agentgateway forwards the request to OpenAI.
+These examples demonstrate different ways to integrate [vLLM Semantic Router (vSR)](https://vllm-sr.ai/)
+with agentgateway.
 
-The included policy is tuned for coding prompts: routine implementation,
-refactoring, unit tests, documentation, and simple debugging go to
-`gpt-5.4-nano`. It escalates advanced distributed-systems design, formal
-verification, difficult debugging, and research synthesis to `gpt-5.5`.
-Customize the signals, candidates, weights, and thresholds for your traffic by
-following the [vLLM Semantic Router configuration guide](https://vllm-semantic-router.com/docs/installation/configuration/).
+All examples use the same core architecture:
 
-## Before You Begin
-
-This example assumes a working agentgateway LLM path with cost and
-observability data available:
-
-- [Install agentgateway with Helm](https://agentgateway.dev/docs/kubernetes/main/install/helm/).
-- [Set up an agentgateway proxy](https://agentgateway.dev/docs/kubernetes/main/setup/gateway/).
-- [Configure OpenAI as an LLM provider](https://agentgateway.dev/docs/kubernetes/main/llm/providers/openai/).
-- [Price LLM requests with a model cost catalog](https://agentgateway.dev/docs/kubernetes/main/llm/costs/).
-- [Install an OpenTelemetry stack](https://agentgateway.dev/docs/kubernetes/main/observability/otel-stack/).
-
-The `AgentgatewayBackend` in `k8s/agentgateway-routing.yaml` expects an
-`openai-secret` in `agentgateway-system`, matching the provider setup guide.
-
-## Configure Routing
-
-Replace any existing `HTTPRoute` attached to this Gateway that matches
-`/v1/chat/completions` before applying this example.
-
-Install vLLM Semantic Router:
-
-```bash
-export VSR_VERSION=0.3.0
-
-helm upgrade -i semantic-router oci://ghcr.io/vllm-project/charts/semantic-router \
-  --version "${VSR_VERSION}" \
-  --namespace agentgateway-system \
-  -f examples/llm-semantic-routing/k8s/semantic-router-values.yaml \
-  --set-string "image.tag=v${VSR_VERSION}"
-
-kubectl wait --for=condition=Available deployment/semantic-router \
-  -n agentgateway-system \
-  --timeout=600s
+```text
+Client
+   |
+agentgateway
+   |
+vSR ExtProc
+   |
+LLM provider(s)
 ```
 
-Apply the routed backend, route, and Streamed ExtProc policy:
+Each example focuses on a different production use case.
 
-```bash
-kubectl apply -f examples/llm-semantic-routing/k8s/agentgateway-routing.yaml
+| Example | Demonstrates | Best for |
+| --- | --- | --- |
+| [Cost-based routing](k8s/cost-based/) | Route requests to lower-cost or higher-capability models based on semantic classification. | Cost optimization while maintaining response quality. |
+| [Tier-aware routing](k8s/tier-aware/) | Select different model pools according to authenticated user entitlements. | SaaS plans, internal vs external users, premium AI features. |
+| [Semantic caching](k8s/semantic-cache/) | Cache semantically equivalent requests in Redis Open Source and optionally share entries across vSR replicas. | Product support, documentation assistants, FAQ chatbots, and other workloads with many repeated questions. |
 
-kubectl wait --for=condition=Accepted agentgatewaybackend/openai-router-selected \
-  -n agentgateway-system \
-  --timeout=300s
-kubectl describe httproute openai-semantic-routing -n agentgateway-system
-kubectl describe agentgatewaypolicy semantic-router-extproc -n agentgateway-system
-```
+## Choosing an example
 
-`VSR_VERSION` sets both the chart version and the matching `v<version>`
-`extproc` image tag.
+### Cost-based routing
 
-## Verify Streamed ExtProc
+Use this example when you want vSR to decide **which model** should answer a
+request.
 
-Set your gateway address:
+Typical goals include:
 
-```bash
-export INGRESS_GW_ADDRESS="http://$(kubectl get gateway agentgateway-proxy \
-  -n agentgateway-system \
-  -o jsonpath='{.status.addresses[0].value}')"
-```
+- reducing LLM cost
+- balancing quality and latency
+- automatically selecting inexpensive models for routine requests
 
-The values include a narrow, deterministic immediate-response probe. It proves
-that `FullDuplexStreamed` request processing reaches vSR without sending tokens
-to OpenAI:
+See: `k8s/cost-based`
 
-```bash
-curl -i "$INGRESS_GW_ADDRESS/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "X-VSR-Debug: true" \
-  -d '{
-    "model": "auto",
-    "messages": [
-      {"role": "user", "content": "VSR_IMMEDIATE_RESPONSE_PROBE"}
-    ],
-    "max_tokens": 16
-  }'
-```
+---
 
-Expect a `200` response with `x-vsr-fast-response`; the request should not
-reach OpenAI. Remove the probe signal and decision from the values before using
-this policy in a production route.
+### Tier-aware routing
 
-## Run a Request
+Use this example when different users are allowed to access different model
+capabilities.
 
-Routine coding prompts should use the lower-cost model:
+Typical goals include:
 
-```bash
-curl -sS -i "$INGRESS_GW_ADDRESS/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "X-VSR-Debug: true" \
-  -d '{
-    "model": "auto",
-    "messages": [
-      {"role": "user", "content": "Implement a small Go helper and one table-driven test."}
-    ],
-    "max_tokens": 64
-  }'
-```
+- Basic / Pro subscriptions
+- internal vs external users
+- premium AI features
+- provider-specific model pools
 
-Advanced distributed-systems prompts should use the higher-capability model:
+See: `k8s/tier-aware`
 
-```bash
-curl -sS -i "$INGRESS_GW_ADDRESS/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "X-VSR-Debug: true" \
-  -d '{
-    "model": "auto",
-    "messages": [
-      {"role": "user", "content": "Design a distributed rate limiter that remains correct during Redis failover and regional network partitions. Compare token bucket, sliding window, local fallback, and global reconciliation."}
-    ],
-    "max_tokens": 64
-  }'
-```
+---
 
-The response headers should include `x-vsr-selected-model: gpt-5.4-nano` for
-the routine request and `x-vsr-selected-model: gpt-5.5` for the advanced
-request. The debug header is for verification only and should not be required
-by application traffic.
+### Semantic caching
 
-Agentgateway’s model catalog, metrics, logs, and traces remain the cost and
-observability source of record. Use isolated evaluation traffic with forced
-lower-cost and always-expensive baselines before adopting the policy broadly.
+Use this example when many users ask **the same question in different ways**.
 
-## Cleanup
+Instead of generating a new response for every request, vSR recognizes
+semantically equivalent prompts and returns a previously generated response from
+a Redis Open Source cache.
 
-```bash
-kubectl delete -f examples/llm-semantic-routing/k8s/agentgateway-routing.yaml
-helm uninstall semantic-router -n agentgateway-system
-```
+The example demonstrates:
+
+- local kind deployment
+- Redis Open Source 8 with vector search
+- Redis-backed semantic cache
+- semantic cache hits for paraphrased requests
+- optional cache sharing across vSR replicas
+- cache persistence across Redis pod restarts
+
+vSR supports multiple cache backends, including a default in-memory store.
+Redis is used here as a production-oriented backend because it allows vSR
+replicas to share cache entries and persist them across process restarts. Redis
+also backs other agentgateway-related services, such as [global rate
+limiting](https://agentgateway.dev/docs/kubernetes/main/security/rate-limit-global/).
+The example enables Redis persistence on a local persistent volume.
+
+See: `k8s/semantic-cache`

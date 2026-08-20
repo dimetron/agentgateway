@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use agent_core::strng;
 use http::Response;
 use rand::RngExt;
 use tracing::trace;
@@ -17,6 +18,7 @@ mod tests;
 pub const BEDROCK_TOOL_NAME_MAX_LEN: usize = 64;
 
 /// Serialized Bedrock request body plus any tool-name remapping applied for that request.
+#[derive(Debug)]
 pub struct BedrockRequest {
 	pub body: Vec<u8>,
 	pub tool_name_map: BedrockToolNameMap,
@@ -127,6 +129,80 @@ fn restore_tool_name(map: Option<&BedrockToolNameMap>, name: &str) -> String {
 	map
 		.map(|m| m.restore(name))
 		.unwrap_or_else(|| name.to_string())
+}
+
+fn responses_output_status(stop_reason: &bedrock::StopReason) -> responses::typed::OutputStatus {
+	match stop_reason {
+		bedrock::StopReason::MaxTokens
+		| bedrock::StopReason::ModelContextWindowExceeded
+		| bedrock::StopReason::ContentFiltered
+		| bedrock::StopReason::GuardrailIntervened => responses::typed::OutputStatus::Incomplete,
+		_ => responses::typed::OutputStatus::Completed,
+	}
+}
+
+struct CanonicalImage {
+	media_type: String,
+	bytes_base64: String,
+}
+
+impl CanonicalImage {
+	fn image_format(media_type: &str) -> Option<&str> {
+		media_type
+			.strip_prefix("image/")
+			.filter(|format| !format.is_empty())
+	}
+
+	fn from_data_url(url: &str) -> Result<Self, AIError> {
+		if !url.starts_with("data:") {
+			return Err(AIError::UnsupportedConversion(strng::literal!(
+				"bedrock image inputs must be base64 data URLs; remote URLs and file_ids are unsupported"
+			)));
+		}
+		let Some((media_type, data)) = crate::conversion::completions::parse_data_url(url) else {
+			return Err(AIError::UnsupportedConversion(strng::literal!(
+				"bedrock image data URLs must be base64-encoded"
+			)));
+		};
+		let Some(_) = Self::image_format(media_type) else {
+			return Err(AIError::UnsupportedConversion(strng::literal!(
+				"bedrock image data URLs must use a non-empty image/* media type"
+			)));
+		};
+		Ok(Self {
+			media_type: media_type.to_string(),
+			bytes_base64: data.to_string(),
+		})
+	}
+
+	fn from_media_type_and_base64(media_type: &str, bytes_base64: &str) -> Result<Self, AIError> {
+		let Some(_) = Self::image_format(media_type) else {
+			return Err(AIError::UnsupportedConversion(strng::literal!(
+				"bedrock image inputs must use a non-empty image/* media type"
+			)));
+		};
+		Ok(Self {
+			media_type: media_type.to_string(),
+			bytes_base64: bytes_base64.to_string(),
+		})
+	}
+
+	fn into_bedrock_image_block(self) -> bedrock::ImageBlock {
+		bedrock::ImageBlock {
+			format: self
+				.media_type
+				.strip_prefix("image/")
+				.unwrap_or(&self.media_type)
+				.to_string(),
+			source: bedrock::ImageSource {
+				bytes: self.bytes_base64,
+			},
+		}
+	}
+
+	fn into_bedrock_content_block(self) -> bedrock::ContentBlock {
+		bedrock::ContentBlock::Image(self.into_bedrock_image_block())
+	}
 }
 
 fn error_message(bytes: &[u8]) -> String {
@@ -262,9 +338,43 @@ pub mod from_embeddings {
 
 		let model = provider.model.as_deref().unwrap_or(&typed.model);
 
-		// Bedrock has two embedding model families with incompatible APIs:
-		// Cohere accepts batched text arrays; Titan accepts a single string.
-		if model.contains("cohere") {
+		// Bedrock has three embedding model families with incompatible APIs:
+		// Cohere accepts batched text arrays; Titan and Nova accept a single string.
+		if model.contains("nova") {
+			// Nova only accepts a single string per InvokeModel; array input is rejected.
+			let input = match &typed.input {
+				types::embeddings::typed::EmbeddingInput::String(s) => s.to_string(),
+				types::embeddings::typed::EmbeddingInput::Array(_) => {
+					return Err(AIError::RequestParsing(serde::de::Error::custom(
+						"Nova requires a single string input",
+					)));
+				},
+			};
+			let bedrock_req = types::bedrock::NovaEmbeddingRequest {
+				task_type: types::bedrock::NovaEmbeddingTaskType::SingleEmbedding,
+				single_embedding_params: types::bedrock::NovaSingleEmbeddingParams {
+					embedding_purpose: req
+						.rest
+						.get("embedding_purpose")
+						.and_then(|v| v.as_str())
+						.unwrap_or("GENERIC_INDEX")
+						.to_string(),
+					// Nova calls OpenAI's `dimensions` parameter `embeddingDimension`.
+					// https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+					embedding_dimension: typed.dimensions,
+					text: types::bedrock::NovaEmbeddingText {
+						truncation_mode: req
+							.rest
+							.get("truncation_mode")
+							.and_then(|v| v.as_str())
+							.unwrap_or("END")
+							.to_string(),
+						value: input,
+					},
+				},
+			};
+			serde_json::to_vec(&bedrock_req).map_err(AIError::RequestMarshal)
+		} else if model.contains("cohere") {
 			let input = typed.input.as_strings();
 
 			let bedrock_req = types::bedrock::CohereEmbeddingRequest {
@@ -280,6 +390,13 @@ pub mod from_embeddings {
 					.get("truncate")
 					.and_then(|v| v.as_str())
 					.map(|s| s.to_string()),
+				// Cohere Embed v4 calls OpenAI's `dimensions` parameter `output_dimension`.
+				// https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+				output_dimension: if model.contains("embed-v4") {
+					typed.dimensions
+				} else {
+					None
+				},
 			};
 			serde_json::to_vec(&bedrock_req).map_err(AIError::RequestMarshal)
 		} else {
@@ -315,7 +432,41 @@ pub mod from_embeddings {
 		headers: &http::HeaderMap,
 		model: &str,
 	) -> Result<Box<dyn ResponseType>, AIError> {
-		if model.contains("cohere") {
+		if model.contains("nova") {
+			let resp: types::bedrock::NovaEmbeddingResponse =
+				serde_json::from_slice(bytes).map_err(logged_response_parsing(bytes))?;
+
+			// Like Cohere, Nova doesn't include token counts in the JSON body;
+			// Bedrock surfaces them via response headers instead.
+			let prompt_tokens = headers
+				.get("x-amzn-bedrock-input-token-count")
+				.and_then(|v| v.to_str().ok())
+				.and_then(|v| v.parse::<u64>().ok())
+				.unwrap_or(0);
+
+			let typed_resp = types::embeddings::typed::Response {
+				object: "list".to_string(),
+				data: resp
+					.embeddings
+					.into_iter()
+					.enumerate()
+					.map(|(i, e)| types::embeddings::typed::Embedding {
+						object: "embedding".to_string(),
+						embedding: e.embedding,
+						index: i as u32,
+					})
+					.collect(),
+				model: model.to_string(),
+				usage: types::embeddings::typed::Usage {
+					prompt_tokens: prompt_tokens as u32,
+					total_tokens: prompt_tokens as u32,
+				},
+			};
+			// Convert the normalized internal typed response back to the passthrough-preserving OpenAI format
+			let openai_resp = json::convert::<_, types::embeddings::Response>(&typed_resp)
+				.map_err(AIError::ResponseParsing)?;
+			Ok(Box::new(openai_resp))
+		} else if model.contains("cohere") {
 			let resp: types::bedrock::CohereEmbeddingResponse =
 				serde_json::from_slice(bytes).map_err(logged_response_parsing(bytes))?;
 
@@ -395,22 +546,20 @@ pub mod from_completions {
 
 	use axum_core::body::Body;
 	use bytes::Bytes;
-	use futures_util::StreamExt;
-	use futures_util::stream::{self, BoxStream};
 	use itertools::Itertools;
 	use types::bedrock;
 	use types::completions::typed as completions;
 
 	use super::helpers;
 	use crate::bedrock::Provider;
-	use crate::conversion::completions::{extract_system_text, parse_data_url};
+	use crate::conversion::completions::extract_system_text;
 	use crate::types::ResponseType;
 	use crate::types::completions::typed::UsagePromptDetails;
 	use crate::{AIError, StreamingUsageGuard, json, logged_response_parsing, parse, types};
 
 	fn text_blocks_from_user_content(
 		content: &completions::RequestUserMessageContent,
-	) -> Vec<bedrock::ContentBlock> {
+	) -> Result<Vec<bedrock::ContentBlock>, AIError> {
 		let mut out = Vec::new();
 		match content {
 			completions::RequestUserMessageContent::Text(text) => {
@@ -427,18 +576,10 @@ pub mod from_completions {
 							}
 						},
 						completions::RequestUserMessageContentPart::ImageUrl(image) => {
-							if let Some((media_type, data)) = parse_data_url(&image.image_url.url) {
-								let format = media_type
-									.strip_prefix("image/")
-									.unwrap_or(media_type)
-									.to_string();
-								out.push(bedrock::ContentBlock::Image(bedrock::ImageBlock {
-									format,
-									source: bedrock::ImageSource {
-										bytes: data.to_string(),
-									},
-								}));
-							}
+							out.push(
+								super::CanonicalImage::from_data_url(&image.image_url.url)?
+									.into_bedrock_content_block(),
+							);
 						},
 						completions::RequestUserMessageContentPart::InputAudio(_)
 						| completions::RequestUserMessageContentPart::File(_) => {},
@@ -446,7 +587,7 @@ pub mod from_completions {
 				}
 			},
 		}
-		out
+		Ok(out)
 	}
 
 	fn assistant_content_to_bedrock(
@@ -503,8 +644,11 @@ pub mod from_completions {
 			for call in tool_calls {
 				match call {
 					completions::MessageToolCalls::Function(call) => {
-						let input = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
-							.unwrap_or_else(|_| serde_json::Value::String(call.function.arguments.clone()));
+						// Converse rejects non-object toolUse.input values, despite input being a document.
+						let input = match serde_json::from_str::<serde_json::Value>(&call.function.arguments) {
+							Ok(serde_json::Value::Object(input)) => serde_json::Value::Object(input),
+							_ => serde_json::json!({}),
+						};
 						content.push(bedrock::ContentBlock::ToolUse(bedrock::ToolUseBlock {
 							tool_use_id: call.id.clone(),
 							name: tool_name_map.register(&call.function.name),
@@ -512,8 +656,10 @@ pub mod from_completions {
 						}));
 					},
 					completions::MessageToolCalls::Custom(call) => {
-						let input = serde_json::from_str::<serde_json::Value>(&call.custom_tool.input)
-							.unwrap_or_else(|_| serde_json::Value::String(call.custom_tool.input.clone()));
+						let input = match serde_json::from_str::<serde_json::Value>(&call.custom_tool.input) {
+							Ok(serde_json::Value::Object(input)) => serde_json::Value::Object(input),
+							_ => serde_json::json!({}),
+						};
 						content.push(bedrock::ContentBlock::ToolUse(bedrock::ToolUseBlock {
 							tool_use_id: call.id.clone(),
 							name: tool_name_map.register(&call.custom_tool.name),
@@ -564,7 +710,7 @@ pub mod from_completions {
 		let typed = json::convert::<_, completions::Request>(req).map_err(AIError::RequestParsing)?;
 		let model_id = typed.model.clone().unwrap_or_default();
 		let (xlated, tool_name_map) =
-			translate_internal(typed, model_id, provider, headers, prompt_caching);
+			translate_internal(typed, model_id, provider, headers, prompt_caching)?;
 		let body = serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)?;
 		Ok(super::BedrockRequest {
 			body,
@@ -578,7 +724,7 @@ pub mod from_completions {
 		provider: &Provider,
 		headers: Option<&http::HeaderMap>,
 		prompt_caching: Option<&crate::PromptCachingConfig>,
-	) -> (bedrock::ConverseRequest, super::BedrockToolNameMap) {
+	) -> Result<(bedrock::ConverseRequest, super::BedrockToolNameMap), AIError> {
 		let mut tool_name_map = super::BedrockToolNameMap::default();
 		for tool in req.tools.iter().flatten() {
 			if let completions::Tool::Function(function_tool) = tool {
@@ -622,10 +768,9 @@ pub mod from_completions {
 			max_tokens: req.max_tokens(),
 			temperature: req.temperature,
 			top_p: req.top_p,
-			// Map Anthropic-style vendor extension to Bedrock topK when provided
-			top_k: req.vendor_extensions.top_k,
 			stop_sequences: req.stop_sequence(),
 		};
+		let top_k = req.vendor_extensions.top_k;
 
 		let tool_choice = match req.tool_choice {
 			Some(completions::ToolChoiceOption::Function(completions::NamedToolChoice { function })) => {
@@ -667,43 +812,30 @@ pub mod from_completions {
 		});
 		let tool_config = tools.map(|tools| bedrock::ToolConfiguration { tools, tool_choice });
 
-		let messages = req
-			.messages
-			.iter()
-			.filter_map(|msg| match msg {
+		let mut messages = Vec::new();
+		for msg in &req.messages {
+			let msg = match msg {
 				completions::RequestMessage::System(_) | completions::RequestMessage::Developer(_) => None,
 				completions::RequestMessage::User(user) => {
-					let content = text_blocks_from_user_content(&user.content);
-					if content.is_empty() {
-						None
-					} else {
-						Some(bedrock::Message {
-							role: bedrock::Role::User,
-							content,
-						})
-					}
+					let content = text_blocks_from_user_content(&user.content)?;
+					(!content.is_empty()).then_some(bedrock::Message {
+						role: bedrock::Role::User,
+						content,
+					})
 				},
 				completions::RequestMessage::Assistant(assistant) => {
 					let content = assistant_content_to_bedrock(assistant, &mut tool_name_map);
-					if content.is_empty() {
-						None
-					} else {
-						Some(bedrock::Message {
-							role: bedrock::Role::Assistant,
-							content,
-						})
-					}
+					(!content.is_empty()).then_some(bedrock::Message {
+						role: bedrock::Role::Assistant,
+						content,
+					})
 				},
 				completions::RequestMessage::Tool(tool_result) => {
 					let content = tool_content_to_bedrock(tool_result);
-					if content.is_empty() {
-						None
-					} else {
-						Some(bedrock::Message {
-							role: bedrock::Role::User,
-							content,
-						})
-					}
+					(!content.is_empty()).then_some(bedrock::Message {
+						role: bedrock::Role::User,
+						content,
+					})
 				},
 				completions::RequestMessage::Function(function) => function
 					.content
@@ -713,11 +845,11 @@ pub mod from_completions {
 						role: bedrock::Role::User,
 						content: vec![bedrock::ContentBlock::Text(s.clone())],
 					}),
-			})
-			.fold(Vec::new(), |mut msgs, msg| {
-				helpers::push_or_merge_message(&mut msgs, msg);
-				msgs
-			});
+			};
+			if let Some(msg) = msg {
+				helpers::push_or_merge_message(&mut messages, msg);
+			}
+		}
 
 		// Build guardrail configuration if specified
 		let guardrail_config = if let (Some(identifier), Some(version)) =
@@ -746,10 +878,10 @@ pub mod from_completions {
 			req
 				.reasoning_effort
 				.as_ref()
-				.and_then(reasoning_effort_to_enabled_budget)
+				.and_then(crate::types::thinking_budget_for_reasoning_effort)
 		});
 
-		let additional_model_request_fields = enabled_thinking_budget.map(|budget| {
+		let mut additional_model_request_fields = enabled_thinking_budget.map(|budget| {
 			serde_json::json!({
 				"thinking": {
 					"type": "enabled",
@@ -757,6 +889,16 @@ pub mod from_completions {
 				}
 			})
 		});
+		// Anthropic manual thinking is incompatible with custom sampling parameters.
+		if enabled_thinking_budget.is_none()
+			&& let Some(top_k) = top_k
+		{
+			additional_model_request_fields
+				.get_or_insert_with(|| serde_json::json!({}))
+				.as_object_mut()
+				.expect("additional model request fields must be a JSON object")
+				.insert("top_k".to_string(), top_k.into());
+		}
 		let output_config = req
 			.response_format
 			.as_ref()
@@ -822,17 +964,9 @@ pub mod from_completions {
 					.push(bedrock::Tool::CachePoint(helpers::create_cache_point()));
 			}
 		}
+		helpers::ensure_tool_config_for_history(&mut bedrock_request);
 
-		(bedrock_request, tool_name_map)
-	}
-
-	fn reasoning_effort_to_enabled_budget(effort: &completions::ReasoningEffort) -> Option<u64> {
-		match effort {
-			completions::ReasoningEffort::None => None,
-			completions::ReasoningEffort::Minimal | completions::ReasoningEffort::Low => Some(1024),
-			completions::ReasoningEffort::Medium => Some(2048),
-			completions::ReasoningEffort::High | completions::ReasoningEffort::Xhigh => Some(4096),
-		}
+		Ok((bedrock_request, tool_name_map))
 	}
 
 	fn completions_response_format_to_bedrock_output_config(
@@ -920,6 +1054,7 @@ pub mod from_completions {
 		log: StreamingUsageGuard,
 		model: &str,
 		message_id: &str,
+		log_content: crate::LogContentFields,
 		tool_name_map: Option<super::BedrockToolNameMap>,
 	) -> Body {
 		// This is static for all chunks!
@@ -927,6 +1062,13 @@ pub mod from_completions {
 		let mut saw_token = false;
 		// Track tool call JSON buffers by content block index
 		let mut tool_calls: HashMap<i32, String> = HashMap::new();
+		// Bedrock indexes every content block, while OpenAI indexes only tool calls.
+		let mut next_tool_index = 0u32;
+		let mut tool_index_map: HashMap<i32, u32> = HashMap::new();
+		let mut logged_tool_calls =
+			crate::conversion::messages::StreamingToolCalls::new(log_content.tool_calls);
+		let mut completion = log_content.completion.then(String::new);
+		let mut finish_reason = None;
 		let model = model.to_string();
 		let message_id = message_id.to_string();
 		let body = parse::aws_sse::transform(b, buffer_limit, move |f| {
@@ -949,14 +1091,24 @@ pub mod from_completions {
 					// Track tool call starts for streaming
 					if let Some(bedrock::ContentBlockStart::ToolUse(tu)) = start.start {
 						tool_calls.insert(start.content_block_index, String::new());
+						let tool_index = next_tool_index;
+						next_tool_index += 1;
+						tool_index_map.insert(start.content_block_index, tool_index);
+						let name = super::restore_tool_name(tool_name_map.as_ref(), &tu.name);
+						logged_tool_calls.start(
+							start.content_block_index as usize,
+							tu.tool_use_id.as_str(),
+							name.as_str(),
+							&serde_json::Value::Null,
+						);
 						// Emit the start of a tool call
 						let d = completions::StreamResponseDelta {
 							tool_calls: Some(vec![completions::ChatCompletionMessageToolCallChunk {
-								index: start.content_block_index as u32,
+								index: tool_index,
 								id: Some(tu.tool_use_id),
 								r#type: Some(completions::FunctionType::Function),
 								function: Some(completions::FunctionCallStream {
-									name: Some(super::restore_tool_name(tool_name_map.as_ref(), &tu.name)),
+									name: Some(name),
 									arguments: None,
 								}),
 							}]),
@@ -1012,14 +1164,21 @@ pub mod from_completions {
 								tracing::debug!(?other, "unhandled Bedrock reasoning content delta variant",);
 							},
 							bedrock::ContentBlockDelta::Text(t) => {
+								if let Some(completion) = completion.as_mut() {
+									completion.push_str(&t);
+								}
 								dr.content = Some(t);
 							},
 							bedrock::ContentBlockDelta::ToolUse(tu) => {
+								logged_tool_calls.append_arguments(d.content_block_index as usize, &tu.input);
 								// Accumulate tool call JSON and emit deltas
-								if let Some(json_buffer) = tool_calls.get_mut(&d.content_block_index) {
+								if let (Some(json_buffer), Some(&tool_index)) = (
+									tool_calls.get_mut(&d.content_block_index),
+									tool_index_map.get(&d.content_block_index),
+								) {
 									json_buffer.push_str(&tu.input);
 									dr.tool_calls = Some(vec![completions::ChatCompletionMessageToolCallChunk {
-										index: d.content_block_index as u32,
+										index: tool_index,
 										id: None, // Only sent in the first chunk
 										r#type: None,
 										function: Some(completions::FunctionCallStream {
@@ -1048,6 +1207,7 @@ pub mod from_completions {
 				bedrock::ConverseStreamOutput::ContentBlockStop(stop) => {
 					// Clean up tool call tracking for this content block
 					tool_calls.remove(&stop.content_block_index);
+					tool_index_map.remove(&stop.content_block_index);
 					None
 				},
 				bedrock::ConverseStreamOutput::MessageStart(start) => {
@@ -1067,14 +1227,15 @@ pub mod from_completions {
 					mk(vec![choice], None)
 				},
 				bedrock::ConverseStreamOutput::MessageStop(stop) => {
-					let finish_reason = Some(translate_stop_reason(&stop.stop_reason));
+					let translated_finish_reason = translate_stop_reason(&stop.stop_reason);
+					finish_reason = crate::types::serialize_str(&translated_finish_reason);
 
 					// Just send a blob with the finish reason
 					let choice = completions::ChatChoiceStream {
 						index: 0,
 						logprobs: None,
 						delta: completions::StreamResponseDelta::default(),
-						finish_reason,
+						finish_reason: Some(translated_finish_reason),
 					};
 					mk(vec![choice], None)
 				},
@@ -1087,6 +1248,11 @@ pub mod from_completions {
 							r.response.cached_input_tokens = usage.cache_read_input_tokens.map(|i| i as u64);
 							r.response.cache_creation_input_tokens =
 								usage.cache_write_input_tokens.map(|i| i as u64);
+							if let Some(completion) = completion.take() {
+								r.response.completion = Some(vec![completion]);
+							}
+							r.response.output_messages =
+								logged_tool_calls.take_output_messages(finish_reason.take());
 						});
 
 						mk(
@@ -1097,11 +1263,18 @@ pub mod from_completions {
 								total_tokens: usage.total_tokens as u32,
 								cache_read_input_tokens: usage.cache_read_input_tokens.map(|i| i as u64),
 								cache_creation_input_tokens: usage.cache_write_input_tokens.map(|i| i as u64),
-								prompt_tokens_details: usage.cache_read_input_tokens.map(|i| UsagePromptDetails {
-									cached_tokens: Some(i as u64),
-									audio_tokens: None,
-									rest: Default::default(),
-								}),
+								prompt_tokens_details: match (
+									usage.cache_read_input_tokens,
+									usage.cache_write_input_tokens,
+								) {
+									(None, None) => None,
+									(cached_tokens, cache_write_tokens) => Some(UsagePromptDetails {
+										cached_tokens: cached_tokens.map(|i| i as u64),
+										audio_tokens: None,
+										cache_write_tokens: cache_write_tokens.map(|i| i as u64),
+										rest: Default::default(),
+									}),
+								},
 								// TODO: can we get reasoning tokens?
 								completion_tokens_details: None,
 							}),
@@ -1113,29 +1286,7 @@ pub mod from_completions {
 			}
 		});
 
-		append_done_on_success(body.into_data_stream())
-	}
-
-	pub(super) fn append_done_on_success<S>(stream: S) -> Body
-	where
-		S: futures_core::Stream<Item = Result<Bytes, axum_core::Error>> + Send + 'static,
-	{
-		let done = crate::parse::encode_sse_event("", Bytes::from_static(b"[DONE]"));
-		let stream = stream::unfold(
-			(Some(stream.boxed()), Some(done)),
-			|(stream, done): (
-				Option<BoxStream<'static, Result<Bytes, axum_core::Error>>>,
-				Option<Bytes>,
-			)| async move {
-				let mut stream = stream?;
-				match stream.next().await {
-					Some(Ok(chunk)) => Some((Ok(chunk), (Some(stream), done))),
-					Some(Err(err)) => Some((Err(err), (None, None))),
-					None => done.map(|done| (Ok(done), (None, None))),
-				}
-			},
-		);
-		Body::from_stream(stream)
+		parse::sse::append_done_on_success(body)
 	}
 
 	pub fn translate_stop_reason(
@@ -1196,7 +1347,7 @@ pub mod from_messages {
 	) -> Result<(bedrock::ConverseRequest, super::BedrockToolNameMap), AIError> {
 		let mut tool_name_map = super::BedrockToolNameMap::default();
 		for tool in req.tools.iter().flatten() {
-			tool_name_map.register(&tool.name);
+			tool_name_map.register(tool.name());
 		}
 		if let Some(messages::ToolChoice::Tool { name, .. }) = &req.tool_choice {
 			tool_name_map.register(name);
@@ -1248,6 +1399,13 @@ pub mod from_messages {
 		let pending_tool_config = if let Some(tools) = req.tools {
 			let mut bedrock_tools = Vec::with_capacity(tools.len());
 			for tool in tools {
+				let messages::Tool::Custom(tool) = tool else {
+					// Bedrock's Converse API has no native equivalent of an Anthropic server tool
+					// (e.g. web_search_20250305) executing upstream of the model. Drop it rather
+					// than fail the whole request; the model just won't see this tool offered.
+					tracing::debug!("Unsupported server tool in Bedrock conversion: {:?}", tool);
+					continue;
+				};
 				bedrock_tools.push((
 					bedrock::Tool::ToolSpec(bedrock::ToolSpecification {
 						name: tool_name_map.register(&tool.name),
@@ -1370,17 +1528,9 @@ pub mod from_messages {
 						if let Some(media_type) = source.get("media_type").and_then(|v| v.as_str())
 							&& let Some(data) = source.get("data").and_then(|v| v.as_str())
 						{
-							let format = media_type
-								.strip_prefix("image/")
-								.unwrap_or(media_type)
-								.to_string();
 							(
-								bedrock::ContentBlock::Image(bedrock::ImageBlock {
-									format,
-									source: bedrock::ImageSource {
-										bytes: data.to_string(),
-									},
-								}),
+								super::CanonicalImage::from_media_type_and_base64(media_type, data)?
+									.into_bedrock_content_block(),
 								cache_control.is_some(),
 							)
 						} else {
@@ -1422,18 +1572,11 @@ pub mod from_messages {
 										if let Some(media_type) = source.get("media_type").and_then(|v| v.as_str())
 											&& let Some(data) = source.get("data").and_then(|v| v.as_str())
 										{
-											let format = media_type
-												.strip_prefix("image/")
-												.unwrap_or(media_type)
-												.to_string();
-											Some(bedrock::ToolResultContentBlock::Image(
-												bedrock::ImageBlock {
-													format,
-													source: bedrock::ImageSource {
-														bytes: data.to_string(),
-													},
-												},
-											))
+											super::CanonicalImage::from_media_type_and_base64(media_type, data)
+												.ok()
+												.map(|image| {
+													bedrock::ToolResultContentBlock::Image(image.into_bedrock_image_block())
+												})
 										} else {
 											None
 										}
@@ -1500,9 +1643,9 @@ pub mod from_messages {
 				req.temperature
 			},
 			top_p: if thinking_enabled { None } else { req.top_p },
-			top_k: if thinking_enabled { None } else { req.top_k },
 			stop_sequences: req.stop_sequences,
 		};
+		let top_k = if thinking_enabled { None } else { req.top_k };
 
 		let tool_config = pending_tool_config.map(|(tools, tool_choice)| {
 			let mut bedrock_tools = Vec::with_capacity(tools.len() * 2);
@@ -1543,6 +1686,10 @@ pub mod from_messages {
 				.expect("additional model request fields must be a JSON object")
 				.insert(key.to_string(), value);
 		};
+
+		if let Some(top_k) = top_k {
+			upsert_additional_field("top_k", top_k.into());
+		}
 
 		// Preserve explicit output_config in Anthropic's model-specific envelope.
 		if let Some(output_config) = requested_output_config_json {
@@ -1587,23 +1734,22 @@ pub mod from_messages {
 			Some(metadata)
 		};
 
-		Ok((
-			bedrock::ConverseRequest {
-				model_id: req.model,
-				messages,
-				system: system_content,
-				inference_config: Some(inference_config),
-				output_config,
-				tool_config,
-				guardrail_config,
-				additional_model_request_fields: additional_fields,
-				prompt_variables: None,
-				additional_model_response_field_paths: None,
-				request_metadata: metadata,
-				performance_config: None,
-			},
-			tool_name_map,
-		))
+		let mut bedrock_request = bedrock::ConverseRequest {
+			model_id: req.model,
+			messages,
+			system: system_content,
+			inference_config: Some(inference_config),
+			output_config,
+			tool_config,
+			guardrail_config,
+			additional_model_request_fields: additional_fields,
+			prompt_variables: None,
+			additional_model_response_field_paths: None,
+			request_metadata: metadata,
+			performance_config: None,
+		};
+		helpers::ensure_tool_config_for_history(&mut bedrock_request);
+		Ok((bedrock_request, tool_name_map))
 	}
 
 	fn messages_output_format_to_bedrock_output_config(
@@ -1675,14 +1821,16 @@ pub mod from_messages {
 		log: StreamingUsageGuard,
 		model: &str,
 		_message_id: &str,
-		include_completion_in_log: bool,
+		log_content: crate::LogContentFields,
 		tool_name_map: Option<super::BedrockToolNameMap>,
 	) -> Body {
 		let mut saw_token = false;
 		let mut seen_blocks: HashSet<i32> = HashSet::new();
 		let mut pending_stop_reason: Option<bedrock::StopReason> = None;
 		let mut pending_usage: Option<bedrock::TokenUsage> = None;
-		let mut completion = include_completion_in_log.then(String::new);
+		let mut completion = log_content.completion.then(String::new);
+		let mut tool_calls =
+			crate::conversion::messages::StreamingToolCalls::new(log_content.tool_calls);
 		let model = model.to_string();
 		parse::aws_sse::transform_multi(b, buffer_limit, move |aws_event| {
 			let event = match bedrock::ConverseStreamOutput::deserialize(aws_event) {
@@ -1730,11 +1878,21 @@ pub mod from_messages {
 				bedrock::ConverseStreamOutput::ContentBlockStart(start) => {
 					seen_blocks.insert(start.content_block_index);
 					let content_block = match start.start {
-						Some(bedrock::ContentBlockStart::ToolUse(s)) => messages::ContentBlock::ToolUse {
-							id: s.tool_use_id,
-							name: super::restore_tool_name(tool_name_map.as_ref(), &s.name),
-							input: serde_json::json!({}),
-							cache_control: None,
+						Some(bedrock::ContentBlockStart::ToolUse(s)) => {
+							let name = super::restore_tool_name(tool_name_map.as_ref(), &s.name);
+							let input = serde_json::json!({});
+							tool_calls.start(
+								start.content_block_index as usize,
+								s.tool_use_id.as_str(),
+								name.as_str(),
+								&input,
+							);
+							messages::ContentBlock::ToolUse {
+								id: s.tool_use_id,
+								name,
+								input,
+								cache_control: None,
+							}
 						},
 						Some(bedrock::ContentBlockStart::ReasoningContent) => {
 							messages::ContentBlock::Thinking {
@@ -1827,6 +1985,7 @@ pub mod from_messages {
 								},
 							},
 							bedrock::ContentBlockDelta::ToolUse(tu) => {
+								tool_calls.append_arguments(delta.content_block_index as usize, &tu.input);
 								messages::ContentBlockDelta::InputJsonDelta {
 									partial_json: tu.input,
 								}
@@ -1874,6 +2033,17 @@ pub mod from_messages {
 					let mut out = Vec::new();
 					let stop = pending_stop_reason.take();
 					let usage = pending_usage.take();
+					let finish_reason = stop
+						.as_ref()
+						.map(|stop_reason| translate_stop_reason(*stop_reason))
+						.as_ref()
+						.and_then(crate::types::serialize_str);
+					let mut output_messages = tool_calls.take_output_messages(finish_reason);
+					log.update(|r| {
+						if let Some(output_messages) = output_messages.take() {
+							r.response.output_messages = Some(output_messages);
+						}
+					});
 
 					if let (Some(stop_reason), Some(usage_data)) = (stop, usage) {
 						let event = messages::MessagesStreamEvent::MessageDelta {
@@ -1928,6 +2098,7 @@ pub mod from_responses {
 	use std::collections::{HashMap, HashSet};
 	use std::time::Instant;
 
+	use agent_core::strng;
 	use axum_core::body::Body;
 	use bytes::Bytes;
 	use helpers::*;
@@ -1943,10 +2114,88 @@ pub mod from_responses {
 	use types::bedrock;
 	use types::responses::typed as responses;
 
-	use super::helpers;
+	use super::{helpers, responses_output_status};
 	use crate::bedrock::Provider;
+	use crate::conversion::completions::parse_data_url;
 	use crate::types::ResponseType;
 	use crate::{AIError, StreamingUsageGuard, json, logged_response_parsing, parse, types};
+
+	// Bedrock Converse supported document formats:
+	// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+	fn media_type_to_doc_format(media_type: &str) -> Option<&'static str> {
+		match media_type {
+			"application/pdf" => Some("pdf"),
+			"text/csv" => Some("csv"),
+			"application/msword" => Some("doc"),
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some("docx"),
+			"application/vnd.ms-excel" => Some("xls"),
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some("xlsx"),
+			"text/html" => Some("html"),
+			"text/plain" => Some("txt"),
+			"text/markdown" | "text/x-markdown" => Some("md"),
+			_ => None,
+		}
+	}
+
+	fn derive_doc_format(
+		media_type: Option<&str>,
+		filename: Option<&str>,
+	) -> Result<&'static str, AIError> {
+		if let Some(fmt) = media_type.and_then(media_type_to_doc_format).or_else(|| {
+			filename.and_then(|f| {
+				mime_guess::from_path(f)
+					.iter_raw()
+					.find_map(media_type_to_doc_format)
+			})
+		}) {
+			return Ok(fmt);
+		}
+		Err(AIError::UnsupportedConversion(strng::literal!(
+			"bedrock document format could not be determined; provide a filename with a supported extension (pdf, csv, doc, docx, xls, xlsx, html, txt, md)"
+		)))
+	}
+
+	// Bedrock document names may only contain alphanumerics, whitespace, hyphens,
+	// parentheses, and square brackets, with no consecutive whitespace. Notably this
+	// excludes periods, so "notes.txt" must be rewritten before sending.
+	fn sanitize_doc_name(filename: Option<&str>) -> String {
+		let Some(name) = filename else {
+			return "document".to_string();
+		};
+		// Drop the extension; format is carried separately in the document block.
+		let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+		let mut out = String::with_capacity(stem.len());
+		let mut last_was_space = false;
+		for c in stem.chars() {
+			let mapped = if c.is_ascii_alphanumeric() || matches!(c, '-' | '(' | ')' | '[' | ']') {
+				last_was_space = false;
+				c
+			} else if last_was_space {
+				continue;
+			} else {
+				last_was_space = true;
+				' '
+			};
+			out.push(mapped);
+		}
+		let out = out.trim().to_string();
+		if out.is_empty() {
+			"document".to_string()
+		} else {
+			out
+		}
+	}
+
+	/// Parse a `data:` URL into its optional media type and base64 payload.
+	/// Errors if the data URL is not base64-encoded.
+	fn parse_doc_data_url(url: &str) -> Result<(Option<&str>, String), AIError> {
+		let Some((mt, data)) = parse_data_url(url) else {
+			return Err(AIError::UnsupportedConversion(strng::literal!(
+				"bedrock file data URLs must be base64-encoded"
+			)));
+		};
+		Ok((Some(mt), data.to_string()))
+	}
 
 	/// translate an OpenAI responses request to a Bedrock converse request
 	pub fn translate(
@@ -1966,7 +2215,7 @@ pub mod from_responses {
 			provider,
 			headers,
 			prompt_caching,
-		);
+		)?;
 		let body = serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)?;
 		Ok(super::BedrockRequest {
 			body,
@@ -1981,7 +2230,7 @@ pub mod from_responses {
 		provider: &Provider,
 		headers: Option<&http::HeaderMap>,
 		prompt_caching: Option<&crate::PromptCachingConfig>,
-	) -> (bedrock::ConverseRequest, super::BedrockToolNameMap) {
+	) -> Result<(bedrock::ConverseRequest, super::BedrockToolNameMap), AIError> {
 		use responses::{
 			CustomToolCallOutput, CustomToolCallOutputOutput, EasyInputContent, FunctionCallOutput,
 			InputContent, InputItem, InputMessage, InputParam, InputRole, InputTextContent, Item,
@@ -2054,6 +2303,7 @@ pub mod from_responses {
 					ToolChoiceParam::AllowedTools(_)
 					| ToolChoiceParam::Mcp(_)
 					| ToolChoiceParam::Custom(_)
+					| ToolChoiceParam::ProgrammaticToolCalling(_)
 					| ToolChoiceParam::ApplyPatch
 					| ToolChoiceParam::Shell => {
 						tracing::warn!("Unsupported tool choice for Bedrock: {:?}", tc);
@@ -2082,6 +2332,7 @@ pub mod from_responses {
 			InputParam::Text(text) => vec![InputItem::from(InputMessage {
 				content: vec![InputContent::InputText(InputTextContent {
 					text: text.clone(),
+					prompt_cache_breakpoint: None,
 				})],
 				role: InputRole::User,
 				status: None,
@@ -2089,7 +2340,12 @@ pub mod from_responses {
 			InputParam::Items(items) => items.clone(),
 		};
 
-		let input_parts_to_blocks = |parts: &[InputContent]| {
+		// Bedrock requires document names to be unique within a request; track names
+		// already used so repeated filenames (or missing ones) get a numeric suffix.
+		let used_doc_names = std::cell::RefCell::new(HashSet::<String>::new());
+		let input_parts_to_blocks = |parts: &[InputContent],
+		                             role: bedrock::Role|
+		 -> Result<Vec<bedrock::ContentBlock>, AIError> {
 			let mut blocks = Vec::new();
 			tracing::debug!("Processing {} content parts", parts.len());
 			for part in parts {
@@ -2098,19 +2354,104 @@ pub mod from_responses {
 						tracing::debug!("Found InputText with text: {}", input_text.text);
 						blocks.push(bedrock::ContentBlock::Text(input_text.text.clone()));
 					},
-					InputContent::InputImage(_) => {
-						// Image support requires fetching URLs or resolving file_ids
-						tracing::debug!("Image inputs not supported in Responses->Bedrock translation");
-						continue;
+					InputContent::InputImage(input_image) => {
+						if role != bedrock::Role::User {
+							return Err(AIError::UnsupportedConversion(strng::literal!(
+								"bedrock image inputs are only supported on user messages"
+							)));
+						}
+						let Some(image_url) = input_image.image_url.as_deref() else {
+							return Err(AIError::UnsupportedConversion(strng::literal!(
+								"bedrock image inputs must be base64 data URLs; remote URLs and file_ids are unsupported"
+							)));
+						};
+						if !image_url.starts_with("data:") {
+							// Remote URLs and file_ids would require the gateway to fetch content itself
+							return Err(AIError::UnsupportedConversion(strng::literal!(
+								"bedrock image inputs must be base64 data URLs; remote URLs and file_ids are unsupported"
+							)));
+						};
+						blocks
+							.push(super::CanonicalImage::from_data_url(image_url)?.into_bedrock_content_block());
 					},
-					InputContent::InputFile(_) => {
-						tracing::debug!("Skipping InputFile");
-						continue;
+					InputContent::InputFile(input_file) => {
+						if role != bedrock::Role::User {
+							return Err(AIError::UnsupportedConversion(strng::literal!(
+								"bedrock document inputs are only supported on user messages"
+							)));
+						}
+						// Bedrock-side constraints we do NOT pre-validate here (Bedrock enforces them
+						// and they may change; see the Converse API docs):
+						// - a document must be accompanied by a text block in the same message
+						// - at most 5 documents per request, each no larger than 4.5 MB
+						// https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+						//
+						// Resolve base64 bytes and optional media type from file_data or file_url.
+						// file_id cannot be resolved without an external API call.
+						let (media_type, bytes) = if let Some(file_data) = &input_file.file_data {
+							if file_data.starts_with("data:") {
+								parse_doc_data_url(file_data)?
+							} else {
+								// Raw base64 without a data URL wrapper; format comes from the filename
+								(None, file_data.clone())
+							}
+						} else if let Some(file_url) = &input_file.file_url {
+							if file_url.starts_with("data:") {
+								parse_doc_data_url(file_url)?
+							} else {
+								return Err(AIError::UnsupportedConversion(strng::literal!(
+									"bedrock file inputs must be base64 data URLs; remote URLs are unsupported"
+								)));
+							}
+						} else {
+							return Err(AIError::UnsupportedConversion(strng::literal!(
+								"bedrock file inputs must supply file_data or a base64 data URL in file_url; file_id is unsupported"
+							)));
+						};
+						let format = derive_doc_format(media_type, input_file.filename.as_deref())?;
+						let mut name = sanitize_doc_name(input_file.filename.as_deref());
+						{
+							let mut used = used_doc_names.borrow_mut();
+							if !used.insert(name.clone()) {
+								let mut i = 2;
+								name = loop {
+									let candidate = format!("{name} [{i}]");
+									if used.insert(candidate.clone()) {
+										break candidate;
+									}
+									i += 1;
+								};
+							}
+						}
+						blocks.push(bedrock::ContentBlock::Document(bedrock::DocumentBlock {
+							format: format.to_string(),
+							name,
+							source: bedrock::DocumentSource { bytes },
+						}));
 					},
 				}
 			}
 			tracing::debug!("Created {} content blocks", blocks.len());
-			blocks
+			Ok(blocks)
+		};
+		let input_parts_to_system_text = |parts: &[InputContent]| -> Result<String, AIError> {
+			let mut text = Vec::new();
+			for part in parts {
+				match part {
+					InputContent::InputText(input_text) => text.push(input_text.text.clone()),
+					InputContent::InputImage(_) => {
+						return Err(AIError::UnsupportedConversion(strng::literal!(
+							"bedrock image inputs are only supported on user messages"
+						)));
+					},
+					InputContent::InputFile(_) => {
+						return Err(AIError::UnsupportedConversion(strng::literal!(
+							"bedrock document inputs are only supported on user messages"
+						)));
+					},
+				}
+			}
+			Ok(text.join("\n"))
 		};
 
 		// Process each input item
@@ -2123,14 +2464,7 @@ pub mod from_responses {
 						ResponsesRole::System | ResponsesRole::Developer => {
 							let text = match &msg.content {
 								EasyInputContent::Text(text) => text.clone(),
-								EasyInputContent::ContentList(parts) => parts
-									.iter()
-									.filter_map(|part| match part {
-										InputContent::InputText(input_text) => Some(input_text.text.clone()),
-										_ => None,
-									})
-									.collect::<Vec<_>>()
-									.join("\n"),
+								EasyInputContent::ContentList(parts) => input_parts_to_system_text(parts)?,
 							};
 							system_blocks.push(bedrock::SystemContentBlock::Text { text });
 							continue;
@@ -2141,7 +2475,7 @@ pub mod from_responses {
 						EasyInputContent::Text(text) => {
 							vec![bedrock::ContentBlock::Text(text.clone())]
 						},
-						EasyInputContent::ContentList(parts) => input_parts_to_blocks(parts),
+						EasyInputContent::ContentList(parts) => input_parts_to_blocks(parts, role)?,
 					};
 
 					helpers::push_or_merge_message(&mut messages, bedrock::Message { role, content });
@@ -2150,21 +2484,13 @@ pub mod from_responses {
 					let role = match msg.role {
 						InputRole::User => bedrock::Role::User,
 						InputRole::System | InputRole::Developer => {
-							let text = msg
-								.content
-								.iter()
-								.filter_map(|part| match part {
-									InputContent::InputText(input_text) => Some(input_text.text.clone()),
-									_ => None,
-								})
-								.collect::<Vec<_>>()
-								.join("\n");
+							let text = input_parts_to_system_text(&msg.content)?;
 							system_blocks.push(bedrock::SystemContentBlock::Text { text });
 							continue;
 						},
 					};
 
-					let content = input_parts_to_blocks(&msg.content);
+					let content = input_parts_to_blocks(&msg.content, role)?;
 					helpers::push_or_merge_message(&mut messages, bedrock::Message { role, content });
 				},
 				InputItem::Item(Item::Message(MessageItem::Output(msg))) => {
@@ -2331,7 +2657,6 @@ pub mod from_responses {
 			max_tokens: req.max_output_tokens.unwrap_or(4096) as usize,
 			temperature: req.temperature,
 			top_p: req.top_p,
-			top_k: None,
 			stop_sequences: vec![],
 		};
 		let output_config = req
@@ -2343,7 +2668,7 @@ pub mod from_responses {
 				.reasoning
 				.as_ref()
 				.and_then(|r| r.effort.as_ref())
-				.and_then(responses_reasoning_effort_to_enabled_budget)
+				.and_then(crate::types::thinking_budget_for_reasoning_effort)
 		});
 		let additional_model_request_fields = enabled_thinking_budget.map(|budget| {
 			serde_json::json!({
@@ -2411,6 +2736,7 @@ pub mod from_responses {
 					.push(bedrock::Tool::CachePoint(create_cache_point()));
 			}
 		}
+		ensure_tool_config_for_history(&mut bedrock_request);
 
 		tracing::debug!(
 			"Bedrock request - messages: {}, system blocks: {}, tools: {}, tool_choice: {:?}",
@@ -2431,7 +2757,7 @@ pub mod from_responses {
 				.and_then(|tc| tc.tool_choice.as_ref())
 		);
 
-		(bedrock_request, tool_name_map)
+		Ok((bedrock_request, tool_name_map))
 	}
 
 	fn extract_responses_thinking_budget_tokens(req: &types::responses::Request) -> Option<u64> {
@@ -2439,17 +2765,6 @@ pub mod from_responses {
 			.vendor_extensions
 			.as_ref()
 			.and_then(|v| v.thinking_budget_tokens)
-	}
-
-	fn responses_reasoning_effort_to_enabled_budget(
-		effort: &responses::ReasoningEffort,
-	) -> Option<u64> {
-		match effort {
-			responses::ReasoningEffort::None => None,
-			responses::ReasoningEffort::Minimal | responses::ReasoningEffort::Low => Some(1024),
-			responses::ReasoningEffort::Medium => Some(2048),
-			responses::ReasoningEffort::High | responses::ReasoningEffort::Xhigh => Some(4096),
-		}
 	}
 
 	fn responses_text_format_to_bedrock_output_config(
@@ -2499,15 +2814,8 @@ pub mod from_responses {
 			.map_err(logged_response_parsing(bytes))?;
 		let adapter = super::ConverseResponseAdapter::from_response(resp, model)?;
 		let typed = adapter.to_responses_typed(tool_name_map);
-		let mut passthrough =
+		let passthrough =
 			json::convert::<_, types::responses::Response>(&typed).map_err(AIError::ResponseParsing)?;
-		passthrough.rest = serde_json::Value::Object(serde_json::Map::new());
-		if let Some(usage) = passthrough.usage.as_mut() {
-			usage.rest = serde_json::Value::Object(serde_json::Map::new());
-		}
-		if matches!(adapter.stop_reason, bedrock::StopReason::ToolUse) {
-			passthrough.status = "requires_action".to_string();
-		}
 		Ok(Box::new(passthrough))
 	}
 
@@ -2534,12 +2842,16 @@ pub mod from_responses {
 		log: StreamingUsageGuard,
 		model: &str,
 		_message_id: &str,
+		log_content: crate::LogContentFields,
 		tool_name_map: Option<super::BedrockToolNameMap>,
 	) -> Body {
 		let mut saw_token = false;
 		let mut pending_stop_reason: Option<bedrock::StopReason> = None;
 		let mut pending_usage: Option<bedrock::TokenUsage> = None;
 		let mut seen_blocks: HashSet<i32> = HashSet::new();
+		let mut completion = log_content.completion.then(String::new);
+		let mut logged_tool_calls =
+			crate::conversion::messages::StreamingToolCalls::new(log_content.tool_calls);
 
 		// Track tool calls for streaming: (content_block_index -> (item_id, name, json_buffer, output_index))
 		// output_index is the stable position of this tool call in the response output array.
@@ -2623,6 +2935,12 @@ pub mod from_responses {
 							let output_index = next_output_index;
 							next_output_index += 1;
 							let restored_name = super::restore_tool_name(tool_name_map.as_ref(), &tu.name);
+							logged_tool_calls.start(
+								start.content_block_index as usize,
+								tu.tool_use_id.as_str(),
+								restored_name.as_str(),
+								&serde_json::Value::Null,
+							);
 							tool_calls.insert(
 								start.content_block_index,
 								(
@@ -2643,6 +2961,7 @@ pub mod from_responses {
 										call_id: tool_call_item_id.clone(),
 										namespace: None,
 										name: restored_name,
+										caller: None,
 										id: Some(tool_call_item_id),
 										status: Some(OutputStatus::InProgress),
 									}),
@@ -2678,6 +2997,9 @@ pub mod from_responses {
 					if let Some(d) = delta.delta {
 						match d {
 							bedrock::ContentBlockDelta::Text(text) => {
+								if let Some(completion) = completion.as_mut() {
+									completion.push_str(&text);
+								}
 								sequence_number += 1;
 								let delta_event =
 									ResponseStreamEvent::ResponseOutputTextDelta(ResponseTextDeltaEvent {
@@ -2720,6 +3042,7 @@ pub mod from_responses {
 								_ => {},
 							},
 							bedrock::ContentBlockDelta::ToolUse(tu) => {
+								logged_tool_calls.append_arguments(delta.content_block_index as usize, &tu.input);
 								if let Some((item_id, _name, buffer, output_index)) =
 									tool_calls.get_mut(&delta.content_block_index)
 								{
@@ -2771,6 +3094,7 @@ pub mod from_responses {
 									call_id: item_id.clone(),
 									namespace: None,
 									name,
+									caller: None,
 									id: Some(item_id),
 									status: Some(OutputStatus::Completed),
 								}),
@@ -2809,6 +3133,12 @@ pub mod from_responses {
 					}
 
 					let mut out: Vec<(&'static str, ResponseStreamEvent)> = Vec::new();
+					let stop = pending_stop_reason.take();
+					let usage_data = pending_usage.take();
+					let output_status = stop
+						.as_ref()
+						.map(responses_output_status)
+						.unwrap_or(OutputStatus::Completed);
 
 					sequence_number += 1;
 					let message_done_event =
@@ -2820,20 +3150,37 @@ pub mod from_responses {
 								id: message_item_id.clone(),
 								role: AssistantRole::Assistant,
 								phase: None,
-								status: OutputStatus::Completed,
+								status: output_status,
 							}),
 						});
 					out.push(("event", message_done_event));
 
-					let stop = pending_stop_reason.take();
-					let usage_data = pending_usage.take();
+					let response_status = match stop.as_ref() {
+						Some(bedrock::StopReason::EndTurn)
+						| Some(bedrock::StopReason::StopSequence)
+						| Some(bedrock::StopReason::ToolUse)
+						| None => responses::Status::Completed,
+						Some(bedrock::StopReason::MaxTokens)
+						| Some(bedrock::StopReason::ModelContextWindowExceeded) => responses::Status::Incomplete,
+						Some(bedrock::StopReason::ContentFiltered)
+						| Some(bedrock::StopReason::GuardrailIntervened) => responses::Status::Failed,
+					};
+					let finish_reason = crate::types::serialize_str(&response_status);
+					log.update(|r| {
+						if let Some(completion) = completion.take() {
+							r.response.completion = Some(vec![completion]);
+						}
+						r.response.output_messages =
+							logged_tool_calls.take_output_messages(finish_reason.clone());
+					});
 
 					let usage_obj = usage_data.map(|u| ResponseUsage {
 						input_tokens: u.input_tokens as u32,
 						output_tokens: u.output_tokens as u32,
-						total_tokens: (u.input_tokens + u.output_tokens) as u32,
+						total_tokens: u.total_tokens as u32,
 						input_tokens_details: InputTokenDetails {
 							cached_tokens: u.cache_read_input_tokens.unwrap_or(0) as u32,
+							cache_write_tokens: u.cache_write_input_tokens.map(|tokens| tokens as u32),
 						},
 						output_tokens_details: OutputTokenDetails {
 							reasoning_tokens: 0,
@@ -2964,6 +3311,34 @@ mod helpers {
 			.collect()
 	});
 	use crate::types::bedrock;
+
+	// Bedrock requires toolConfig when the conversation contains tool history. Use a
+	// static placeholder instead of advertising historical tool names the model could call.
+	pub fn ensure_tool_config_for_history(req: &mut bedrock::ConverseRequest) {
+		if req.tool_config.is_some() {
+			return;
+		}
+		let has_tool_blocks = req.messages.iter().any(|message| {
+			message.content.iter().any(|block| {
+				matches!(
+					block,
+					bedrock::ContentBlock::ToolUse(_) | bedrock::ContentBlock::ToolResult(_)
+				)
+			})
+		});
+		if has_tool_blocks {
+			req.tool_config = Some(bedrock::ToolConfiguration {
+				tools: vec![bedrock::Tool::ToolSpec(bedrock::ToolSpecification {
+					name: "agentgateway_dummy_do_not_call".to_string(),
+					description: None,
+					input_schema: Some(bedrock::ToolInputSchema::Json(
+						serde_json::json!({ "type": "object" }),
+					)),
+				})],
+				tool_choice: None,
+			});
+		}
+	}
 
 	pub fn create_cache_point() -> bedrock::CachePointBlock {
 		bedrock::CachePointBlock {
@@ -3224,6 +3599,7 @@ impl ConverseResponseAdapter {
 					));
 				},
 				bedrock::ContentBlock::Image(_)
+				| bedrock::ContentBlock::Document(_)
 				| bedrock::ContentBlock::ToolResult(_)
 				| bedrock::ContentBlock::CachePoint(_) => {
 					continue;
@@ -3264,13 +3640,18 @@ impl ConverseResponseAdapter {
 				completion_tokens_details: None,
 
 				cache_read_input_tokens: token_usage.cache_read_input_tokens.map(|i| i as u64),
-				prompt_tokens_details: token_usage
-					.cache_read_input_tokens
-					.map(|i| UsagePromptDetails {
-						cached_tokens: Some(i as u64),
+				prompt_tokens_details: match (
+					token_usage.cache_read_input_tokens,
+					token_usage.cache_write_input_tokens,
+				) {
+					(None, None) => None,
+					(cached_tokens, cache_write_tokens) => Some(UsagePromptDetails {
+						cached_tokens: cached_tokens.map(|i| i as u64),
 						audio_tokens: None,
+						cache_write_tokens: cache_write_tokens.map(|i| i as u64),
 						rest: Default::default(),
 					}),
+				},
 				cache_creation_input_tokens: token_usage.cache_write_input_tokens.map(|i| i as u64),
 			})
 			.unwrap_or_default();
@@ -3295,6 +3676,7 @@ impl ConverseResponseAdapter {
 		let response_id = format!("resp_{:016x}", rand::rng().random::<u64>());
 		let response_builder =
 			crate::types::responses::ResponseBuilder::new(response_id, self.model.clone());
+		let output_status = responses_output_status(&self.stop_reason);
 
 		// Convert Bedrock content blocks to Responses OutputItem
 		let mut outputs: Vec<responsest::OutputItem> = Vec::new();
@@ -3337,12 +3719,14 @@ impl ConverseResponseAdapter {
 							call_id: tool_use.tool_use_id.clone(),
 							namespace: None,
 							name: restore_tool_name(tool_name_map, &tool_use.name),
+							caller: None,
 							id: Some(tool_use.tool_use_id.clone()),
-							status: Some(responsest::OutputStatus::Completed),
+							status: Some(output_status),
 						},
 					));
 				},
 				bedrock::ContentBlock::Image(_)
+				| bedrock::ContentBlock::Document(_)
 				| bedrock::ContentBlock::ToolResult(_)
 				| bedrock::ContentBlock::CachePoint(_) => {
 					// Skip these in responses (not part of output)
@@ -3356,7 +3740,7 @@ impl ConverseResponseAdapter {
 				role: responsest::AssistantRole::Assistant,
 				phase: None,
 				content: text_parts,
-				status: responsest::OutputStatus::Completed,
+				status: output_status,
 			}));
 		}
 
@@ -3401,9 +3785,10 @@ impl ConverseResponseAdapter {
 		let usage = self.usage.map(|u| responsest::ResponseUsage {
 			input_tokens: u.input_tokens as u32,
 			output_tokens: u.output_tokens as u32,
-			total_tokens: (u.input_tokens + u.output_tokens) as u32,
+			total_tokens: u.total_tokens as u32,
 			input_tokens_details: responsest::InputTokenDetails {
 				cached_tokens: u.cache_read_input_tokens.unwrap_or(0) as u32,
+				cache_write_tokens: u.cache_write_input_tokens.map(|tokens| tokens as u32),
 			},
 			output_tokens_details: responsest::OutputTokenDetails {
 				reasoning_tokens: 0,
@@ -3463,6 +3848,7 @@ impl ConverseResponseAdapter {
 					},
 				)),
 				bedrock::ContentBlock::ToolResult(_) => None, // Skip tool results in responses
+				bedrock::ContentBlock::Document(_) => None,   // Input-only; never in a Bedrock response
 				bedrock::ContentBlock::CachePoint(_) => None, // Skip cache points - they're metadata only
 			}
 		}

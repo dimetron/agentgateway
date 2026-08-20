@@ -56,5 +56,20 @@ Additionally, as we send requests we can see A2A specific information in the log
 2025-07-03T16:56:34.379262Z     info    request gateway=bind/3000 listener=listener0
     route=route0 endpoint=localhost:9999 src.addr=127.0.0.1:57408
     http.method=POST http.host=localhost http.path=/ http.version=HTTP/1.1 http.status=200
-    a2a.method=message/stream duration=2ms
+    a2a.method=message/stream a2a.response.outcome=success a2a.result.kind=task
+    a2a.task.state=completed a2a.context.id=8f2b1c94 duration=2ms
+```
+
+`a2a.context.id` is the A2A `contextId`, which is stable across every turn of one conversation. It
+is recorded for both the A2A v0.3 response shape (fields directly on `result`) and the v1.0 shape
+(the payload nested under `result.task` or `result.message`).
+
+If the upstream agent returns a JSON-RPC error with an HTTP 200 status, the log includes the A2A response outcome and error code:
+
+```plain
+2025-07-03T16:56:34.379262Z     info    request gateway=bind/3000 listener=listener0
+    route=route0 endpoint=localhost:9999 src.addr=127.0.0.1:57408
+    http.method=POST http.host=localhost http.path=/ http.version=HTTP/1.1 http.status=200
+    a2a.method=message/stream a2a.response.outcome=error
+    a2a.response.error_code=-32602 duration=2ms
 ```

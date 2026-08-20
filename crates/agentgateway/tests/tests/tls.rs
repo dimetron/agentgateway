@@ -19,20 +19,22 @@ pub(in crate::tests) fn test_server_tls_config() -> agentgateway::types::agent::
 	.expect("test server tls config")
 }
 
-pub(in crate::tests) fn https_bind() -> Bind {
-	Bind {
-		key: BIND_KEY,
-		address: "127.0.0.1:0".parse().unwrap(),
-		listeners: ListenerSet::from_list([Listener {
+pub(in crate::tests) fn https_bind() -> BindSnapshot {
+	BindSnapshot::new(
+		Bind {
+			key: BIND_KEY,
+			address: "127.0.0.1:0".parse().unwrap(),
+			protocol: BindProtocol::tls,
+			tunnel_protocol: Default::default(),
+			mode: Default::default(),
+		},
+		ListenerSet::from_list([Listener {
 			key: LISTENER_KEY,
 			name: Default::default(),
 			hostname: strng::new("*.example.com"),
 			protocol: ListenerProtocol::HTTPS(test_server_tls_config()),
 		}]),
-		protocol: BindProtocol::tls,
-		tunnel_protocol: Default::default(),
-		mode: Default::default(),
-	}
+	)
 }
 
 async fn serve_https_http1_connection(
@@ -210,7 +212,7 @@ async fn tls_connection_drains_when_listener_changes() {
 }
 
 #[tokio::test]
-#[cfg(feature = "tls-aws-lc")]
+#[cfg(feature = "crypto-aws-lc")]
 async fn tls_backend_connection() {
 	let (mock, certs) = tls_mock().await;
 	let backend_tls = agentgateway::http::backendtls::ResolvedBackendTLS {
@@ -243,7 +245,7 @@ async fn tls_backend_connection() {
 }
 
 #[tokio::test]
-#[cfg(feature = "tls-aws-lc")]
+#[cfg(feature = "crypto-aws-lc")]
 async fn tls_backend_connection_alpn() {
 	let (mock, certs) = tls_mock().await;
 	let backend_tls = agentgateway::http::backendtls::ResolvedBackendTLS {
@@ -285,7 +287,7 @@ async fn tls_backend_connection_alpn() {
 }
 
 #[tokio::test]
-#[cfg(feature = "tls-aws-lc")]
+#[cfg(feature = "crypto-aws-lc")]
 async fn tls_backend_http2_version() {
 	let (mock, certs) = tls_mock().await;
 	let backend_tls = agentgateway::http::backendtls::ResolvedBackendTLS {
@@ -327,7 +329,7 @@ async fn tls_backend_http2_version() {
 }
 
 #[tokio::test]
-#[cfg(feature = "tls-aws-lc")]
+#[cfg(feature = "crypto-aws-lc")]
 async fn tls_backend_http1_version() {
 	let (mock, certs) = tls_mock().await;
 	let backend_tls = agentgateway::http::backendtls::ResolvedBackendTLS {
@@ -369,7 +371,7 @@ async fn tls_backend_http1_version() {
 }
 
 #[tokio::test]
-#[cfg(feature = "tls-aws-lc")]
+#[cfg(feature = "crypto-aws-lc")]
 async fn tls_backend_version_with_alpn() {
 	let (mock, certs) = tls_mock().await;
 	let backend_tls = agentgateway::http::backendtls::ResolvedBackendTLS {

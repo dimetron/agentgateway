@@ -242,6 +242,17 @@ func TestHelmChartTemplate(t *testing.T) {
 `,
 		},
 		{
+			name: "extra-containers",
+			valuesYAML: `controller:
+  extraContainers:
+    - name: httpbin
+      image: kennethreitz/httpbin
+      ports:
+        - containerPort: 80
+          name: httpbin
+`,
+		},
+		{
 			name: "extra-env",
 			valuesYAML: `controller:
   extraEnv:
@@ -270,6 +281,34 @@ func TestHelmChartTemplate(t *testing.T) {
     - name: plugin-cache
       secret:
         secretName: agentgateway-plugin-cache
+`,
+		},
+		{
+			name: "gateway-class-name",
+			valuesYAML: `gatewayClassName: custom-agentgateway
+controllerName: example.com/custom-agentgateway
+`,
+		},
+		{
+			name: "dns-config",
+			valuesYAML: `dnsConfig:
+  options:
+    - name: ndots
+      value: "3"
+  searches:
+    - example.svc.cluster.local
+`,
+		},
+		{
+			name: "revision-history-limit",
+			valuesYAML: `controller:
+  revisionHistoryLimit: 3
+`,
+		},
+		{
+			name: "revision-history-limit-zero",
+			valuesYAML: `controller:
+  revisionHistoryLimit: 0
 `,
 		},
 		{
@@ -334,6 +373,29 @@ func TestHelmChartTemplate(t *testing.T) {
   proxy:
     namespaceSelector:
       any: true
+  grafanaDashboard:
+    enabled: false
+`,
+		},
+		{
+			name: "monitoring-custom-gateway-class-names",
+			valuesYAML: `monitoring:
+  enabled: true
+  proxy:
+    gatewayClassNames:
+    - agentgateway
+    - custom-class
+  grafanaDashboard:
+    enabled: false
+`,
+		},
+		{
+			name: "monitoring-no-pod-monitor",
+			valuesYAML: `monitoring:
+  enabled: true
+  proxy:
+    podMonitor:
+      enabled: false
   grafanaDashboard:
     enabled: false
 `,

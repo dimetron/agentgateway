@@ -48,7 +48,7 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 			metrics::sub_registry(&mut Registry::default()),
 			Default::default(),
 		)),
-		model_catalog: crate::llm::cost::ModelCatalog::empty(),
+		model_catalog: crate::llm::catalog::ModelCatalog::empty(),
 		admin: None,
 		upstream: client.clone(),
 		ca: None,
@@ -168,6 +168,39 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 
 async fn setup() -> (MockServer, Handler) {
 	setup_with_prefix("").await
+}
+
+#[tokio::test]
+async fn listen_emits_empty_ack_and_keeps_the_stream_open() {
+	use futures_util::StreamExt;
+	use rmcp::model::*;
+
+	let (_, handler) = setup().await;
+	let request = JsonRpcRequest {
+		jsonrpc: JsonRpcVersion2_0,
+		id: RequestId::Number(7),
+		request: ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
+			SubscriptionsListenRequestParams::new(SubscriptionFilter::new()),
+		)),
+	};
+	let mut stream = handler
+		.send_message(request, &IncomingRequestContext::empty())
+		.await
+		.unwrap();
+	let first = stream.next().await.unwrap().unwrap();
+	assert_eq!(
+		serde_json::to_value(first).unwrap(),
+		json!({
+			"jsonrpc": "2.0",
+			"method": "notifications/subscriptions/acknowledged",
+			"params": {"notifications": {}}
+		})
+	);
+	assert!(
+		tokio::time::timeout(std::time::Duration::from_millis(10), stream.next())
+			.await
+			.is_err()
+	);
 }
 
 #[tokio::test]
@@ -768,6 +801,52 @@ fn nested_schema<'a>(
 		.and_then(|props| props.get(name))
 		.and_then(serde_json::Value::as_object)
 		.expect("nested schema should exist")
+}
+
+#[test]
+fn test_parse_openapi_schema_maps_summary_to_tool_title() {
+	let raw = r#"{
+		"openapi": "3.0.0",
+		"info": {"title": "Titles", "version": "1.0.0"},
+		"paths": {
+			"/tags": {
+				"get": {
+					"operationId": "getTagsForWorkspace",
+					"summary": "Get tags in a workspace",
+					"description": "Returns the tags in a workspace",
+					"responses": {"200": {"description": "ok"}}
+				}
+			},
+			"/users": {
+				"get": {
+					"operationId": "getUsers",
+					"description": "Returns the users",
+					"responses": {"200": {"description": "ok"}}
+				}
+			}
+		}
+	}"#;
+	let open_api: OpenAPI = serde_json::from_str(raw).expect("valid OpenAPI schema");
+	let tools = super::parse_openapi_schema(&open_api).expect("schema should parse");
+
+	let (with_summary, _) = tools
+		.iter()
+		.find(|(tool, _)| tool.name == "getTagsForWorkspace")
+		.expect("tool should exist");
+	assert_eq!(
+		with_summary.title.as_deref(),
+		Some("Get tags in a workspace")
+	);
+	assert_eq!(
+		with_summary.description.as_deref(),
+		Some("Returns the tags in a workspace")
+	);
+
+	let (without_summary, _) = tools
+		.iter()
+		.find(|(tool, _)| tool.name == "getUsers")
+		.expect("tool should exist");
+	assert_eq!(without_summary.title, None);
 }
 
 #[test]
@@ -1477,6 +1556,7 @@ async fn test_openapi_from_url() {
 		stateful_mode: McpStatefulMode::Stateful,
 		prefix_mode: None,
 		failure_mode: None,
+		dns_rebinding_protection: false,
 	});
 
 	// Convert to runtime backends
@@ -1751,7 +1831,7 @@ async fn test_call_tool_with_binary_body() {
 			agent_core::metrics::sub_registry(&mut prometheus_client::registry::Registry::default()),
 			Default::default(),
 		)),
-		model_catalog: crate::llm::cost::ModelCatalog::empty(),
+		model_catalog: crate::llm::catalog::ModelCatalog::empty(),
 		admin: None,
 		upstream: client.clone(),
 		ca: None,

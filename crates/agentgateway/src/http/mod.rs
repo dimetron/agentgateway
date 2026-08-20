@@ -6,6 +6,7 @@ pub mod buffer;
 pub mod bufferbody;
 mod buflist;
 pub mod cors;
+pub mod delay;
 pub mod jwt;
 pub mod localratelimit;
 pub mod retry;
@@ -27,6 +28,7 @@ pub mod outlierdetection;
 mod peekbody;
 mod recordbody;
 pub mod remoteratelimit;
+pub mod sessionaffinity;
 pub mod sessionpersistence;
 pub mod tests_common;
 pub mod transformation_cel;
@@ -36,6 +38,14 @@ pub use agent_http::{
 	response_buffer_limit, x_headers,
 };
 pub use recordbody::{RecordedBody, RecordedBodyHandle};
+
+pub(crate) fn mark_sensitive_headers(req: &mut Request, configured: &[HeaderName]) {
+	for (name, value) in req.headers_mut() {
+		if name == header::AUTHORIZATION || configured.contains(name) {
+			value.set_sensitive(true)
+		}
+	}
+}
 
 pub(crate) fn iter_request_cookies<'a>(
 	req: &'a Request,
@@ -194,7 +204,15 @@ impl RequestOrResponse<'_> {
 				if let RequestOrResponse::Request(r) = self {
 					let _ = modify_req_uri(r, |uri| {
 						uri.authority = Some(v);
-						if uri.scheme.is_none() {
+						// http::Uri::from_parts requires scheme+authority+path together,
+						// or authority alone with neither scheme nor path (the CONNECT
+						// request-target shape). Only synthesize a scheme when a path is
+						// also present -- i.e. when we're promoting an origin-form URI to
+						// absolute-form. Unconditionally adding a scheme here used to make
+						// Uri::from_parts reject any CONNECT (schemeless, pathless)
+						// request's authority mutation with PathAndQueryMissing, silently
+						// discarded by the `let _ =` above, so the mutation was a no-op.
+						if uri.scheme.is_none() && uri.path_and_query.is_some() {
 							// When authority is set, scheme must also be set
 							// TODO: do the same for HeaderOrPseudo::Scheme
 							uri.scheme = Some(Scheme::HTTP);
@@ -250,7 +268,7 @@ use crate::cel::{BackendContext, DestinationContext, LLMContext, RequestTime, So
 use crate::client::PoolKey;
 use crate::proxy::{ProxyError, ProxyResponse};
 use crate::transport::stream::TCPConnectionInfo;
-use crate::types::agent::PathMatch;
+use crate::types::agent::{HeaderValueMatch, PathMatch};
 
 /// Represents either an HTTP header or an HTTP/2 pseudo-header
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -448,6 +466,22 @@ pub fn get_pseudo_or_header_value<'a>(
 	}
 }
 
+/// Match repeated header fields independently without splitting commas within a field value.
+pub(crate) fn request_header_matches(
+	name: &HeaderOrPseudo,
+	value: &HeaderValueMatch,
+	req: &Request,
+) -> bool {
+	match name {
+		HeaderOrPseudo::Header(name) => req
+			.headers()
+			.get_all(name)
+			.iter()
+			.any(|have| value.matches(have)),
+		_ => get_pseudo_or_header_value(name, req).is_some_and(|have| value.matches(have.as_ref())),
+	}
+}
+
 /// Extract the value for a pseudo header from the request
 pub fn get_pseudo_header_value(pseudo: &HeaderOrPseudo, req: &Request) -> Option<String> {
 	match pseudo {
@@ -502,12 +536,10 @@ pub fn modify_req_uri(
 	req: &mut Request,
 	f: impl FnOnce(&mut uri::Parts) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-	let nreq = std::mem::take(req);
-	let (mut head, body) = nreq.into_parts();
-	let mut parts = head.uri.into_parts();
+	let mut parts = req.uri().clone().into_parts();
 	f(&mut parts)?;
-	head.uri = Uri::from_parts(parts)?;
-	*req = Request::from_parts(head, body);
+	let uri = Uri::from_parts(parts)?;
+	*req.uri_mut() = uri;
 	Ok(())
 }
 
@@ -727,18 +759,37 @@ pub async fn read_response_body(
 	read_body_with_limit(b, lim).await.map(|b| (h, b))
 }
 
-pub async fn inspect_body(req: &mut Request) -> anyhow::Result<Bytes> {
+/// Result of inspecting a body without consuming it from the caller's perspective.
+#[derive(Debug)]
+#[must_use]
+pub enum BodyInspection {
+	/// The complete body fit within the configured limit.
+	Complete(Bytes),
+	/// The body exceeded the limit. Contains the first `limit` bytes.
+	Partial(Bytes),
+}
+
+pub async fn inspect_body(req: &mut Request) -> anyhow::Result<BodyInspection> {
 	let lim = buffer_limit(req);
 	inspect_body_with_limit(req.body_mut(), lim).await
 }
 
-pub async fn inspect_response_body(resp: &mut Response) -> anyhow::Result<Bytes> {
+pub async fn inspect_response_body(resp: &mut Response) -> anyhow::Result<BodyInspection> {
 	let lim = response_buffer_limit(resp);
 	inspect_body_with_limit(resp.body_mut(), lim).await
 }
 
-pub async fn inspect_body_with_limit(body: &mut Body, limit: usize) -> anyhow::Result<Bytes> {
-	peekbody::inspect_body(body, limit).await
+pub async fn inspect_body_with_limit(
+	body: &mut Body,
+	limit: usize,
+) -> anyhow::Result<BodyInspection> {
+	let mut bytes = peekbody::inspect_body(body, limit.saturating_add(1)).await?;
+	if bytes.len() > limit {
+		bytes.truncate(limit);
+		Ok(BodyInspection::Partial(bytes))
+	} else {
+		Ok(BodyInspection::Complete(bytes))
+	}
 }
 
 #[derive(Debug, Default)]
@@ -948,6 +999,28 @@ mod tests {
 		modify_query_parameters(&mut uri, std::iter::empty::<(&str, &str)>(), ["remove"]).unwrap();
 
 		assert_eq!(uri.to_string(), "https://example.com/resource");
+	}
+
+	#[tokio::test]
+	async fn modify_req_uri_preserves_request_on_invalid_uri() {
+		let mut req = ::http::Request::builder()
+			.method(::http::Method::POST)
+			.uri("/request")
+			.header("x-test", "value")
+			.body(Body::from("body"))
+			.unwrap();
+
+		let result = modify_req_uri(&mut req, |parts| {
+			parts.scheme = Some(Scheme::HTTPS);
+			Ok(())
+		});
+
+		assert!(result.is_err());
+		assert_eq!(req.method(), ::http::Method::POST);
+		assert_eq!(req.uri(), "/request");
+		assert_eq!(req.headers().get("x-test").unwrap(), "value");
+		let body = read_body_with_limit(req.into_body(), 100).await.unwrap();
+		assert_eq!(body, "body");
 	}
 
 	#[test]

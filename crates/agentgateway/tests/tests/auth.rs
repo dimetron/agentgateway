@@ -330,6 +330,36 @@ async fn network_authorization_deny() {
 }
 
 #[tokio::test]
+async fn network_http_ext_authz_denies_tcp_connection() {
+	let backend = simple_mock().await;
+	let (_backend, mut bind, io) = setup_tcp_mock(backend);
+	let authz = MockServer::start().await;
+	Mock::given(wiremock::matchers::path("/check"))
+		.respond_with(ResponseTemplate::new(403))
+		.mount(&authz)
+		.await;
+
+	bind
+		.attach_frontend_policy(json!({
+			"networkExtAuthz": {
+				"host": authz.address().to_string(),
+				"protocol": {
+					"http": {
+						"path": "\"/check\""
+					}
+				}
+			}
+		}))
+		.await;
+
+	RequestBuilder::new(Method::GET, "http://lo")
+		.send(io)
+		.await
+		.expect_err("network ext authz should close a denied TCP connection");
+	assert_eq!(authz.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn local_ratelimit() {
 	let (_mock, mut bind, io) = basic_setup().await;
 	bind
@@ -344,8 +374,16 @@ async fn local_ratelimit() {
 
 	let res = send_request(io.clone(), Method::GET, "http://lo").await;
 	assert_eq!(res.status(), 200);
+	// Allowed responses advertise the current limit so clients can self-throttle.
+	assert_eq!(res.hdr("x-ratelimit-limit"), "1");
+	assert_eq!(res.hdr("x-ratelimit-remaining"), "0");
+	assert!(!res.hdr("x-ratelimit-reset").is_empty());
+
 	let res = send_request(io.clone(), Method::GET, "http://lo").await;
 	assert_eq!(res.status(), 429);
+	// The 429 still carries the limit info.
+	assert_eq!(res.hdr("x-ratelimit-limit"), "1");
+	assert_eq!(res.hdr("x-ratelimit-remaining"), "0");
 }
 
 #[tokio::test]

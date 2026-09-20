@@ -10,9 +10,9 @@ import (
 	"istio.io/istio/pilot/pkg/serviceregistry/ambient"
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config/mesh"
-	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/maps"
+	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/workloadapi"
 	corev1 "k8s.io/api/core/v1"
@@ -77,6 +77,8 @@ type Syncer struct {
 	customResourceCollections   func(cfg CustomResourceCollectionsConfig)
 	buildAddressCollectionsFunc AgentgatewayAddressBuilderFunc
 	buildReferenceTypesFunc     func(agw *plugins.AgwCollections, base plugins.ReferenceTypes) plugins.ReferenceTypes
+	extraListenerSets           ExtraListenerSetsBuilderFunc
+	allowedListenersResolver    AllowedListenersResolver
 }
 
 func NewAgwSyncer(
@@ -104,6 +106,8 @@ func NewAgwSyncer(
 		customResourceCollections:   cfg.CustomResourceCollections,
 		buildAddressCollectionsFunc: cfg.BuildAddressCollectionsFunc,
 		buildReferenceTypesFunc:     cfg.BuildReferenceTypesFunc,
+		extraListenerSets:           cfg.ExtraListenerSets,
+		allowedListenersResolver:    cfg.AllowedListenersResolver,
 	}
 	logger.Debug("init agentgateway Syncer", "controllername", controllerName)
 
@@ -119,6 +123,8 @@ type OutputCollections struct {
 	Resources  krt.Collection[agwir.AgwResource]
 	Addresses  krt.Collection[Address]
 	References plugins.ReferenceIndex
+	// RejectedListenerSets is empty unless WithExtraListenerSets is set.
+	RejectedListenerSets krt.Collection[RejectedListenerSet]
 }
 
 type CustomResourceCollectionsConfig struct {
@@ -148,6 +154,7 @@ func (s *Syncer) buildResourceCollections(krtopts krtutil.KrtOptions) {
 		krtopts,
 	))
 	listenerSetInitialStatus, listenerSets := s.buildListenerSetCollection(gatewayClasses, refGrants, krtopts)
+	listenerSets, rejectedListenerSets := s.joinExtraListenerSets(listenerSets, krtopts)
 	if s.customResourceCollections != nil {
 		s.customResourceCollections(CustomResourceCollectionsConfig{
 			ControllerName:    s.controllerName,
@@ -199,6 +206,7 @@ func (s *Syncer) buildResourceCollections(krtopts krtutil.KrtOptions) {
 	s.Outputs.Resources = agwResources
 	s.Outputs.Addresses = addresses
 	s.Outputs.References = ancestorCollection
+	s.Outputs.RejectedListenerSets = rejectedListenerSets
 }
 
 func (s *Syncer) buildFinalGatewayStatus(
@@ -213,11 +221,9 @@ func (s *Syncer) buildFinalGatewayStatus(
 		gatewayStatuses,
 		func(ctx krt.HandlerContext, i krt.ObjectWithStatus[*gwv1.Gateway, gwv1.GatewayStatus]) *krt.ObjectWithStatus[*gwv1.Gateway, gwv1.GatewayStatus] {
 			routes := krt.Fetch(ctx, routeAttachments, krt.FilterIndex(routeAttachmentsIndex, utils.TypedNamespacedName{
-				Kind: wellknown.GatewayGVK.Kind,
-				NamespacedName: types.NamespacedName{
-					Namespace: i.Obj.Namespace,
-					Name:      i.Obj.Name,
-				},
+				Kind:      wellknown.GatewayGVK.Kind,
+				Namespace: i.Obj.Namespace,
+				Name:      i.Obj.Name,
 			}))
 			counts := map[string]int32{}
 			for _, r := range routes {
@@ -247,10 +253,8 @@ func (s *Syncer) buildFinalListenerSetStatus(
 
 	gatewayIndex := krt.NewIndex(gateways, "gateway-parent-section-name", func(gwl *translator.GatewayListener) []utils.SectionedNamespacedName {
 		return []utils.SectionedNamespacedName{{
-			NamespacedName: types.NamespacedName{
-				Namespace: gwl.ParentObject.Namespace,
-				Name:      gwl.ParentObject.Name,
-			},
+			Namespace:   gwl.ParentObject.Namespace,
+			Name:        gwl.ParentObject.Name,
 			SectionName: gwl.ParentInfo.SectionName,
 		}}
 	}).AsCollection(append(krtopts.ToOptions("translator/ListenerSetListenersByParentSection"), utils.SectionedNamespacedNameIndexCollectionFunc)...)
@@ -264,11 +268,9 @@ func (s *Syncer) buildFinalListenerSetStatus(
 			invalidListenerCount := 0
 			lsStatus := i.Status.DeepCopy()
 			routes := krt.Fetch(ctx, routeAttachments, krt.FilterIndex(routeAttachmentsIndex, utils.TypedNamespacedName{
-				Kind: wellknown.ListenerSetGVK.Kind,
-				NamespacedName: types.NamespacedName{
-					Namespace: i.Obj.Namespace,
-					Name:      i.Obj.Name,
-				},
+				Kind:      wellknown.ListenerSetGVK.Kind,
+				Namespace: i.Obj.Namespace,
+				Name:      i.Obj.Name,
 			}))
 			counts := map[string]int32{}
 			for _, r := range routes {
@@ -276,10 +278,8 @@ func (s *Syncer) buildFinalListenerSetStatus(
 			}
 			for idx, l := range i.Obj.Spec.Listeners {
 				gatewayListeners := krtutil.FetchIndexObjects(ctx, gatewayIndex, utils.SectionedNamespacedName{
-					NamespacedName: types.NamespacedName{
-						Namespace: i.Obj.Namespace,
-						Name:      i.Obj.Name,
-					},
+					Namespace:   i.Obj.Namespace,
+					Name:        i.Obj.Name,
 					SectionName: l.Name,
 				})
 				if len(gatewayListeners) == 0 {
@@ -412,6 +412,151 @@ func (s *Syncer) buildListenerSetCollection(
 		}, krtopts.ToOptions("translator/ListenerSetListeners")...)
 }
 
+// RejectedListenerSet is a contributed listener set that failed admission. The syncer does not
+// write status for it: the contributor owns the resource it came from, so it owns the reporting.
+type RejectedListenerSet struct {
+	ListenerSet translator.ListenerSet
+	Reason      gwv1.ListenerSetConditionReason
+	Message     string
+}
+
+func (r RejectedListenerSet) ResourceName() string {
+	return r.ListenerSet.ResourceName()
+}
+
+func (r RejectedListenerSet) Equals(other RejectedListenerSet) bool {
+	return r.Reason == other.Reason && r.Message == other.Message && r.ListenerSet.Equals(other.ListenerSet)
+}
+
+type reviewedListenerSet struct {
+	ListenerSet translator.ListenerSet
+	Admitted    bool
+	// Nil for an admitted set, and for one dropped for a transient reason worth no report.
+	Rejection *RejectedListenerSet
+}
+
+func (r reviewedListenerSet) ResourceName() string {
+	return r.ListenerSet.ResourceName()
+}
+
+func (r reviewedListenerSet) Equals(other reviewedListenerSet) bool {
+	if (r.Rejection != nil) != (other.Rejection != nil) {
+		return false
+	}
+	if r.Rejection != nil && !r.Rejection.Equals(*other.Rejection) {
+		return false
+	}
+	return r.Admitted == other.Admitted && r.ListenerSet.Equals(other.ListenerSet)
+}
+
+// joinExtraListenerSets joins admissible contributed listener sets with those built from Gateway
+// API ListenerSets, returning the refused contributions alongside.
+func (s *Syncer) joinExtraListenerSets(
+	base krt.Collection[translator.ListenerSet],
+	krtopts krtutil.KrtOptions,
+) (krt.Collection[translator.ListenerSet], krt.Collection[RejectedListenerSet]) {
+	noRejections := func() krt.Collection[RejectedListenerSet] {
+		return krt.NewStaticCollection[RejectedListenerSet](nil, nil,
+			krtopts.ToOptions("translator/RejectedExtraListenerSets")...)
+	}
+	if s.extraListenerSets == nil {
+		return base, noRejections()
+	}
+	extra := s.extraListenerSets(s.agwCollections, krtopts)
+	if extra == nil {
+		return base, noRejections()
+	}
+
+	reviewed := krt.NewCollection(extra, func(ctx krt.HandlerContext, ls translator.ListenerSet) *reviewedListenerSet {
+		return s.reviewExtraListenerSet(ctx, base, ls)
+	}, krtopts.ToOptions("translator/ReviewedExtraListenerSets")...)
+
+	admitted := krt.NewCollection(reviewed, func(ctx krt.HandlerContext, r reviewedListenerSet) *translator.ListenerSet {
+		if !r.Admitted {
+			return nil
+		}
+		return &r.ListenerSet
+	}, krtopts.ToOptions("translator/AdmittedExtraListenerSets")...)
+
+	rejected := krt.NewCollection(reviewed, func(ctx krt.HandlerContext, r reviewedListenerSet) *RejectedListenerSet {
+		return r.Rejection
+	}, krtopts.ToOptions("translator/RejectedExtraListenerSets")...)
+
+	// JoinCollection would resolve a duplicate name in List and GetKey but not in its index, and
+	// the index is how GatewayTransformationFunc reads listener sets. Merging on first-wins keeps
+	// the CRD ListenerSet ahead of an already-admitted contribution it collides with.
+	return krt.JoinWithMergeCollection(
+		[]krt.Collection[translator.ListenerSet]{base, admitted},
+		func(ts []translator.ListenerSet) *translator.ListenerSet { return &ts[0] },
+		krtopts.ToOptions("translator/AllListenerSets")...,
+	), rejected
+}
+
+// reviewExtraListenerSet applies the allowedListeners gate a Gateway API ListenerSet gets, plus
+// the identity checks CRD schema validation would otherwise have covered.
+func (s *Syncer) reviewExtraListenerSet(
+	ctx krt.HandlerContext,
+	base krt.Collection[translator.ListenerSet],
+	ls translator.ListenerSet,
+) *reviewedListenerSet {
+	reject := func(reason gwv1.ListenerSetConditionReason, message string) *reviewedListenerSet {
+		return &reviewedListenerSet{
+			ListenerSet: ls,
+			Rejection:   &RejectedListenerSet{ListenerSet: ls, Reason: reason, Message: message},
+		}
+	}
+
+	// ListenerKey is what routes attach to; ParentInfo.ParentGateway is what binds group by.
+	if ls.ParentInfo.SectionName == "" {
+		return reject(gwv1.ListenerSetReasonInvalid, "section name is empty")
+	}
+	if want := utils.InternalGatewayName(ls.Parent.Namespace, ls.Parent.Name, string(ls.ParentInfo.SectionName)); ls.Name != want {
+		return reject(gwv1.ListenerSetReasonInvalid,
+			fmt.Sprintf("name %q is not derived from parent %v and section name %q", ls.Name, ls.Parent, ls.ParentInfo.SectionName))
+	}
+	if ls.ParentInfo.ListenerKey != ls.Name {
+		return reject(gwv1.ListenerSetReasonInvalid,
+			fmt.Sprintf("listener key %q does not match name %q", ls.ParentInfo.ListenerKey, ls.Name))
+	}
+	if ls.ParentInfo.ParentGateway != ls.GatewayParent {
+		return reject(gwv1.ListenerSetReasonInvalid,
+			fmt.Sprintf("parent gateway %v does not match %v", ls.ParentInfo.ParentGateway, ls.GatewayParent))
+	}
+
+	// Status, policy and listener keys are shared with Gateway API objects, and
+	// InternalGatewayName is not injective, so a contribution must not collide with one.
+	if krt.FetchOne(ctx, s.agwCollections.ListenerSets, krt.FilterObjectName(ls.Parent)) != nil {
+		return reject(gwv1.ListenerSetReasonInvalid, fmt.Sprintf("parent %v is a ListenerSet", ls.Parent))
+	}
+	if krt.FetchOne(ctx, s.agwCollections.Gateways, krt.FilterObjectName(ls.Parent)) != nil {
+		return reject(gwv1.ListenerSetReasonInvalid, fmt.Sprintf("parent %v is a Gateway", ls.Parent))
+	}
+	if krt.FetchOne(ctx, base, krt.FilterKey(ls.ResourceName())) != nil {
+		return reject(gwv1.ListenerSetReasonInvalid, fmt.Sprintf("name %q is already used by a ListenerSet listener", ls.Name))
+	}
+
+	parentGateway := ptr.Flatten(krt.FetchOne(ctx, s.agwCollections.Gateways, krt.FilterObjectName(ls.GatewayParent)))
+	if parentGateway == nil {
+		// Not admitted, and not reported: usually collection ordering, not a contributor error.
+		return &reviewedListenerSet{ListenerSet: ls}
+	}
+	allowed := parentGateway.Spec.AllowedListeners
+	if allowed == nil && s.allowedListenersResolver != nil {
+		allowed = s.allowedListenersResolver(parentGateway)
+	}
+	if !translator.AllowedListenersAcceptNamespace(
+		allowed,
+		ls.Parent.Namespace,
+		parentGateway.Namespace,
+		func(n string) *corev1.Namespace {
+			return ptr.Flatten(krt.FetchOne(ctx, s.agwCollections.Namespaces, krt.FilterKey(n)))
+		},
+	) {
+		return reject(gwv1.ListenerSetReasonNotAllowed, "Gateway does not allow listener set attachment")
+	}
+	return &reviewedListenerSet{ListenerSet: ls, Admitted: true}
+}
+
 func (s *Syncer) buildAgwResources(
 	gateways krt.Collection[*translator.GatewayListener],
 	listenerSets krt.Collection[translator.ListenerSet],
@@ -531,8 +676,9 @@ func (s *Syncer) buildAgwResources(
 				From:    lsKey,
 				To:      lsKey,
 				Gateway: ls.GatewayParent,
-				// ListenerName omitted: this index only needs ListenerSet→Gateway;
-				// omitting it lets krt deduplicate the N per-listener entries to one.
+				// Each input listener must own a distinct attachment so removing one
+				// preserves the remaining listeners' ListenerSet-to-Gateway mapping.
+				ListenerName: string(ls.ParentInfo.SectionName),
 			}}
 		}, krtopts.ToOptions("translator/ListenerSetGatewayAttachments")...)
 	listenerSetAttachmentsIdx := krt.NewIndex(listenerSetAttachments, "ls-to-gateway",
@@ -598,8 +744,8 @@ func (s *Syncer) buildBindsFromGateway(listeners []*translator.GatewayListener) 
 		// non-overlapping. This case doesn't need to be handled here since the generated bind is independent of
 		// hostname
 		if listener.Conflict == "" {
-			bi.protocol = s.getBindProtocol(listener)
-			if tp := s.getTunnelProtocol(listener); tp != api.Bind_DIRECT {
+			bi.protocol = translator.BindProtocol(listener.ParentInfo.Protocol)
+			if tp := translator.TunnelProtocol(listener.ParentInfo.Protocol); tp != api.Bind_DIRECT {
 				bi.tunnelProtocol = tp
 			}
 			// A bind is internal if any contributing listener marks it internal. Translation
@@ -648,7 +794,7 @@ func (s *Syncer) buildListenerFromGateway(obj *translator.GatewayListener) *agwi
 	}
 
 	// Set protocol and TLS configuration
-	protocol, tlsConfig, ok := s.getProtocolAndTLSConfig(obj)
+	protocol, tlsConfig, ok := translator.ListenerProtocolAndTLSConfig(obj)
 	if !ok {
 		return nil // Unsupported protocol or missing TLS config
 	}
@@ -660,95 +806,6 @@ func (s *Syncer) buildListenerFromGateway(obj *translator.GatewayListener) *agwi
 		Namespace: obj.ParentGateway.Namespace,
 		Name:      obj.ParentGateway.Name,
 	}, translator.AgwListener{Listener: l}))
-}
-
-// getProtocolAndTLSConfig extracts protocol and TLS configuration from a gateway
-func (s *Syncer) getProtocolAndTLSConfig(obj *translator.GatewayListener) (api.Protocol, *api.TLSConfig, bool) {
-	var tlsConfig *api.TLSConfig
-
-	// Build TLS config if needed
-	if obj.TLSInfo != nil {
-		tlsConfig = &api.TLSConfig{
-			Cert:       obj.TLSInfo.Cert,
-			PrivateKey: obj.TLSInfo.Key,
-		}
-		if obj.TLSInfo.IstioWorkloadCert {
-			tlsConfig.CertificateSource = api.TLSConfig_ISTIO_WORKLOAD
-		} else if obj.TLSInfo.DynamicCA {
-			tlsConfig.CertificateSource = api.TLSConfig_DYNAMIC_CA
-		}
-		if len(obj.TLSInfo.CaCert) > 0 {
-			tlsConfig.Root = obj.TLSInfo.CaCert
-		}
-		if obj.TLSInfo.IstioMutual {
-			tlsConfig.Root = nil
-			tlsConfig.MtlsMode = api.TLSConfig_STRICT
-		} else if obj.TLSInfo.IstioWorkloadCert {
-			tlsConfig.MtlsMode = api.TLSConfig_DISABLE
-		} else if obj.TLSInfo.MtlsFallbackEnabled {
-			tlsConfig.MtlsMode = api.TLSConfig_ALLOW_INSECURE_FALLBACK
-		}
-	}
-
-	switch obj.ParentInfo.Protocol {
-	case gwv1.HTTPProtocolType:
-		return api.Protocol_HTTP, nil, true
-	case gwv1.HTTPSProtocolType:
-		if tlsConfig == nil {
-			return api.Protocol_HTTPS, nil, false // TLS required but not configured
-		}
-		return api.Protocol_HTTPS, tlsConfig, true
-	case gwv1.TLSProtocolType:
-		if tlsConfig == nil {
-			if obj.ParentInfo.TLSPassthrough {
-				// For passthrough, we don't want TLS config
-				return api.Protocol_TLS, nil, true
-			} else {
-				// TLS required but not configured
-				return api.Protocol_TLS, nil, false
-			}
-		}
-		return api.Protocol_TLS, tlsConfig, true
-	case gwv1.TCPProtocolType:
-		return api.Protocol_TCP, nil, true
-	case gwv1.ProtocolType(protocol.HBONE):
-		return api.Protocol_HBONE, nil, true
-	default:
-		return api.Protocol_HTTP, nil, false // Unsupported protocol
-	}
-}
-
-// getProtocolAndTLSConfig extracts protocol and TLS configuration from a gateway
-func (s *Syncer) getBindProtocol(obj *translator.GatewayListener) api.Bind_Protocol {
-	switch obj.ParentInfo.Protocol {
-	case gwv1.HTTPProtocolType:
-		return api.Bind_HTTP
-	case gwv1.HTTPSProtocolType:
-		return api.Bind_TLS
-	case gwv1.TLSProtocolType:
-		return api.Bind_TLS
-	case gwv1.TCPProtocolType:
-		return api.Bind_TCP
-	case gwv1.ProtocolType(protocol.HBONE):
-		// The bind protocol is not used for HBONE_GATEWAY in the data plane;
-		// the actual inner protocol is determined at runtime from the other
-		// listeners on the same port. Return HTTP as a placeholder.
-		return api.Bind_HTTP
-	default:
-		return api.Bind_HTTP
-	}
-}
-
-// getTunnelProtocol maps a Gateway listener protocol to its tunnel protocol.
-// HBONE listeners use HBONE_GATEWAY mode: the proxy terminates inbound HBONE
-// and routes CONNECT requests to local binds.
-func (s *Syncer) getTunnelProtocol(obj *translator.GatewayListener) api.Bind_TunnelProtocol {
-	switch obj.ParentInfo.Protocol {
-	case gwv1.ProtocolType(protocol.HBONE):
-		return api.Bind_HBONE_GATEWAY
-	default:
-		return api.Bind_DIRECT
-	}
 }
 
 // defaultBuildAddressCollections is the default implementation for building address collections

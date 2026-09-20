@@ -327,6 +327,11 @@ type CustomProviderSettings struct {
 	// +optional
 	BackendRef *LocalBackendObjectReference `json:"backendRef,omitempty"`
 
+	// Provider identity used for cost-catalog lookup and telemetry.
+	// Defaults to "custom" when unset.
+	// +optional
+	ProviderOverride *ShortString `json:"providerOverride,omitempty"`
+
 	// Provider-native API formats this provider supports.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=6
@@ -563,7 +568,32 @@ type BedrockSettings struct {
 	// If not specified, the AWS Guardrail policy will not be used.
 	// +optional
 	Guardrail *AWSGuardrailConfig `json:"guardrail,omitempty"`
+
+	// EndpointPreference selects which Bedrock API surface to prefer.
+	// Defaults to preferring runtime over mantle.
+	// Decides which endpoint to pick mainly based on the catalog tags
+	// `mantle` and `runtime`.
+	// +kubebuilder:default=RuntimePreferred
+	// +optional
+	EndpointPreference BedrockEndpointPreference `json:"endpointPreference,omitempty"`
 }
+
+// BedrockEndpointPreference selects the Bedrock API endpoint preference.
+// +k8s:enum
+type BedrockEndpointPreference string
+
+const (
+	// BedrockEndpointPreferenceRuntimePreferred uses Runtime by default and routes to
+	// Mantle only for models the catalog tags `mantle` but not `runtime`. This is the default.
+	BedrockEndpointPreferenceRuntimePreferred BedrockEndpointPreference = "RuntimePreferred"
+	// BedrockEndpointPreferenceMantlePreferred uses Mantle by default and routes to
+	// Runtime only for models the catalog tags `runtime` but not `mantle`.
+	BedrockEndpointPreferenceMantlePreferred BedrockEndpointPreference = "MantlePreferred"
+	// BedrockEndpointPreferenceMantleOnly always uses the Mantle endpoint, regardless of catalog tags.
+	BedrockEndpointPreferenceMantleOnly BedrockEndpointPreference = "MantleOnly"
+	// BedrockEndpointPreferenceRuntimeOnly always uses the Runtime endpoint, regardless of catalog tags.
+	BedrockEndpointPreferenceRuntimeOnly BedrockEndpointPreference = "RuntimeOnly"
+)
 
 type BedrockConfig struct {
 	BedrockSettings `json:",inline"`

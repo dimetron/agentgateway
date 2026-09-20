@@ -147,6 +147,7 @@ type TLSInfo struct {
 	IstioWorkloadCert   bool
 	IstioMutual         bool
 	DynamicCA           bool
+	Spiffe              bool
 }
 
 // PortBindings is a wrapper type that contains the listener on the gateway, as well as the status for the listener.
@@ -193,7 +194,8 @@ func (g *GatewayListener) Equals(other *GatewayListener) bool {
 			g.TLSInfo.MtlsFallbackEnabled != other.TLSInfo.MtlsFallbackEnabled ||
 			g.TLSInfo.IstioWorkloadCert != other.TLSInfo.IstioWorkloadCert ||
 			g.TLSInfo.IstioMutual != other.TLSInfo.IstioMutual ||
-			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA {
+			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA ||
+			g.TLSInfo.Spiffe != other.TLSInfo.Spiffe {
 			return false
 		}
 	}
@@ -274,7 +276,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 			obj.GetAnnotations()[annotations.InternalPorts],
 			func(p int32) bool {
 				for _, l := range kgw.Listeners {
-					if int32(l.Port) == p {
+					if l.Port == p {
 						return true
 					}
 				}
@@ -356,7 +358,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 		// Ref: https://gateway-api.sigs.k8s.io/geps/gep-1713/#listener-precedence
 		// - ListenerSet ordered by creation time (oldest first)
 		// - ListenerSet ordered alphabetically by “{namespace}/{name}”
-		slices.SortFunc(listenersFromSets, func(a, b ListenerSet) int {
+		slices.SortStableFunc(listenersFromSets, func(a, b ListenerSet) int {
 			// primary sort: creation timestamp (oldest first)
 			if r := a.ParentInfo.CreationTimestamp.Compare(b.ParentInfo.CreationTimestamp.Time); r != 0 {
 				return r
@@ -365,7 +367,10 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 			if r := cmp.Compare(a.Parent.Namespace, b.Parent.Namespace); r != 0 {
 				return r
 			}
-			return cmp.Compare(a.Parent.Name, b.Parent.Name)
+			if r := cmp.Compare(a.Parent.Name, b.Parent.Name); r != 0 {
+				return r
+			}
+			return cmp.Compare(a.ListenerIndex, b.ListenerIndex)
 		})
 
 		for _, ls := range listenersFromSets {
@@ -443,6 +448,7 @@ func validateListenerConflicts(listeners []*GatewayListener) {
 type ListenerSet struct {
 	Name          string               `json:"name"`
 	Parent        types.NamespacedName `json:"parent"`
+	ListenerIndex int                  `json:"listenerIndex"`
 	ParentInfo    ParentInfo           `json:"parentInfo"`
 	TLSInfo       *TLSInfo             `json:"tlsInfo"`
 	GatewayParent types.NamespacedName `json:"gatewayParent"`
@@ -464,7 +470,8 @@ func (g ListenerSet) Equals(other ListenerSet) bool {
 			g.TLSInfo.MtlsFallbackEnabled != other.TLSInfo.MtlsFallbackEnabled ||
 			g.TLSInfo.IstioWorkloadCert != other.TLSInfo.IstioWorkloadCert ||
 			g.TLSInfo.IstioMutual != other.TLSInfo.IstioMutual ||
-			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA {
+			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA ||
+			g.TLSInfo.Spiffe != other.TLSInfo.Spiffe {
 			return false
 		}
 	}
@@ -472,6 +479,7 @@ func (g ListenerSet) Equals(other ListenerSet) bool {
 		g.Name == other.Name &&
 		g.GatewayParent == other.GatewayParent &&
 		g.Parent == other.Parent &&
+		g.ListenerIndex == other.ListenerIndex &&
 		g.ParentInfo.Equals(other.ParentInfo)
 }
 
@@ -497,7 +505,11 @@ func ListenerSetBuilder(
 	}
 
 	pns := ptr.OrDefault(p.Namespace, gwv1.Namespace(obj.Namespace))
-	parentGwObj := ptr.Flatten(krt.FetchOne(ctx, gateways, krt.FilterKey(string(pns)+"/"+string(p.Name))))
+	// ListenerSet translation depends on the parent Gateway's spec, name, and namespace.
+	parentGwObj := krtutil.FetchOneSpec(ctx, gateways,
+		func(gw *gwv1.Gateway) gwv1.GatewaySpec { return gw.Spec },
+		krt.FilterKey(string(pns)+"/"+string(p.Name)),
+	)
 	if parentGwObj == nil {
 		// Cannot report status since we don't know if it is for us
 		return nil, nil
@@ -512,7 +524,7 @@ func ListenerSetBuilder(
 		return nil, nil // ignore gateways not managed by our controller
 	}
 
-	if !NamespaceAcceptedByAllowListeners(obj.Namespace, parentGwObj, func(s string) *corev1.Namespace {
+	if !AllowedListenersAcceptNamespace(parentGwObj.Spec.AllowedListeners, obj.Namespace, parentGwObj.Namespace, func(s string) *corev1.Namespace {
 		return ptr.Flatten(krt.FetchOne(ctx, namespaces, krt.FilterKey(s)))
 	}) {
 		reportNotAllowedListenerSet(status, obj)
@@ -525,7 +537,7 @@ func ListenerSetBuilder(
 		obj.GetAnnotations()[annotations.InternalPorts],
 		func(p int32) bool {
 			for _, l := range ls.Listeners {
-				if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && int32(port) == p {
+				if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && port == p {
 					return true
 				}
 			}
@@ -550,16 +562,17 @@ func ListenerSetBuilder(
 
 		allowed, _ := GenerateSupportedKinds(standardListener, enableAgentgatewayModels)
 		pri := ParentInfo{
-			ParentGateway:    config.NamespacedName(parentGwObj),
-			ListenerKey:      name,
-			AllowedKinds:     allowed,
-			Hostnames:        hostnames,
-			OriginalHostname: string(ptr.OrEmpty(l.Hostname)),
-			SectionName:      l.Name,
-			Port:             l.Port,
-			Protocol:         l.Protocol,
-			TLSPassthrough:   l.TLS != nil && l.TLS.Mode != nil && *l.TLS.Mode == gwv1.TLSModePassthrough,
-			Internal:         internalPorts.Has(l.Port),
+			ParentGateway:     parentGwObj.NamespacedName,
+			ListenerKey:       name,
+			AllowedKinds:      allowed,
+			Hostnames:         hostnames,
+			OriginalHostname:  string(ptr.OrEmpty(l.Hostname)),
+			SectionName:       l.Name,
+			Port:              l.Port,
+			Protocol:          l.Protocol,
+			TLSPassthrough:    l.TLS != nil && l.TLS.Mode != nil && *l.TLS.Mode == gwv1.TLSModePassthrough,
+			Internal:          internalPorts.Has(l.Port),
+			CreationTimestamp: obj.CreationTimestamp,
 		}
 
 		res := ListenerSet{
@@ -567,7 +580,8 @@ func ListenerSetBuilder(
 			Valid:         programmed,
 			TLSInfo:       tlsInfo,
 			Parent:        config.NamespacedName(obj),
-			GatewayParent: config.NamespacedName(parentGwObj),
+			GatewayParent: parentGwObj.NamespacedName,
+			ListenerIndex: i,
 			ParentInfo:    pri,
 		}
 		result = append(result, res)
@@ -648,9 +662,14 @@ func BuildRouteParents(
 	}
 }
 
-// NamespaceAcceptedByAllowListeners determines a list of allowed namespaces for a given AllowedListener
-func NamespaceAcceptedByAllowListeners(localNamespace string, parent *gwv1.Gateway, lookupNamespace func(string) *corev1.Namespace) bool {
-	lr := parent.Spec.AllowedListeners
+// AllowedListenersAcceptNamespace takes the policy as an argument rather than reading
+// spec.allowedListeners, so callers can supply one for Gateways whose CRD predates the field.
+func AllowedListenersAcceptNamespace(
+	lr *gwv1.AllowedListeners,
+	localNamespace string,
+	parentNamespace string,
+	lookupNamespace func(string) *corev1.Namespace,
+) bool {
 	// Default allows none
 	if lr == nil || lr.Namespaces == nil {
 		return false
@@ -661,7 +680,7 @@ func NamespaceAcceptedByAllowListeners(localNamespace string, parent *gwv1.Gatew
 		case gwv1.NamespacesFromAll:
 			return true
 		case gwv1.NamespacesFromSame:
-			return localNamespace == parent.Namespace
+			return localNamespace == parentNamespace
 		case gwv1.NamespacesFromNone:
 			return false
 		case gwv1.NamespacesFromSelector:

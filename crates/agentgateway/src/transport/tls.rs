@@ -15,9 +15,9 @@ use tracing::warn;
 use x509_parser::certificate::X509Certificate;
 
 use crate::apply;
-// Provider construction lives in the central `crypto` module; re-export here so
-// existing `transport::tls::provider*` call sites keep working unchanged.
-pub use crate::crypto::tls::{provider, provider_with_cipher_suites, provider_with_options};
+// Provider construction lives in the central `crypto` module; re-export its
+// public factories through the existing `transport::tls` path.
+pub use crate::crypto::tls::{provider, provider_with_options_validated};
 use crate::serdes::schema;
 use crate::transport::stream::Socket;
 use crate::types::discovery::Identity;
@@ -78,9 +78,18 @@ pub static DEFAULT_CIPHER_SUITES: &[SupportedCipherSuite] = &[
 	rustls_symcrypt::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 ];
 
-#[cfg(feature = "crypto-aws-lc")]
+#[cfg(all(feature = "crypto-aws-lc", not(feature = "fips")))]
 pub static DEFAULT_KEY_EXCHANGE_GROUPS: &[&'static dyn SupportedKxGroup] = &[
 	KeyExchangeGroup::X25519.to_supported_kx_group(),
+	KeyExchangeGroup::P256.to_supported_kx_group(),
+	KeyExchangeGroup::P384.to_supported_kx_group(),
+	KeyExchangeGroup::X25519_MLKEM768.to_supported_kx_group(),
+];
+
+// Bare X25519 is not an approved group; the AWS-LC FIPS module does report
+// X25519MLKEM768 as approved, so the hybrid PQC group stays.
+#[cfg(feature = "fips")]
+pub static DEFAULT_KEY_EXCHANGE_GROUPS: &[&'static dyn SupportedKxGroup] = &[
 	KeyExchangeGroup::P256.to_supported_kx_group(),
 	KeyExchangeGroup::P384.to_supported_kx_group(),
 	KeyExchangeGroup::X25519_MLKEM768.to_supported_kx_group(),
@@ -376,8 +385,6 @@ pub mod insecure {
 	use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 	use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 
-	use crate::transport::tls::provider;
-
 	#[derive(Debug)]
 	pub struct NoServerNameVerification {
 		inner: Arc<WebPkiServerVerifier>,
@@ -527,7 +534,7 @@ pub mod insecure {
 		) -> Result<ServerCertVerified, rustls::Error> {
 			let cert = rustls::server::ParsedCertificate::try_from(end_entity)?;
 
-			let algs = provider().signature_verification_algorithms;
+			let algs = crate::crypto::tls::signature_verification_algorithms();
 			rustls::client::verify_server_cert_signed_by_trust_anchor(
 				&cert,
 				&self.roots,
@@ -566,7 +573,7 @@ pub mod insecure {
 				message,
 				cert,
 				dss,
-				&provider().signature_verification_algorithms,
+				&crate::crypto::tls::signature_verification_algorithms(),
 			)
 		}
 
@@ -580,14 +587,12 @@ pub mod insecure {
 				message,
 				cert,
 				dss,
-				&provider().signature_verification_algorithms,
+				&crate::crypto::tls::signature_verification_algorithms(),
 			)
 		}
 
 		fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-			provider()
-				.signature_verification_algorithms
-				.supported_schemes()
+			crate::crypto::tls::signature_verification_algorithms().supported_schemes()
 		}
 	}
 
@@ -693,7 +698,7 @@ pub mod trustdomain {
 			}
 			let (_, c) = X509Certificate::from_der(client_cert)
 				.map_err(|_e| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
-			let (ids, _) = super::sans(&c).map_err(|_e| {
+			let (ids, _) = super::sans(&c, super::PeerIdentityMode::Istio).map_err(|_e| {
 				rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)
 			})?;
 			trace!(
@@ -804,6 +809,94 @@ pub mod trustdomain {
 			CertificateDer::from(cert.der().to_vec())
 		}
 
+		/// Generate a leaf cert with an arbitrary URI SAN, signed by a test CA.
+		fn make_cert_with_uri(uri: &str) -> CertificateDer<'static> {
+			let kp = KeyPair::generate().unwrap();
+			let ca_kp = KeyPair::generate().unwrap();
+
+			let mut params = CertificateParams::default();
+			params.not_before = SystemTime::now().into();
+			params.not_after = (SystemTime::now() + Duration::from_secs(3600)).into();
+			params.serial_number = Some(SerialNumber::from_slice(&[1]));
+			params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+			params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+			params.subject_alt_names = vec![SanType::URI(uri.try_into().unwrap())];
+
+			let mut ca_params = CertificateParams::default();
+			ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+			ca_params.not_before = SystemTime::now().into();
+			ca_params.not_after = (SystemTime::now() + Duration::from_secs(3600)).into();
+			let issuer = Issuer::from_params(&ca_params, &ca_kp);
+
+			let cert = params.signed_by(&kp, &issuer).unwrap();
+			CertificateDer::from(cert.der().to_vec())
+		}
+
+		#[test]
+		fn spiffe_id_populated_for_generic_id() {
+			// A generic (non-Istio) SPIFFE ID: it does not match the rigid ns/sa format, so `identity`
+			// stays None, but `spiffe_id` is populated from the URI SAN.
+			let cert = make_cert_with_uri("spiffe://example.org/payments");
+			let info = super::super::tls_info_from_der(&cert, super::super::PeerIdentityMode::Istio)
+				.expect("parse cert");
+			assert_eq!(
+				info.spiffe_id.as_deref(),
+				Some("spiffe://example.org/payments")
+			);
+			assert!(info.identity.is_none());
+		}
+
+		#[test]
+		fn spiffe_id_populated_for_istio_id() {
+			// An Istio-format SPIFFE ID populates both the generic `spiffe_id` and the parsed Istio
+			// `identity`.
+			let cert = make_spiffe_cert("td.example");
+			let info = super::super::tls_info_from_der(&cert, super::super::PeerIdentityMode::Istio)
+				.expect("parse cert");
+			assert_eq!(
+				info.spiffe_id.as_deref(),
+				Some("spiffe://td.example/ns/default/sa/test")
+			);
+			let id = info.identity.expect("istio identity");
+			assert_eq!(id.to_string(), "spiffe://td.example/ns/default/sa/test");
+		}
+
+		#[test]
+		fn spiffe_mode_skips_istio_parse() {
+			// In SPIFFE mode, even an Istio ns/sa-shaped SVID must NOT be interpreted as an Istio
+			// identity: `identity` stays None, only `spiffe_id` is populated.
+			let cert = make_spiffe_cert("td.example");
+			let info = super::super::tls_info_from_der(&cert, super::super::PeerIdentityMode::Spiffe)
+				.expect("parse cert");
+			assert_eq!(
+				info.spiffe_id.as_deref(),
+				Some("spiffe://td.example/ns/default/sa/test")
+			);
+			assert!(info.identity.is_none());
+		}
+
+		#[test]
+		fn spiffe_mode_generic_id_no_identity() {
+			// A generic SPIFFE SVID yields only `spiffe_id`, no Istio identity, and no parse warning.
+			let cert = make_cert_with_uri("spiffe://example.org/foo");
+			let info = super::super::tls_info_from_der(&cert, super::super::PeerIdentityMode::Spiffe)
+				.expect("parse cert");
+			assert_eq!(info.spiffe_id.as_deref(), Some("spiffe://example.org/foo"));
+			assert!(info.identity.is_none());
+		}
+
+		#[test]
+		fn istio_mode_substrate_actor_id_no_identity() {
+			let cert = make_cert_with_uri("spiffe://substrate-actor.local/atespace/demo/actor/example");
+			let info = super::super::tls_info_from_der(&cert, super::super::PeerIdentityMode::Istio)
+				.expect("parse cert");
+			assert_eq!(
+				info.spiffe_id.as_deref(),
+				Some("spiffe://substrate-actor.local/atespace/demo/actor/example")
+			);
+			assert!(info.identity.is_none());
+		}
+
 		/// Minimal no-op ClientCertVerifier — only used to satisfy TrustDomainVerifier's
 		/// constructor; none of its methods are called by verify_trust_domain.
 		#[derive(Debug)]
@@ -905,7 +998,6 @@ pub mod identity {
 	use rustls::{DigitallySignedStruct, SignatureScheme};
 	use tracing::debug;
 
-	use crate::transport::tls::provider;
 	use crate::types::discovery::Identity;
 	use crate::*;
 
@@ -920,7 +1012,7 @@ pub mod identity {
 			use x509_parser::prelude::*;
 			let (_, c) = X509Certificate::from_der(server_cert)
 				.map_err(|_e| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
-			let (id, _) = super::sans(&c).map_err(|_e| {
+			let (id, _) = super::sans(&c, super::PeerIdentityMode::Istio).map_err(|_e| {
 				rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)
 			})?;
 			trace!(
@@ -961,7 +1053,7 @@ pub mod identity {
 		) -> Result<ServerCertVerified, rustls::Error> {
 			let cert = ParsedCertificate::try_from(end_entity)?;
 
-			let algs = provider().signature_verification_algorithms;
+			let algs = crate::crypto::tls::signature_verification_algorithms();
 			rustls::client::verify_server_cert_signed_by_trust_anchor(
 				&cert,
 				&self.roots,
@@ -991,7 +1083,7 @@ pub mod identity {
 				message,
 				cert,
 				dss,
-				&provider().signature_verification_algorithms,
+				&crate::crypto::tls::signature_verification_algorithms(),
 			)
 		}
 
@@ -1005,14 +1097,12 @@ pub mod identity {
 				message,
 				cert,
 				dss,
-				&provider().signature_verification_algorithms,
+				&crate::crypto::tls::signature_verification_algorithms(),
 			)
 		}
 
 		fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-			provider()
-				.signature_verification_algorithms
-				.supported_schemes()
+			crate::crypto::tls::signature_verification_algorithms().supported_schemes()
 		}
 	}
 }
@@ -1023,6 +1113,11 @@ pub struct TlsInfo {
 	/// The (Istio SPIFFE) identity of the downstream connection, if available.
 	#[serde(default)]
 	pub identity: Option<IstioIdentity>,
+	/// The raw SPIFFE ID (first `spiffe://` URI SAN) of the downstream client certificate, if
+	/// present. Unlike `identity`, this is populated for any SPIFFE ID, not only the Istio
+	/// `spiffe://td/ns/<ns>/sa/<sa>` format.
+	#[serde(default)]
+	pub spiffe_id: Option<Strng>,
 	/// The subject alt names from the downstream certificate, if available.
 	#[serde(default)]
 	pub subject_alt_names: Vec<Strng>,
@@ -1072,23 +1167,44 @@ impl fmt::Display for IstioIdentity {
 	}
 }
 
-pub fn identity_from_connection(conn: &rustls::CommonState) -> Option<TlsInfo> {
+/// How to interpret the peer certificate's SPIFFE identity when extracting [`TlsInfo`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerIdentityMode {
+	/// Parse the peer SVID as an Istio `spiffe://<td>/ns/<ns>/sa/<sa>` identity (populates
+	/// `TlsInfo.identity`), in addition to the raw `spiffe_id`.
+	Istio,
+	/// SPIFFE peer: capture the raw `spiffe_id` only; do not attempt Istio ns/sa parsing. SPIFFE and
+	/// Istio are distinct trust systems, so a SPIFFE peer is never interpreted as an Istio identity.
+	Spiffe,
+}
+
+pub fn identity_from_connection(
+	conn: &rustls::CommonState,
+	mode: PeerIdentityMode,
+) -> Option<TlsInfo> {
+	let cert = conn.peer_certificates().and_then(|certs| certs.first())?;
+	tls_info_from_der(cert, mode)
+}
+
+/// Parse a DER-encoded peer certificate into a [`TlsInfo`].
+fn tls_info_from_der(der: &[u8], mode: PeerIdentityMode) -> Option<TlsInfo> {
 	use x509_parser::prelude::*;
-	let cert = conn
-		.peer_certificates()
-		.and_then(|certs| certs.first())
-		.and_then(|cert| match X509Certificate::from_der(cert) {
-			Ok((_, a)) => Some(a),
-			Err(e) => {
-				warn!("invalid certificate: {e}");
-				None
-			},
-		})?;
+	let cert = match X509Certificate::from_der(der) {
+		Ok((_, a)) => a,
+		Err(e) => {
+			warn!("invalid certificate: {e}");
+			return None;
+		},
+	};
 
 	let (issuer, subject, subject_cn) = names(&cert);
-	let (istio, sans) = sans(&cert).ok()?;
+	let (istio, sans) = sans(&cert, mode).ok()?;
+	// The generic SPIFFE ID is the first URI SAN with the spiffe:// scheme. This is independent of
+	// the Istio-specific `identity` parse below, which only accepts the ns/sa format.
+	let spiffe_id = sans.iter().find(|s| s.starts_with("spiffe://")).cloned();
 	let certificate = Some(certificate(cert));
 	Some(TlsInfo {
+		spiffe_id,
 		identity: istio.into_iter().next().map(|i| {
 			let Identity::Spiffe {
 				trust_domain,
@@ -1118,30 +1234,33 @@ fn names(cert: &X509Certificate) -> (Strng, Strng, Option<Strng>) {
 		.map(strng::new);
 	(issuer, subject, subject_cn)
 }
-fn sans(cert: &X509Certificate) -> anyhow::Result<(Vec<Identity>, Vec<Strng>)> {
+fn sans(
+	cert: &X509Certificate,
+	mode: PeerIdentityMode,
+) -> anyhow::Result<(Vec<Identity>, Vec<Strng>)> {
 	use x509_parser::prelude::*;
 	let names = cert
 		.subject_alternative_name()?
 		.map(|x| &x.value.general_names);
 
 	if let Some(names) = names {
-		let istio = names
-			.iter()
-			.filter_map(|n| {
-				let id = match n {
-					GeneralName::URI(uri) => Identity::from_str(uri),
-					_ => return None,
-				};
+		// In SPIFFE mode we do not attempt to interpret the peer as an Istio identity, so skip the
+		// ns/sa parse entirely.
+		let istio = if mode == PeerIdentityMode::Istio {
+			names
+				.iter()
+				.filter_map(|n| {
+					let id = match n {
+						GeneralName::URI(uri) => Identity::from_str(uri),
+						_ => return None,
+					};
 
-				match id {
-					Ok(id) => Some(id),
-					Err(err) => {
-						warn!("SAN {n} could not be parsed: {err}");
-						None
-					},
-				}
-			})
-			.collect();
+					id.ok()
+				})
+				.collect()
+		} else {
+			Vec::new()
+		};
 		let generic = names
 			.iter()
 			.filter_map(|n| match n {

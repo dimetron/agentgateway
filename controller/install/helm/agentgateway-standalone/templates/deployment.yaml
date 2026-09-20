@@ -6,7 +6,9 @@ metadata:
   labels:
     {{- include "agentgateway-standalone.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   {{- if not (kindIs "invalid" .Values.revisionHistoryLimit) }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   {{- end }}
@@ -20,7 +22,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include "agentgateway-standalone.startupConfig" . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

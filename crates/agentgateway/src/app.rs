@@ -7,13 +7,21 @@ use agent_core::{drain, metrics, readiness, signal};
 use prometheus_client::registry::Registry;
 use tokio::task::JoinSet;
 
-use crate::control::caclient;
+use crate::control::{caclient, spiffe};
 use crate::telemetry::trc;
 use crate::{Config, ProxyInputs, client, config_store, mcp, proxy, state_manager};
 
 pub async fn run(
 	config: Arc<Config>,
 	config_resource_store: Option<config_store::ConfigResourceStore>,
+) -> anyhow::Result<Bound> {
+	run_with_ui_assets(config, config_resource_store, &crate::ui::EMPTY_ASSETS_DIR).await
+}
+
+pub async fn run_with_ui_assets(
+	config: Arc<Config>,
+	config_resource_store: Option<config_store::ConfigResourceStore>,
+	ui_assets: &'static include_dir::Dir<'static>,
 ) -> anyhow::Result<Bound> {
 	crate::transport::tls::warn_if_key_log_enabled();
 	let (data_plane_handle, data_plane_pool) = new_data_plane_pool(config.num_worker_threads);
@@ -66,6 +74,17 @@ pub async fn run(
 	} else {
 		None
 	};
+	let spiffe = if let Some(cfg) = &config.spiffe {
+		let client = Arc::new(
+			spiffe::SpiffeClient::new(cfg.endpoint.clone())
+				.await
+				.context("connect to SPIFFE workload API")?,
+		);
+		Some(client)
+	} else {
+		debug!("SPIFFE not configured; skipping workload API client");
+		None
+	};
 	let pool = ca
 		.clone()
 		.map(|ca| agent_hbone::pool::WorkloadHBONEPool::new(config.hbone.clone(), ca));
@@ -76,9 +95,10 @@ pub async fn run(
 		config.metrics.excluded_metrics.clone(),
 		config.histograms,
 	));
-	let client = client::Client::new(
+	let client = client::Client::new_with_h2_config(
 		&config.dns,
 		pool,
+		Arc::new(config.hbone.h2.clone()),
 		config.backend.clone(),
 		Some(metrics_handle.clone()),
 	);
@@ -128,6 +148,7 @@ pub async fn run(
 		shutdown.trigger(),
 		drain_rx.clone(),
 		data_plane_handle.clone(),
+		ui_assets,
 	)
 	.await
 	.context("admin server starts")?;
@@ -143,8 +164,10 @@ pub async fn run(
 		admin: Some(admin_server.service()),
 		upstream: client.clone(),
 		ca,
+		spiffe,
 
 		mcp_state: mcp::App::new(stores.clone(), config.session_encoder.clone()),
+		admission: Default::default(),
 	};
 
 	let gw = proxy::Gateway::new(Arc::new(pi), drain_rx.clone());

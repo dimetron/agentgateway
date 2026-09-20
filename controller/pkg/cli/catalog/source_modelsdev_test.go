@@ -15,18 +15,26 @@ func TestSelectModelsDevProviders(t *testing.T) {
 	api := sampleAPI()
 
 	t.Run("explicit", func(t *testing.T) {
-		got := modelsDevSelectProviders(api, []string{"google", "openai"})
-		want := []string{"google", "openai"}
+		got := modelsDevSelectProviders(api, []string{"google", "openai", "openrouter"}, nil)
+		want := []string{"google", "openai", "openrouter"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("modelsDevSelectProviders(..., explicit) = %v, want %v", got, want)
 		}
 	})
 
 	t.Run("supported only by default", func(t *testing.T) {
-		got := modelsDevSelectProviders(api, nil)
-		want := []string{"anthropic", "google", "openai"}
+		got := modelsDevSelectProviders(api, nil, nil)
+		want := []string{"anthropic", "google", "openai", "openrouter"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("modelsDevSelectProviders(..., nil) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("excluded", func(t *testing.T) {
+		got := modelsDevSelectProviders(api, nil, []string{"openrouter"})
+		want := []string{"anthropic", "google", "openai"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("modelsDevSelectProviders(..., excluded) = %v, want %v", got, want)
 		}
 	})
 }
@@ -37,34 +45,54 @@ func sampleAPI() map[string]modelsDevProvider {
 			"chatgpt-image-latest": {},
 			"gpt-4": {
 				Status: "deprecated",
-				Cost:   &modelsDevCost{modelsDevRates: modelsDevRates{Input: "30", Output: "60"}},
+				Cost:   &modelsDevCost{Input: "30", Output: "60"},
 			},
 			"gpt-4o-mini": {
-				Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: "0.15", Output: "0.6", CacheRead: "0.075"}},
+				Cost: &modelsDevCost{Input: "0.15", Output: "0.6", CacheRead: "0.075"},
 			},
 			"gpt-4o-mini-audio-preview": {
-				Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: "0.15", Output: "0.6", InputAudio: "10", OutputAudio: "20"}},
+				Cost: &modelsDevCost{Input: "0.15", Output: "0.6", InputAudio: "10", OutputAudio: "20"},
 			},
 		}},
 		"anthropic": {ID: "anthropic", Models: map[string]modelsDevModel{
+			"claude-opus-4-7": {
+				Family:           "claude-opus",
+				Cost:             &modelsDevCost{Input: "5", Output: "25"},
+				ReasoningOptions: []modelsDevReasoningOption{{Type: "effort"}},
+			},
+			"claude-opus-4-6": {
+				Family: "claude-opus",
+				Cost:   &modelsDevCost{Input: "5", Output: "25"},
+				ReasoningOptions: []modelsDevReasoningOption{
+					{Type: "effort"},
+					{Type: "budget_tokens"},
+				},
+			},
 			"claude-sonnet-4-5": {
-				Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: "3", Output: "15", CacheRead: "0.3", CacheWrite: "3.75"}},
+				Family:           "claude-sonnet",
+				Cost:             &modelsDevCost{Input: "3", Output: "15", CacheRead: "0.3", CacheWrite: "3.75"},
+				ReasoningOptions: []modelsDevReasoningOption{{Type: "budget_tokens"}},
 			},
 		}},
 		"google": {ID: "google", Models: map[string]modelsDevModel{
 			"gemini-2.5-pro": {
 				Cost: &modelsDevCost{
-					modelsDevRates: modelsDevRates{Input: "1.25", Output: "10", CacheRead: "0.125"},
+					Input: "1.25", Output: "10", CacheRead: "0.125",
 					Tiers: []modelsDevTier{{
-						modelsDevRates: modelsDevRates{Input: "2.5", Output: "15", CacheRead: "0.25"},
-						Tier:           modelsDevTierKind{Type: "context", Size: 200000},
+						Input: "2.5", Output: "15", CacheRead: "0.25",
+						Tier: modelsDevTierKind{Type: "context", Size: 200000},
 					}},
 				},
 			},
 		}},
+		"openrouter": {ID: "openrouter", Models: map[string]modelsDevModel{
+			"volatile-model": {
+				Cost: &modelsDevCost{Input: "1", Output: "2"},
+			},
+		}},
 		"alibaba-cn": {ID: "alibaba-cn", Models: map[string]modelsDevModel{
 			"qwen3-omni-flash": {
-				Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: "0.058", Output: "0.23", InputAudio: "3.584", OutputAudio: "7.168"}},
+				Cost: &modelsDevCost{Input: "0.058", Output: "0.23", InputAudio: "3.584", OutputAudio: "7.168"},
 			},
 		}},
 		"freebie": {ID: "freebie", Models: map[string]modelsDevModel{
@@ -142,7 +170,7 @@ func TestTransformMatchesGoldenCatalog(t *testing.T) {
 func TestTransformRoundsOverPreciseRate(t *testing.T) {
 	api := map[string]modelsDevProvider{
 		"openai": {Models: map[string]modelsDevModel{
-			"m": {Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: json.Number("0.049999999999999996")}}},
+			"m": {Cost: &modelsDevCost{Input: json.Number("0.049999999999999996")}},
 		}},
 	}
 	cat, warns, err := modelsDevTransform(api, []string{"openai"}, false)
@@ -160,7 +188,7 @@ func TestTransformRoundsOverPreciseRate(t *testing.T) {
 func TestTransformRejectsNegativeRate(t *testing.T) {
 	api := map[string]modelsDevProvider{
 		"openai": {Models: map[string]modelsDevModel{
-			"m": {Cost: &modelsDevCost{modelsDevRates: modelsDevRates{Input: json.Number("-1")}}},
+			"m": {Cost: &modelsDevCost{Input: json.Number("-1")}},
 		}},
 	}
 	if _, _, err := modelsDevTransform(api, []string{"openai"}, false); err == nil {

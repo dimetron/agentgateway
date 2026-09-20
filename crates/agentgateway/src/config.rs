@@ -241,6 +241,12 @@ pub fn parse_config(
 	} else {
 		None
 	};
+
+	let spiffe = raw
+		.spiffe
+		.and_then(|cfg| cfg.endpoint)
+		.map(|endpoint| crate::control::spiffe::Config { endpoint });
+
 	let network = parse("NETWORK")?.or(raw.network).unwrap_or_default();
 
 	// Self-identity for locality-aware load balancing.
@@ -296,6 +302,34 @@ pub fn parse_config(
 		.unwrap_or_default();
 	let termination_max_deadline =
 		parse_duration("CONNECTION_TERMINATION_DEADLINE")?.or(raw.connection_termination_deadline);
+	let termination_max_deadline = match termination_max_deadline {
+		Some(period) => period,
+		None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
+			// We want our drain period to be less than Kubernetes, so we can use the last few seconds
+			// to abruptly terminate anything remaining before Kubernetes SIGKILLs us.
+			// We could just take the SIGKILL, but it is even more abrupt (TCP RST vs RST_STREAM/TLS close, etc)
+			// Note: we do this in code instead of in configuration so that we can use downward API to expose this variable
+			// if it is added to Kubernetes (https://github.com/kubernetes/kubernetes/pull/125746).
+			Some(secs) => Duration::from_secs(cmp::max(
+				if secs > 10 {
+					secs - 5
+				} else {
+					// If the grace period is really low give less buffer
+					secs - 1
+				},
+				1,
+			)),
+			None => Duration::from_secs(5),
+		},
+	};
+	let termination_min_deadline = if termination_min_deadline > termination_max_deadline {
+		warn!(
+			"connectionMinTerminationDeadline ({termination_min_deadline:?}) exceeds connectionTerminationDeadline ({termination_max_deadline:?}); using the maximum for both"
+		);
+		termination_max_deadline
+	} else {
+		termination_min_deadline
+	};
 	let tracing_env = resolve_tracing_env_overrides().ctx("invalid tracing environment overrides")?;
 
 	let mut otlp_headers = raw
@@ -398,6 +432,7 @@ pub fn parse_config(
 		);
 	}
 
+	let hbone_defaults = agent_hbone::Config::default();
 	Ok(crate::Config {
 		ipv6_enabled,
 		network: network.clone().into(),
@@ -408,32 +443,15 @@ pub fn parse_config(
 		self_addr,
 		xds,
 		ca,
+		spiffe,
 		num_worker_threads: parse_worker_threads(raw.worker_threads)
 			.ctx("invalid WORKER_THREADS/config.workerThreads")?,
 		termination_min_deadline,
 		threading_mode,
 		backend: raw.backend,
 		admin_runtime_handle: None,
-		termination_max_deadline: match termination_max_deadline {
-				Some(period) => period,
-				None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
-				// We want our drain period to be less than Kubernetes, so we can use the last few seconds
-				// to abruptly terminate anything remaining before Kubernetes SIGKILLs us.
-				// We could just take the SIGKILL, but it is even more abrupt (TCP RST vs RST_STREAM/TLS close, etc)
-				// Note: we do this in code instead of in configuration so that we can use downward API to expose this variable
-				// if it is added to Kubernetes (https://github.com/kubernetes/kubernetes/pull/125746).
-				Some(secs) => Duration::from_secs(cmp::max(
-					if secs > 10 {
-						secs - 5
-					} else {
-						// If the grace period is really low give less buffer
-						secs - 1
-					},
-					1,
-				)),
-				None => Duration::from_secs(5),
-			},
-		},
+		budget_policy: Arc::new(crate::http::budget::BudgetPolicy::default()),
+		termination_max_deadline,
 		tracing: raw
 			.tracing
 			.clone()
@@ -554,12 +572,10 @@ pub fn parse_config(
 			database: logging_database.clone(),
 				fields: logging_fields(raw.logging.as_ref().and_then(|f| f.fields.clone()))
 					.ctx("invalid config.logging.fields")?,
-				database_fields: if logging_database.is_some() {
-					database_logging_fields(raw.standard_attributes.as_ref())
-						.ctx("invalid config.standardAttributes")?
-				} else {
-					Default::default()
-				},
+				database_fields: Arc::new(arc_swap::ArcSwap::from_pointee(
+					standard_attributes(raw.standard_attributes.as_ref())
+						.ctx("invalid config.standardAttributes")?,
+				)),
 		},
 		dns: client::Config {
 			resolver_cfg,
@@ -590,25 +606,27 @@ pub fn parse_config(
 		session_encoder,
 		oidc_cookie_encoder,
 			hbone: Arc::new(agent_hbone::Config {
-				// window size: per-stream limit
-				window_size: parse("HTTP2_STREAM_WINDOW_SIZE")
-					.ctx("invalid HTTP2_STREAM_WINDOW_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.window_size))
-					.unwrap_or(4u32 * 1024 * 1024),
-			// connection window size: per connection.
-			// Setting this to the same value as window_size can introduce deadlocks in some applications
-			// where clients do not read data on streamA until they receive data on streamB.
-			// If streamA consumes the entire connection window, we enter a deadlock.
-			// A 4x limit should be appropriate without introducing too much potential buffering.
-				connection_window_size: parse("HTTP2_CONNECTION_WINDOW_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.connection_window_size))
-					.unwrap_or(16u32 * 1024 * 1024),
-				frame_size: parse("HTTP2_FRAME_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.frame_size))
-					.unwrap_or(1024u32 * 1024),
-				pool_max_streams_per_conn: parse("POOL_MAX_STREAMS_PER_CONNECTION")?
-					.or(raw.hbone.as_ref().and_then(|h| h.pool_max_streams_per_conn))
-					.unwrap_or(100u16),
+				h2: agent_hbone::H2Config {
+					// window size: per-stream limit
+					window_size: parse("HTTP2_STREAM_WINDOW_SIZE")
+						.ctx("invalid HTTP2_STREAM_WINDOW_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.window_size))
+						.unwrap_or(hbone_defaults.h2.window_size),
+					// connection window size: per connection.
+					// Setting this to the same value as window_size can introduce deadlocks in some applications
+					// where clients do not read data on streamA until they receive data on streamB.
+					// If streamA consumes the entire connection window, we enter a deadlock.
+					// A 4x limit should be appropriate without introducing too much potential buffering.
+					connection_window_size: parse("HTTP2_CONNECTION_WINDOW_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.connection_window_size))
+						.unwrap_or(hbone_defaults.h2.connection_window_size),
+					frame_size: parse("HTTP2_FRAME_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.frame_size))
+						.unwrap_or(hbone_defaults.h2.frame_size),
+					max_streams_per_conn: parse("POOL_MAX_STREAMS_PER_CONNECTION")?
+						.or(raw.hbone.as_ref().and_then(|h| h.pool_max_streams_per_conn))
+						.unwrap_or(hbone_defaults.h2.max_streams_per_conn),
+				},
 				pool_unused_release_timeout: parse_duration("POOL_UNUSED_RELEASE_TIMEOUT")?
 					.or(
 						raw
@@ -616,7 +634,7 @@ pub fn parse_config(
 						.as_ref()
 						.and_then(|h| h.pool_unused_release_timeout),
 				)
-				.unwrap_or(Duration::from_secs(60 * 5)),
+				.unwrap_or(hbone_defaults.pool_unused_release_timeout),
 		}),
 	})
 }
@@ -642,7 +660,7 @@ fn logging_fields(fields: Option<RawLoggingFields>) -> anyhow::Result<LoggingFie
 	})
 }
 
-fn database_logging_fields(
+pub(crate) fn standard_attributes(
 	standard_attributes: Option<&crate::RawStandardAttributes>,
 ) -> anyhow::Result<LoggingFields> {
 	let add = [
@@ -1244,6 +1262,43 @@ config:
 	}
 
 	#[test]
+	fn min_termination_deadline_clamps_to_max() {
+		let _env_lock = lock_env();
+
+		let config = parse_config(
+			r#"
+config:
+  connectionMinTerminationDeadline: 10s
+  connectionTerminationDeadline: 5s
+"#
+			.to_string(),
+			None,
+		)
+		.unwrap();
+
+		assert_eq!(config.termination_max_deadline, Duration::from_secs(5));
+		assert_eq!(config.termination_min_deadline, Duration::from_secs(5));
+	}
+
+	#[test]
+	fn min_termination_deadline_clamps_to_derived_max() {
+		let _env_lock = lock_env();
+
+		let config = parse_config(
+			r#"
+config:
+  connectionMinTerminationDeadline: 10s
+"#
+			.to_string(),
+			None,
+		)
+		.unwrap();
+
+		assert_eq!(config.termination_max_deadline, Duration::from_secs(5));
+		assert_eq!(config.termination_min_deadline, Duration::from_secs(5));
+	}
+
+	#[test]
 	fn tracing_requires_endpoint_from_config_or_env() {
 		let _env_lock = lock_env();
 
@@ -1749,5 +1804,29 @@ config:
 		unsafe {
 			env::remove_var("SESSION_KEY");
 		}
+	}
+
+	#[test]
+	fn spiffe_disabled_without_endpoint() {
+		let _env = lock_env();
+		let config = parse_config("{}".to_string(), None).expect("config should parse");
+		assert!(
+			config.spiffe.is_none(),
+			"SPIFFE must be disabled when no socket is configured"
+		);
+	}
+
+	#[test]
+	fn spiffe_enabled_from_raw_endpoint_field() {
+		let _env = lock_env();
+		let config = parse_config(
+			"config:\n  spiffe:\n    endpoint: unix:///run/spire/agent.sock\n".to_string(),
+			None,
+		)
+		.expect("config should parse");
+		let spiffe = config
+			.spiffe
+			.expect("spiffe.endpoint should enable the SPIFFE Workload API");
+		assert_eq!(spiffe.endpoint, "unix:///run/spire/agent.sock");
 	}
 }

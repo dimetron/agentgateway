@@ -160,6 +160,7 @@ export function CostsPage() {
 							</thead>
 							<tbody>
 								{sources.map((source, index) => (
+									// biome-ignore lint/suspicious/noArrayIndexKey: Existing lint violation; remove this suppression when the underlying issue is fixed.
 									<tr key={index}>
 										<td>
 											<span className="badge">{source.storage}</span>
@@ -176,7 +177,7 @@ export function CostsPage() {
 				) : (
 					<EmptyState
 						title="No cost catalogs configured"
-						description="Refresh the base catalog to add pricing data from models.dev."
+						description="Refresh the base catalog with the latest pricing data from agentgateway."
 					/>
 				)}
 			</Panel>
@@ -239,6 +240,7 @@ export function CostsPage() {
 						</thead>
 						<tbody>
 							{(editingCustom ? customDraft : customRows).map((row, index) => (
+								// biome-ignore lint/suspicious/noArrayIndexKey: Existing lint violation; remove this suppression when the underlying issue is fixed.
 								<tr key={index}>
 									<td>
 										{editingCustom ? (

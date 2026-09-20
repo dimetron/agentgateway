@@ -256,7 +256,12 @@
       ]
     },
     "ServerTLSConfig": {
-      "type": "null"
+      "type": "object",
+      "properties": {
+        "certificateSource": {
+          "type": "string"
+        }
+      }
     },
     "Route": {
       "type": "object",
@@ -1047,6 +1052,9 @@
           "type": "integer",
           "format": "uint",
           "minimum": 0
+        },
+        "invalid": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -1070,6 +1078,9 @@
               "type": "null"
             }
           ]
+        },
+        "invalid": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

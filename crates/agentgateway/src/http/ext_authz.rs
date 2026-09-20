@@ -11,7 +11,7 @@ use prost_types::Timestamp;
 use quick_cache::sync::Cache;
 use serde_json::Value as JsonValue;
 
-use crate::cel::{BufferedBody, Expression, Value};
+use crate::cel::{Expression, Value};
 use crate::http::ext_authz::proto::attribute_context::HttpRequest;
 use crate::http::ext_authz::proto::authorization_client::AuthorizationClient;
 use crate::http::ext_authz::proto::check_response::HttpResponse;
@@ -34,6 +34,21 @@ use crate::*;
 
 const TRACE_POLICY_KIND: &str = "ext_auth";
 const DEFAULT_CACHE_ENTRIES: usize = 10_000;
+
+/// The verified peer principal for ext_authz: the Istio identity, falling back to the raw SPIFFE ID
+/// when the SVID isn't in Istio `ns/sa` form. Gateway-set from the verified peer cert (never
+/// client-supplied), so the authz server can trust it.
+fn peer_principal(tls_info: Option<&TLSConnectionInfo>) -> String {
+	tls_info
+		.and_then(|tls| tls.src_identity.as_ref())
+		.and_then(|id| {
+			id.identity
+				.as_ref()
+				.map(|i| i.to_string())
+				.or_else(|| id.spiffe_id.as_ref().map(|s| s.to_string()))
+		})
+		.unwrap_or_default()
+}
 
 #[cfg(test)]
 #[path = "ext_authz_tests.rs"]
@@ -277,7 +292,9 @@ impl ExtAuthz {
 	) -> Result<BufferedRequestBody, BufferRequestBodyError> {
 		let max_size = body_opts.max_request_bytes as usize;
 
-		let inspection = crate::http::inspect_body_with_limit(req.body_mut(), max_size)
+		let inspection = req
+			.body_mut()
+			.inspect(max_size)
 			.await
 			.map_err(BufferRequestBodyError::Read)?;
 		let (body, is_partial) = match inspection {
@@ -506,15 +523,7 @@ impl ExtAuthz {
 			}),
 			service: String::new(),
 			labels: HashMap::new(),
-			principal: tls_info
-				.as_ref()
-				.and_then(|tls| {
-					tls
-						.src_identity
-						.as_ref()
-						.and_then(|id| id.identity.as_ref().map(|s| s.to_string()))
-				})
-				.unwrap_or_default(),
+			principal: peer_principal(tls_info.as_ref()),
 			certificate: String::new(),
 		});
 
@@ -554,6 +563,10 @@ impl ExtAuthz {
 			}),
 		};
 		let mut authz_req = tonic::Request::new(authz_req);
+		// Set the default request timeout. This can be overridden by a timeout on the Backend object itself.
+		authz_req
+			.extensions_mut()
+			.insert(BackendRequestTimeout(Duration::from_secs(2)));
 		copy_span_writer(req.extensions(), authz_req.extensions_mut());
 		let mut span = policy_client.start_grpc_span(
 			&mut authz_req,
@@ -873,9 +886,11 @@ impl ExtAuthz {
 			}
 			let mut dynamic_metadata = None;
 			if !metadata.is_empty() {
-				if let Ok(body) = crate::http::inspect_response_body(&mut resp).await {
-					resp.extensions_mut().insert(BufferedBody::from(body));
-				};
+				// Like `ContextBuilder::maybe_buffer_response_body`, make the response body
+				// available to CEL before evaluating expressions. This internal ext-authz
+				// response does not pass through the normal proxy response buffering hook,
+				// so inspect it whenever response metadata expressions are configured.
+				let _ = crate::http::inspect_response_body(&mut resp).await;
 				let m = metadata
 					.iter()
 					.filter_map(|(k, v)| match Self::eval_to_json(req, &resp, v) {

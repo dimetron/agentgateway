@@ -56,7 +56,7 @@ ARG TARGETARCH
 ARG PROFILE=release
 ARG VERSION
 ARG GIT_REVISION
-ARG CARGO_FEATURES=agentgateway/ui
+ARG CARGO_FEATURES=agentgateway-app/ui
 ARG CARGO_NO_DEFAULT_FEATURES=false
 
 WORKDIR /app
@@ -65,6 +65,7 @@ COPY Makefile Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 COPY crates ./crates
 COPY tools ./tools
+COPY catalog ./catalog
 COPY --from=node /app/dist ./ui/dist
 
 RUN \
@@ -91,7 +92,7 @@ mkdir /out
 mv /app/target/$(cat /build/target)/${PROFILE}/agentgateway /out
 /out/agentgateway --version || exit 1
 # Fail if version is not set
-if /out/agentgateway --version | grep -q '"unknown"'; then
+if /out/agentgateway --version | grep -q '"version": "unknown"'; then
   exit 1
 fi
 EOF

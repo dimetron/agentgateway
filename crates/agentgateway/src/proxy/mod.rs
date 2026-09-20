@@ -1,3 +1,4 @@
+pub mod admission;
 pub mod dtrace;
 mod gateway;
 pub mod httpproxy;
@@ -25,6 +26,7 @@ use crate::*;
 // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#responses
 const GRPC_MESSAGE_ENCODE_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'%');
 
+#[allow(clippy::result_large_err)]
 #[derive(thiserror::Error, Debug)]
 pub enum ProxyResponse {
 	#[error("{0}")]
@@ -68,11 +70,14 @@ impl ProxyError {
 			| ProxyError::MethodNotAllowed
 			| ProxyError::ProcessingString(_)
 			| ProxyError::Processing(_)
+			| ProxyError::SubstrateEgressUnavailable(_)
 			| ProxyError::RouteCycleDetected
 			| ProxyError::Body(_)
 			| ProxyError::Http(_)
 			| ProxyError::BackendUnsupportedMirror
-			| ProxyError::FilterError(_) => ProxyResponseReason::Internal,
+			| ProxyError::FilterError(_)
+			| ProxyError::StaleAssignment => ProxyResponseReason::Internal,
+			ProxyError::SubstrateIngressFailed(status, _) => substrate_ingress_reason(*status),
 			ProxyError::AIRequest(error) => classify_ai_request(error).reason,
 			ProxyError::AIResponse(error) => classify_ai_response(error).reason,
 			ProxyError::JwtAuthenticationFailure(_) => ProxyResponseReason::JwtAuth,
@@ -81,21 +86,39 @@ impl ProxyError {
 			ProxyError::BasicAuthenticationFailure(_) => ProxyResponseReason::BasicAuth,
 			ProxyError::APIKeyAuthenticationFailure(_) => ProxyResponseReason::APIKeyAuth,
 			ProxyError::ExternalAuthorizationFailed(_) => ProxyResponseReason::ExtAuth,
+			ProxyError::MCP(mcp::Error::RateLimited { .. }) => ProxyResponseReason::RateLimit,
 			ProxyError::MCP(_) => ProxyResponseReason::MCP,
-			ProxyError::AuthorizationFailed | ProxyError::CsrfValidationFailed => {
-				ProxyResponseReason::Authorization
+			ProxyError::AuthorizationFailed
+			| ProxyError::SubstrateEgressDenied(_)
+			| ProxyError::CsrfValidationFailed => ProxyResponseReason::Authorization,
+			ProxyError::BackendAuthenticationFailed(http::auth::BackendAuthError::Local(_)) => {
+				ProxyResponseReason::Internal
 			},
 			ProxyError::UpstreamCallFailed(_)
 			| ProxyError::UpstreamTCPCallFailed(_)
-			| ProxyError::BackendAuthenticationFailed(_)
+			| ProxyError::BackendAuthenticationFailed(
+				http::auth::BackendAuthError::CredentialProvider(_),
+			)
 			| ProxyError::UpstreamTCPProxy(_) => ProxyResponseReason::UpstreamFailure,
 			ProxyError::RequestTimeout | ProxyError::UpstreamCallTimeout => ProxyResponseReason::Timeout,
 			ProxyError::ExtProc(_) => ProxyResponseReason::ExtProc,
-			ProxyError::RateLimitFailed | ProxyError::RateLimitExceeded { .. } => {
-				ProxyResponseReason::RateLimit
-			},
+			ProxyError::RateLimitFailed
+			| ProxyError::RateLimitExceeded { .. }
+			| ProxyError::RemoteRateLimitExceeded { .. }
+			| ProxyError::BudgetExceeded(_) => ProxyResponseReason::RateLimit,
 			ProxyError::GuardrailRejected { .. } => ProxyResponseReason::Guardrail,
+			ProxyError::RequestLimitExceeded => ProxyResponseReason::Overload,
 		}
+	}
+}
+
+fn substrate_ingress_reason(status: StatusCode) -> ProxyResponseReason {
+	match status {
+		StatusCode::NOT_FOUND => ProxyResponseReason::NotFound,
+		StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ProxyResponseReason::Authorization,
+		StatusCode::TOO_MANY_REQUESTS => ProxyResponseReason::RateLimit,
+		StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => ProxyResponseReason::Timeout,
+		_ => ProxyResponseReason::Internal,
 	}
 }
 
@@ -131,6 +154,8 @@ pub enum ProxyResponseReason {
 	ExtProc,
 	/// Rate limit exceeded
 	RateLimit,
+	/// Rejected because the frontend is overloaded
+	Overload,
 	/// An LLM guardrail rejected the request
 	Guardrail,
 	/// MCP
@@ -145,6 +170,10 @@ impl Display for ProxyResponseReason {
 	}
 }
 
+/// Marks responses whose rate-limit headers come from a denying policy.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RateLimitDenied;
+
 #[derive(thiserror::Error, Debug)]
 pub enum ProxyError {
 	#[error("bind not found")]
@@ -157,6 +186,8 @@ pub enum ProxyError {
 	RouteCycleDetected,
 	#[error("misdirected request")]
 	MisdirectedRequest,
+	#[error("substrate worker assignment is stale")]
+	StaleAssignment,
 	#[error("no valid backends")]
 	NoValidBackends,
 	#[error("backend does not exist")]
@@ -190,7 +221,7 @@ pub enum ProxyError {
 	#[error("authorization failed")]
 	AuthorizationFailed,
 	#[error("backend authentication failed: {0}")]
-	BackendAuthenticationFailed(anyhow::Error),
+	BackendAuthenticationFailed(#[from] http::auth::BackendAuthError),
 	#[error("parsing body: {0}")]
 	Body(http::Error),
 	#[error("upstream call failed: {0:?}")]
@@ -215,14 +246,31 @@ pub enum ProxyError {
 	ExtProc(#[from] ext_proc::Error),
 	#[error("processing failed: {0}")]
 	ProcessingString(String),
+	#[error("{1}")]
+	SubstrateIngressFailed(StatusCode, String),
+	#[error("{0}")]
+	SubstrateEgressDenied(String),
+	#[error("{0}")]
+	SubstrateEgressUnavailable(String),
 	#[error("rate limit exceeded")]
 	RateLimitExceeded {
 		limit: u64,
 		remaining: u64,
 		reset_seconds: u64,
 	},
+	// remote (RLS) denial; into_response_with_grpc builds the 429 body and headers
+	#[error("rate limit exceeded")]
+	RemoteRateLimitExceeded {
+		status: Option<http::localratelimit::RateLimitStatus>,
+		raw_body: Vec<u8>,
+		response_headers: Box<http::HeaderMap>,
+	},
+	#[error(transparent)]
+	BudgetExceeded(#[from] http::budget::BudgetExceeded),
 	#[error("rate limit failed")]
 	RateLimitFailed,
+	#[error("request limit exceeded")]
+	RequestLimitExceeded,
 	#[error("request rejected by {guardrail} guardrail")]
 	GuardrailRejected {
 		guardrail: &'static str,
@@ -335,11 +383,15 @@ impl ProxyError {
 			ProxyError::RouteNotFound => StatusCode::NOT_FOUND,
 			ProxyError::RouteCycleDetected => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::MisdirectedRequest => StatusCode::MISDIRECTED_REQUEST,
+			ProxyError::StaleAssignment => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::NoValidBackends => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::BackendDoesNotExist => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::BackendUnsupportedMirror => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::ServiceNotFound => StatusCode::INTERNAL_SERVER_ERROR,
-			ProxyError::BackendAuthenticationFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			ProxyError::BackendAuthenticationFailed(ref error) => match error {
+				http::auth::BackendAuthError::Local(_) => StatusCode::INTERNAL_SERVER_ERROR,
+				http::auth::BackendAuthError::CredentialProvider(_) => StatusCode::BAD_GATEWAY,
+			},
 			ProxyError::InvalidBackendType => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::ExtProc(_) => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::CsrfValidationFailed => StatusCode::FORBIDDEN,
@@ -380,6 +432,8 @@ impl ProxyError {
 			ProxyError::APIKeyAuthenticationFailure(_) => StatusCode::UNAUTHORIZED,
 			ProxyError::McpJwtAuthenticationFailure(_, _) => StatusCode::UNAUTHORIZED,
 			ProxyError::AuthorizationFailed => StatusCode::FORBIDDEN,
+			ProxyError::SubstrateEgressDenied(_) => StatusCode::FORBIDDEN,
+			ProxyError::SubstrateEgressUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::ExternalAuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
 
 			ProxyError::DnsResolution => StatusCode::SERVICE_UNAVAILABLE,
@@ -394,7 +448,25 @@ impl ProxyError {
 			ProxyError::Http(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::Body(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::ProcessingString(_) => StatusCode::SERVICE_UNAVAILABLE,
+			ProxyError::RequestLimitExceeded => StatusCode::SERVICE_UNAVAILABLE,
+			ProxyError::SubstrateIngressFailed(status, _) => status,
 			ProxyError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
+			ProxyError::RemoteRateLimitExceeded {
+				response_headers,
+				raw_body,
+				..
+			} => {
+				let mut rb = ::http::Response::builder()
+					.status(StatusCode::TOO_MANY_REQUESTS)
+					.extension(RateLimitDenied);
+				if let Some(hm) = rb.headers_mut() {
+					*hm = *response_headers;
+				}
+				return rb
+					.body(http::Body::from(raw_body))
+					.expect("static response must build");
+			},
+			ProxyError::BudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
 			// Rate limit service communication failure is a server error (500), not a rate limit (429).
 			// This matches Envoy's behavior (status_on_error defaults to 500).
 			ProxyError::RateLimitFailed => StatusCode::INTERNAL_SERVER_ERROR,
@@ -433,10 +505,17 @@ impl ProxyError {
 			ProxyError::MCP(mcp::Error::Unavailable(_, _)) => StatusCode::SERVICE_UNAVAILABLE,
 			// Note: we do not return a 401/403 here, as the obscure that it was rejected due to auth
 			ProxyError::MCP(mcp::Error::Authorization(_, _, _)) => StatusCode::BAD_REQUEST,
-			ProxyError::MCP(mcp::Error::McpGuardrails(_, _)) => StatusCode::OK,
+			ProxyError::MCP(mcp::Error::McpGuardrails { .. }) => StatusCode::OK,
+			ProxyError::MCP(mcp::Error::RateLimited { .. }) => StatusCode::OK,
 		};
 		let grpc_status = is_grpc_request.then(|| proxy_error_to_grpc_status(&self, code));
 		let mut rb = ::http::Response::builder().status(code);
+		if matches!(
+			&self,
+			ProxyError::RateLimitExceeded { .. } | ProxyError::MCP(mcp::Error::RateLimited { .. })
+		) {
+			rb = rb.extension(RateLimitDenied);
+		}
 
 		// Apply per-error headers
 		if let ProxyError::RateLimitExceeded {
@@ -447,6 +526,12 @@ impl ProxyError {
 			&& let Some(hm) = rb.headers_mut()
 		{
 			http::x_headers::set_ratelimit_headers(hm, limit, remaining, reset_seconds);
+			hm.insert(::http::header::RETRY_AFTER, reset_seconds.max(1).into());
+		}
+		if let ProxyError::MCP(mcp::Error::RateLimited { headers, .. }) = &self
+			&& let Some(hm) = rb.headers_mut()
+		{
+			hm.extend(headers.as_ref().clone());
 		}
 
 		// Add an authentication challenge for basic auth failures. Requests authenticating to the
@@ -475,6 +560,23 @@ impl ProxyError {
 				)
 				.body(http::Body::empty())
 				.unwrap();
+		}
+
+		if let ProxyError::BudgetExceeded(exceeded) = &self {
+			return rb
+				.header(hyper::header::CONTENT_TYPE, "application/json")
+				.header(hyper::header::RETRY_AFTER, exceeded.retry_after.to_string())
+				.body(http::Body::from(
+					serde_json::json!({
+						"error": {
+							"message": exceeded.to_string(),
+							"type": "rate_limit_error",
+							"code": "budget_exceeded",
+						}
+					})
+					.to_string(),
+				))
+				.expect("budget exceeded response is valid");
 		}
 
 		// Add WWW-Authenticate header for MCP failures
@@ -509,6 +611,8 @@ fn proxy_error_to_grpc_status(error: &ProxyError, http_status: StatusCode) -> Co
 		// Gateway API requires invalid backend references to be HTTP 500 for HTTP
 		// requests, but gRPC callers should see the backend as unavailable.
 		ProxyError::NoValidBackends => Code::Unavailable,
+		// HTTP 200 with JSON-RPC error -> gRPC 503
+		ProxyError::MCP(mcp::Error::RateLimited { .. }) => Code::Unavailable,
 		_ => http_status_to_grpc_status(http_status),
 	}
 }
@@ -590,6 +694,34 @@ pub fn resolve_simple_backend(
 	resolve_simple_backend_with_policies(b, pi)
 }
 
+pub fn resolve_tunnel_backend(
+	b: &SimpleBackendReference,
+	pi: &ProxyInputs,
+) -> Result<BackendWithPolicies, ProxyError> {
+	let reference = match b {
+		SimpleBackendReference::Service { name, port } => BackendReference::Service {
+			name: name.clone(),
+			port: *port,
+		},
+		SimpleBackendReference::Backend(name) => BackendReference::Backend(name.clone()),
+		SimpleBackendReference::InlineBackend(target) => {
+			BackendReference::InlineBackend(target.clone())
+		},
+		SimpleBackendReference::Invalid => BackendReference::Invalid,
+	};
+	let backend = resolve_backend(&reference, pi)?;
+	match &backend.backend {
+		Backend::Service(_, _)
+		| Backend::Opaque(_, _)
+		| Backend::Aws(_, _)
+		| Backend::Dynamic(_, _)
+		| Backend::Invalid => Ok(backend),
+		Backend::MCP(_, _) | Backend::AI(_, _) | Backend::LLMRouter(_, _) | Backend::Internal(_, _) => {
+			Err(ProxyError::InvalidBackendType)
+		},
+	}
+}
+
 pub fn resolve_simple_backend_with_policies(
 	b: &SimpleBackendReference,
 	pi: &ProxyInputs,
@@ -633,6 +765,63 @@ pub fn resolve_simple_backend_with_policies(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn substrate_ingress_reason_preserves_client_facing_statuses() {
+		for (status, reason) in [
+			(StatusCode::NOT_FOUND, ProxyResponseReason::NotFound),
+			(StatusCode::UNAUTHORIZED, ProxyResponseReason::Authorization),
+			(StatusCode::FORBIDDEN, ProxyResponseReason::Authorization),
+			(
+				StatusCode::TOO_MANY_REQUESTS,
+				ProxyResponseReason::RateLimit,
+			),
+			(StatusCode::GATEWAY_TIMEOUT, ProxyResponseReason::Timeout),
+		] {
+			assert_eq!(
+				ProxyResponse::Error(ProxyError::SubstrateIngressFailed(status, String::new())).as_reason(),
+				reason
+			);
+		}
+	}
+
+	#[test]
+	fn backend_auth_failure_status_depends_on_source() {
+		let make_local_error = || {
+			ProxyError::BackendAuthenticationFailed(http::auth::BackendAuthError::Local(anyhow::anyhow!(
+				"local authentication failed"
+			)))
+		};
+		let make_error = || {
+			ProxyError::BackendAuthenticationFailed(http::auth::BackendAuthError::CredentialProvider(
+				anyhow::anyhow!("credential provider failed"),
+			))
+		};
+
+		assert_eq!(
+			ProxyResponse::Error(make_local_error()).as_reason(),
+			ProxyResponseReason::Internal
+		);
+		assert_eq!(
+			make_local_error().into_response_with_grpc(false).status(),
+			StatusCode::INTERNAL_SERVER_ERROR
+		);
+		let grpc_response = make_local_error().into_response_with_grpc(true);
+		assert_eq!(grpc_response.status(), StatusCode::OK);
+		assert_eq!(grpc_response.headers()["grpc-status"], "2");
+
+		assert_eq!(
+			ProxyResponse::Error(make_error()).as_reason(),
+			ProxyResponseReason::UpstreamFailure
+		);
+		assert_eq!(
+			make_error().into_response_with_grpc(false).status(),
+			StatusCode::BAD_GATEWAY
+		);
+		let grpc_response = make_error().into_response_with_grpc(true);
+		assert_eq!(grpc_response.status(), StatusCode::OK);
+		assert_eq!(grpc_response.headers()["grpc-status"], "14");
+	}
 
 	fn assert_ai_error_mapping(
 		make_error: impl Fn() -> ProxyError,

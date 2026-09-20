@@ -14,7 +14,6 @@ import (
 	"istio.io/istio/pkg/slices"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/agentgateway/agentgateway/api"
@@ -38,6 +37,7 @@ const (
 	mcpAuthenticationPolicySuffix = ":mcp-authentication"
 	mcpGuardrailsPolicySuffix     = ":mcp-guardrails"
 	healthPolicySuffix            = ":health"
+	sessionAffinityPolicySuffix   = ":session-affinity"
 )
 
 func translateAwsSessionTags(tags []agentgateway.AwsSessionTag) []*api.AwsSessionTag {
@@ -123,11 +123,9 @@ func TranslateInlineBackendPolicy(
 	policy *agentgateway.BackendFull,
 ) ([]*api.BackendPolicySpec, error) {
 	dummy := &agentgateway.AgentgatewayPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "inline_policy",
-			Namespace: namespace,
-		},
-		Spec: agentgateway.AgentgatewayPolicySpec{Backend: policy},
+		Name:      "inline_policy",
+		Namespace: namespace,
+		Spec:      agentgateway.AgentgatewayPolicySpec{Backend: policy},
 	}
 	res, err := translateBackendPolicyToAgw(ctx, dummy)
 	return slices.MapFilter(res, func(e *api.Policy) **api.BackendPolicySpec {
@@ -178,6 +176,10 @@ func translateBackendPolicyToAgw(
 
 	if s := backend.Health; s != nil {
 		appendPolicy("backendHealth")(translateBackendHealthPolicy(policy))
+	}
+
+	if s := backend.SessionAffinity; s != nil {
+		appendPolicy("backendSessionAffinity")(translateBackendSessionAffinityPolicy(policy))
 	}
 
 	if s := backend.Transformation; s != nil {
@@ -354,6 +356,28 @@ func translateBackendHealthPolicy(policy *agentgateway.AgentgatewayPolicy) (*api
 	return evictPolicy, errors.Join(errs...)
 }
 
+func translateBackendSessionAffinityPolicy(policy *agentgateway.AgentgatewayPolicy) (*api.Policy, error) {
+	sessionAffinity := policy.Spec.Backend.SessionAffinity
+	var err error
+	if !isCEL(sessionAffinity.Source) {
+		err = fmt.Errorf("backend sessionAffinity source is not a valid CEL expression: %s", sessionAffinity.Source)
+	}
+
+	return &api.Policy{
+		Key:  policy.Namespace + "/" + policy.Name + sessionAffinityPolicySuffix,
+		Name: TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_SessionAffinity_{
+					SessionAffinity: &api.BackendPolicySpec_SessionAffinity{
+						Source: string(sessionAffinity.Source),
+					},
+				},
+			},
+		},
+	}, err
+}
+
 func translateBackendTCP(policy *agentgateway.AgentgatewayPolicy, name string) *api.Policy {
 	tcp := policy.Spec.Backend.TCP
 	spec := &api.BackendPolicySpec_BackendTCP{
@@ -429,50 +453,55 @@ func translateBackendTLS(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy)
 
 	p := &api.BackendPolicySpec_BackendTLS{}
 
-	if len(tls.MtlsCertificateRef) > 0 {
-		// Currently we only support one, and enforce this in the API
-		mtls := tls.MtlsCertificateRef[0]
-		nn := types.NamespacedName{
-			Namespace: policy.Namespace,
-			Name:      string(mtls.Name),
-		}
-		data, err := ctx.ResolveCredentialRef(mtls, policy.Namespace)
-		if err != nil {
-			errs = append(errs, err)
-		} else {
-			if _, err := ValidateTlsSecretData(nn.Name, nn.Namespace, data); err != nil {
-				errs = append(errs, fmt.Errorf("secret %v contains invalid certificate: %v", nn, err))
+	// SPIFFE gets the client identity at connection time, so there's nothing to resolve from Secrets or ConfigMaps
+	if tls.CertificateSource != nil && *tls.CertificateSource == agentgateway.BackendTLSCertificateSourceSPIFFE {
+		p.CertificateSource = api.BackendPolicySpec_BackendTLS_SPIFFE
+	} else {
+		if len(tls.MtlsCertificateRef) > 0 {
+			// Currently we only support one, and enforce this in the API
+			mtls := tls.MtlsCertificateRef[0]
+			nn := types.NamespacedName{
+				Namespace: policy.Namespace,
+				Name:      string(mtls.Name),
 			}
-			p.Cert = data[corev1.TLSCertKey]
-			p.Key = data[corev1.TLSPrivateKeyKey]
-			if ca, f := data[corev1.ServiceAccountRootCAKey]; f {
-				p.Root = ca
-			}
-		}
-	}
-
-	// Explicit CA refs take precedence over mTLS CA material.
-	if len(tls.CACertificateRefs) > 0 {
-		var sb strings.Builder
-		for _, ref := range tls.CACertificateRefs {
-			pem, err := cacert.Resolve(
-				ctx.Krt,
-				ctx.Collections.ConfigMaps,
-				ctx.Collections.Secrets,
-				policy.Namespace,
-				ref,
-			)
+			data, err := ctx.ResolveCredentialRef(mtls, policy.Namespace)
 			if err != nil {
 				errs = append(errs, err)
-				continue
+			} else {
+				if _, err := ValidateTlsSecretData(nn.Name, nn.Namespace, data); err != nil {
+					errs = append(errs, fmt.Errorf("secret %v contains invalid certificate: %v", nn, err))
+				}
+				p.Cert = data[corev1.TLSCertKey]
+				p.Key = data[corev1.TLSPrivateKeyKey]
+				if ca, f := data[corev1.ServiceAccountRootCAKey]; f {
+					p.Root = ca
+				}
 			}
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(pem)
 		}
-		// An explicit but invalid source trusts nothing rather than system certs.
-		p.Root = []byte(sb.String())
+
+		// Explicit CA refs take precedence over mTLS CA material.
+		if len(tls.CACertificateRefs) > 0 {
+			var sb strings.Builder
+			for _, ref := range tls.CACertificateRefs {
+				pem, err := cacert.Resolve(
+					ctx.Krt,
+					ctx.Collections.ConfigMaps,
+					ctx.Collections.Secrets,
+					policy.Namespace,
+					ref,
+				)
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(pem)
+			}
+			// An explicit but invalid source trusts nothing rather than system certs.
+			p.Root = []byte(sb.String())
+		}
 	}
 
 	if len(tls.VerifySubjectAltNames) > 0 {
@@ -546,6 +575,10 @@ func translateBackendHTTP(policy *agentgateway.AgentgatewayPolicy) *api.Policy {
 
 func translateBackendTunnel(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy) (*api.Policy, error) {
 	tunnel := policy.Spec.Backend.Tunnel
+	mode := api.BackendPolicySpec_BackendTunnel_AUTO
+	if tunnel.Mode == agentgateway.BackendTunnelModeConnect {
+		mode = api.BackendPolicySpec_BackendTunnel_CONNECT
+	}
 
 	proxy, inlinePolicies, _, err := buildPolicyBackendEndpoint(ctx, tunnel.PolicyBackendEndpoint, policy.Namespace)
 
@@ -558,6 +591,7 @@ func translateBackendTunnel(ctx PolicyCtx, policy *agentgateway.AgentgatewayPoli
 					BackendTunnel: &api.BackendPolicySpec_BackendTunnel{
 						Proxy:          proxy,
 						InlinePolicies: inlinePolicies,
+						Mode:           mode,
 					},
 				},
 			},
@@ -678,9 +712,10 @@ func translateMCPAuthenticationSpec(
 		ResourceMetadata: &api.BackendPolicySpec_McpAuthentication_ResourceMetadata{
 			Extra: extraResourceMetadata,
 		},
-		JwksInline: translatedInlineJwks,
-		Mode:       mode,
-		ClientId:   authnPolicy.ClientID,
+		JwksInline:           translatedInlineJwks,
+		Mode:                 mode,
+		ClientId:             authnPolicy.ClientID,
+		JwtValidationOptions: translateJWTValidationOptions(authnPolicy.Validation),
 	}
 
 	if authnPolicy.ClientSecretRef != nil {
@@ -831,9 +866,8 @@ func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolic
 			if err != nil {
 				logger.Error("error parsing request prompt guard", "error", err)
 				errs = append(errs, err)
-			} else {
-				translatedAIPolicy.PromptGuard.Request = r
 			}
+			translatedAIPolicy.PromptGuard.Request = r
 		}
 
 		if aiSpec.PromptGuard.Response != nil {
@@ -841,9 +875,8 @@ func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolic
 			if err != nil {
 				logger.Error("error parsing response prompt guard", "error", err)
 				errs = append(errs, err)
-			} else {
-				translatedAIPolicy.PromptGuard.Response = r
 			}
+			translatedAIPolicy.PromptGuard.Response = r
 		}
 	}
 
@@ -1566,11 +1599,11 @@ func buildAwsAuthPolicy(ctx PolicyCtx, auth *agentgateway.AwsAuth, namespace str
 	var sessionToken *string
 	var serviceName string
 	if auth.ServiceName != nil {
-		serviceName = string(*auth.ServiceName)
+		serviceName = *auth.ServiceName
 	}
 	var region string
 	if auth.Region != nil {
-		region = string(*auth.Region)
+		region = *auth.Region
 	}
 	var assumeRole *api.AwsAssumeRole
 	if auth.AssumeRole != nil {
@@ -1583,6 +1616,9 @@ func buildAwsAuthPolicy(ctx PolicyCtx, auth *agentgateway.AwsAuth, namespace str
 		}
 		if auth.AssumeRole.SessionNameExpression != nil {
 			assumeRole.SessionNameExpression = string(*auth.AssumeRole.SessionNameExpression)
+		}
+		if auth.AssumeRole.ExternalID != nil {
+			assumeRole.ExternalId = *auth.AssumeRole.ExternalID
 		}
 	}
 
@@ -1666,6 +1702,7 @@ func buildAzureAuthPolicy(ctx PolicyCtx, auth *agentgateway.AzureAuth, namespace
 		return &api.BackendAuthPolicy{
 			Kind: &api.BackendAuthPolicy_Azure{
 				Azure: &api.Azure{
+					Scopes: auth.Scopes,
 					Kind: &api.Azure_ExplicitConfig{
 						ExplicitConfig: &api.AzureExplicitConfig{
 							CredentialSource: &api.AzureExplicitConfig_ManagedIdentityCredential{
@@ -1682,6 +1719,7 @@ func buildAzureAuthPolicy(ctx PolicyCtx, auth *agentgateway.AzureAuth, namespace
 		return &api.BackendAuthPolicy{
 			Kind: &api.BackendAuthPolicy_Azure{
 				Azure: &api.Azure{
+					Scopes: auth.Scopes,
 					Kind: &api.Azure_ExplicitConfig{
 						ExplicitConfig: &api.AzureExplicitConfig{
 							CredentialSource: &api.AzureExplicitConfig_WorkloadIdentityCredential{
@@ -1698,6 +1736,7 @@ func buildAzureAuthPolicy(ctx PolicyCtx, auth *agentgateway.AzureAuth, namespace
 	return &api.BackendAuthPolicy{
 		Kind: &api.BackendAuthPolicy_Azure{
 			Azure: &api.Azure{
+				Scopes: auth.Scopes,
 				Kind: &api.Azure_Implicit{
 					Implicit: &api.AzureImplicit{},
 				},
@@ -1738,6 +1777,7 @@ func buildAzureClientSecret(ctx PolicyCtx, auth *agentgateway.AzureAuth, namespa
 	return &api.BackendAuthPolicy{
 		Kind: &api.BackendAuthPolicy_Azure{
 			Azure: &api.Azure{
+				Scopes: auth.Scopes,
 				Kind: &api.Azure_ExplicitConfig{
 					ExplicitConfig: &api.AzureExplicitConfig{
 						CredentialSource: &api.AzureExplicitConfig_ClientSecret{

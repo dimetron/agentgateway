@@ -196,6 +196,14 @@ fn visit_tool_item_text(value: &mut Value, f: &mut dyn FnMut(ContentScope, &mut 
 	}
 }
 
+/// `rest` keys preserved when a masked text run collapses; see `scan_text_runs`.
+const PRESERVED_REST_KEYS: &[&str] = &[
+	// Anthropic-style cache breakpoint, accepted by some OpenAI-compat providers
+	"cache_control",
+	// OpenAI explicit prompt-cache breakpoint
+	"prompt_cache_breakpoint",
+];
+
 fn scan_value_text_runs(
 	scope: ContentScope,
 	parts: &mut Vec<Value>,
@@ -216,6 +224,9 @@ fn scan_value_text_runs(
 				_ => None,
 			}
 		},
+		// parts are pass-through JSON, so `rest` is the whole part
+		|part| Some(part),
+		PRESERVED_REST_KEYS,
 		&mut |text| f(scope, text),
 	);
 }
@@ -366,6 +377,7 @@ impl ResponseBuilder {
 			top_p: None,
 			truncation: None,
 			usage,
+			prompt_cache_diagnostics: None,
 		}
 	}
 
@@ -547,6 +559,33 @@ impl RequestType for Request {
 		messages
 	}
 
+	fn get_messages_v2(&self) -> Vec<NormalizedMessage> {
+		let mut messages = self
+			.instructions
+			.as_ref()
+			.map(|instructions| NormalizedMessage {
+				role: strng::literal!("system"),
+				parts: vec![NormalizedMessagePart::text(strng::new(instructions))],
+			})
+			.into_iter()
+			.collect::<Vec<_>>();
+		match &self.input {
+			RequestInput::Text(text) => messages.push(NormalizedMessage {
+				role: strng::literal!("user"),
+				parts: vec![NormalizedMessagePart::text(strng::new(text))],
+			}),
+			RequestInput::Items(items) => {
+				messages.extend(
+					items
+						.iter()
+						.filter_map(|item| normalized_response_item(&item.0)),
+				);
+			},
+		}
+		crate::types::attach_tool_result_names(&mut messages);
+		messages
+	}
+
 	fn set_messages(&mut self, mut messages: Vec<SimpleChatCompletionMessage>) {
 		if self.instructions.is_some() {
 			self.instructions = messages
@@ -580,6 +619,126 @@ impl RequestType for Request {
 	}
 }
 
+fn normalized_response_item(item: &Value) -> Option<NormalizedMessage> {
+	if let Some(role) = item.get("role").and_then(Value::as_str) {
+		let mut parts = match item.get("content") {
+			Some(Value::String(text)) => vec![NormalizedMessagePart::text(strng::new(text))],
+			Some(Value::Array(content)) => content
+				.iter()
+				.filter_map(|part| {
+					part
+						.get("text")
+						.or_else(|| part.get("refusal"))
+						.and_then(Value::as_str)
+						.map(|text| NormalizedMessagePart::text(strng::new(text)))
+				})
+				.collect(),
+			_ => Vec::new(),
+		};
+		parts.extend(
+			item
+				.get("tool_calls")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(crate::types::normalized_tool_call),
+		);
+		return (!parts.is_empty()).then(|| NormalizedMessage {
+			role: strng::new(role),
+			parts,
+		});
+	}
+
+	let item_type = item.get("type").and_then(Value::as_str)?;
+	if item_type == "reasoning" {
+		return Some(NormalizedMessage {
+			role: strng::literal!("assistant"),
+			parts: vec![NormalizedMessagePart::reasoning(item.clone())],
+		});
+	}
+
+	let is_call = item_type.ends_with("_call")
+		|| matches!(
+			item_type,
+			"program" | "mcp_approval_request" | "tool_search_call"
+		);
+	if is_call {
+		let name = item
+			.get("name")
+			.and_then(Value::as_str)
+			.or_else(|| item_type.strip_suffix("_call"))
+			.unwrap_or(item_type);
+		let id = item
+			.get("call_id")
+			.or_else(|| item.get("id"))
+			.and_then(Value::as_str)
+			.unwrap_or(name);
+		let arguments = [
+			"arguments",
+			"input",
+			"action",
+			"actions",
+			"operation",
+			"queries",
+			"code",
+		]
+		.into_iter()
+		.find_map(|key| item.get(key))
+		.cloned()
+		.unwrap_or_else(|| Value::Object(Default::default()));
+		let mut parts = vec![NormalizedMessagePart::tool_call(
+			strng::new(id),
+			strng::new(name),
+			crate::types::parse_json_string(arguments),
+		)];
+		if let Some(content) = item
+			.get("output")
+			.or_else(|| item.get("outputs"))
+			.or_else(|| item.get("results"))
+			.or_else(|| item.get("error"))
+		{
+			parts.push(NormalizedMessagePart::tool_result(
+				Some(strng::new(id)),
+				Some(strng::new(name)),
+				content.clone(),
+				item.get("error").map(|_| true),
+			));
+		}
+		return Some(NormalizedMessage {
+			role: strng::literal!("assistant"),
+			parts,
+		});
+	}
+
+	let is_result = item_type.ends_with("_call_output")
+		|| matches!(
+			item_type,
+			"program_output" | "tool_search_output" | "mcp_list_tools"
+		);
+	if is_result {
+		let id = item
+			.get("call_id")
+			.or_else(|| item.get("id"))
+			.and_then(Value::as_str)
+			.map(strng::new);
+		let content = ["output", "result", "tools", "error"]
+			.into_iter()
+			.find_map(|key| item.get(key))
+			.cloned()
+			.unwrap_or(Value::Null);
+		return Some(NormalizedMessage {
+			role: strng::literal!("tool"),
+			parts: vec![NormalizedMessagePart::tool_result(
+				id,
+				item.get("name").and_then(Value::as_str).map(strng::new),
+				content,
+				item.get("error").map(|_| true),
+			)],
+		});
+	}
+	None
+}
+
 fn extract_output_messages(resp: &Response) -> Option<Vec<OutputMessage>> {
 	let content: Vec<_> = resp
 		.output
@@ -606,7 +765,21 @@ pub(crate) fn output_item_tool_call_part(item: &OutputItem) -> Option<OutputMess
 				Err(_) if call.arguments.trim().is_empty() => serde_json::Value::Object(Default::default()),
 				Err(_) => serde_json::Value::String(call.arguments.clone()),
 			};
-			(&call.call_id, &call.name, arguments)
+			let name = call
+				.namespace
+				.as_ref()
+				.filter(|namespace| !namespace.is_empty())
+				.map_or_else(
+					|| call.name.clone(),
+					|namespace| {
+						format!(
+							"{namespace}{}{}",
+							crate::conversion::namespace_tools::NAMESPACE_SEPARATOR,
+							call.name
+						)
+					},
+				);
+			(&call.call_id, name, arguments)
 		},
 		OutputItem::CustomToolCall(call) => {
 			let arguments = match serde_json::from_str(&call.input) {
@@ -614,13 +787,13 @@ pub(crate) fn output_item_tool_call_part(item: &OutputItem) -> Option<OutputMess
 				Err(_) if call.input.trim().is_empty() => serde_json::Value::Object(Default::default()),
 				Err(_) => serde_json::Value::String(call.input.clone()),
 			};
-			(&call.call_id, &call.name, arguments)
+			(&call.call_id, call.name.clone(), arguments)
 		},
 		_ => return None,
 	};
 	Some(OutputMessagePart::ToolCall {
 		id: strng::new(id),
-		name: strng::new(name),
+		name: strng::new(&name),
 		arguments,
 	})
 }
@@ -650,6 +823,7 @@ impl ResponseType for Response {
 				.usage
 				.as_ref()
 				.map(|u| u.total_tokens.unwrap_or(u.input_tokens + u.output_tokens)),
+			pages: None,
 			reasoning_tokens: self.usage.as_ref().and_then(|u| {
 				u.output_tokens_details
 					.as_ref()
@@ -689,6 +863,8 @@ impl ResponseType for Response {
 			},
 			output_messages,
 			first_token: Default::default(),
+			last_token_at: Default::default(),
+			inter_chunk_latencies: Default::default(),
 		}
 	}
 
@@ -781,13 +957,14 @@ pub mod typed {
 	use async_openai::types::responses as openai_responses;
 	// Re-export async-openai Responses API types for cleaner usage
 	pub use async_openai::types::responses::{
-		AssistantRole, CreateResponse, CustomToolCallOutput, CustomToolCallOutputOutput,
+		Annotation, AssistantRole, CreateResponse, CustomToolCallOutput, CustomToolCallOutputOutput,
 		EasyInputContent, EasyInputMessage, ErrorObject, FunctionCallOutput, FunctionToolCall,
 		IncompleteDetails, InputContent, InputItem, InputMessage, InputParam, InputRole,
 		InputTextContent, InputTokenDetails, Item, MessageItem, OutputContent, OutputItem,
 		OutputMessage, OutputMessageContent, OutputStatus, OutputTextContent, OutputTokenDetails,
-		Reasoning, ReasoningEffort, Response, ResponseCompletedEvent, ResponseContentPartAddedEvent,
-		ResponseContentPartDoneEvent, ResponseCreatedEvent, ResponseErrorEvent, ResponseFailedEvent,
+		Reasoning, ReasoningEffort, ReasoningItem, ReasoningItemContent, ReasoningTextContent,
+		Response, ResponseCompletedEvent, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent,
+		ResponseCreatedEvent, ResponseErrorEvent, ResponseFailedEvent,
 		ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent,
 		ResponseInProgressEvent, ResponseIncompleteEvent, ResponseOutputItemAddedEvent,
 		ResponseOutputItemDoneEvent, ResponseRefusalDeltaEvent, ResponseRefusalDoneEvent,
@@ -913,6 +1090,7 @@ mod tests {
 			caller: None,
 			id: Some("fc_123".to_string()),
 			status: Some(OutputStatus::Completed),
+			r#async: None,
 		})]);
 
 		let llm_response = response.to_llm_response(crate::LogContentFields {
@@ -943,6 +1121,7 @@ mod tests {
 			caller: None,
 			id: Some("fc_123".to_string()),
 			status: Some(OutputStatus::Completed),
+			r#async: None,
 		})]);
 
 		let llm_response = response.to_llm_response(crate::LogContentFields::default());

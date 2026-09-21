@@ -537,3 +537,95 @@ fn describe_file_inline_or_remote(source: &FileInlineOrRemote) -> String {
 		FileInlineOrRemote::Remote { url } => format!("uri '{url}'"),
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::types::agent::Target;
+
+	fn inline_tunnel(host: &str, port: u16, mode: crate::types::backend::TunnelMode) -> crate::types::backend::Tunnel {
+		crate::types::backend::Tunnel {
+			proxy: Arc::new(crate::types::agent::SimpleBackendReference::InlineBackend(
+				crate::types::agent::Target::from((host, port)),
+			)),
+			mode,
+			policies: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn no_tunnel_returns_none() {
+		assert!(build_oidc_tunnel(None).unwrap().is_none());
+	}
+
+	#[test]
+	fn inline_hostname_proxy_resolves_target() {
+		let spec = build_oidc_tunnel(Some(inline_tunnel(
+			"genproxy.corp.example.com",
+			8080,
+			crate::types::backend::TunnelMode::Connect,
+		)))
+		.unwrap()
+		.unwrap();
+		let Target::Hostname(host, port) = &spec.target else {
+			panic!("expected hostname target");
+		};
+		assert_eq!(host.as_str(), "genproxy.corp.example.com");
+		assert_eq!(*port, 8080);
+		assert!(spec.connect);
+		// Proxy hop is a plain (non-TLS) transport: a forward proxy spoken to over
+		// HTTP CONNECT.
+		assert!(matches!(
+			spec.connection.transport,
+			crate::client::Transport::Plain(crate::client::ApplicationTransport::Plaintext)
+		));
+	}
+
+	#[test]
+	fn inline_ip_proxy_resolves_address() {
+		let spec = build_oidc_tunnel(Some(inline_tunnel(
+			"192.168.1.169",
+			3128,
+			crate::types::backend::TunnelMode::Auto,
+		)))
+		.unwrap()
+		.unwrap();
+		assert!(matches!(spec.target, Target::Address(_)));
+		assert!(!spec.connect);
+	}
+
+	#[test]
+	fn named_backend_reference_is_rejected() {
+		let tunnel = crate::types::backend::Tunnel {
+			proxy: Arc::new(crate::types::agent::SimpleBackendReference::Backend(
+				"ns/backend".into(),
+			)),
+			mode: crate::types::backend::TunnelMode::Connect,
+			policies: Vec::new(),
+		};
+		assert!(build_oidc_tunnel(Some(tunnel)).is_err());
+	}
+
+	#[test]
+	fn deserializes_backend_tunnel_from_json() {
+		let raw = serde_json::json!({
+			"issuer": "https://issuer.example.com",
+			"clientId": "id",
+			"clientSecret": "secret",
+			"redirectURI": "http://localhost:4000/oauth/callback",
+			"backendTunnel": {
+				"proxy": { "host": "genproxy.corp.example.com:8080" },
+				"mode": "connect"
+			}
+		});
+		let cfg: LocalOidcConfig = serde_json::from_value(raw).expect("parse LocalOidcConfig");
+		let Some(tunnel) = cfg.backend_tunnel else {
+			panic!("expected backend_tunnel");
+		};
+		let spec = build_oidc_tunnel(Some(tunnel)).unwrap().unwrap();
+		let Target::Hostname(host, _) = &spec.target else {
+			panic!("expected hostname");
+		};
+		assert_eq!(host.as_str(), "genproxy.corp.example.com");
+	}
+}

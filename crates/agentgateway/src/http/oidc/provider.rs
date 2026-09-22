@@ -43,6 +43,7 @@ pub(crate) async fn exchange_code(
 	.await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn exchange_code_with_timeout(
 	client: PolicyClient,
 	provider: &Provider,

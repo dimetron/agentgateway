@@ -44,6 +44,8 @@ pub struct TunnelSpec {
 	pub connection: ConnectionConfig,
 	pub connect: bool,
 	pub connect_headers: Vec<(HeaderName, HeaderValue)>,
+	/// Optional `Proxy-Authorization` value for an authenticated forward proxy.
+	pub token: Option<HeaderValue>,
 }
 
 impl Debug for Client {
@@ -643,7 +645,7 @@ impl Client {
 					TunnelConfig {
 						target: spec.target.clone(),
 						connection: Box::new(spec.connection.clone()),
-						token: None,
+						token: spec.token.clone(),
 						connect_headers: spec.connect_headers.clone(),
 						connect: spec.connect,
 					},

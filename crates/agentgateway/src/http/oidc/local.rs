@@ -357,11 +357,27 @@ fn build_oidc_tunnel(
 		}),
 		max_connection_duration: None,
 	};
+	// Follow the backend tunnel pattern (build_transport): an optional
+	// `backendAuth` on the proxy backend becomes the CONNECT `Proxy-Authorization`
+	// token, so an egress proxy that requires auth can be used.
+	let token = tunnel
+		.policies
+		.iter()
+		.find_map(|p| match p {
+			BackendTrafficPolicy::BackendAuth(auth) => Some(auth),
+			_ => None,
+		})
+		.map(|auth| {
+			crate::http::auth::apply_tunnel_auth(auth)
+				.map_err(|e| Error::Config(format!("backendTunnel proxy backendAuth: {e}")))
+		})
+		.transpose()?;
 	Ok(Some(Arc::new(crate::client::TunnelSpec {
 		target,
 		connection,
 		connect: tunnel.mode == crate::types::backend::TunnelMode::Connect,
 		connect_headers: Vec::new(),
+		token,
 	})))
 }
 
@@ -541,9 +557,13 @@ fn describe_file_inline_or_remote(source: &FileInlineOrRemote) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::types::agent::Target;
+	use crate::types::agent::{BackendTrafficPolicy, Target};
 
-	fn inline_tunnel(host: &str, port: u16, mode: crate::types::backend::TunnelMode) -> crate::types::backend::Tunnel {
+	fn inline_tunnel(
+		host: &str,
+		port: u16,
+		mode: crate::types::backend::TunnelMode,
+	) -> crate::types::backend::Tunnel {
 		crate::types::backend::Tunnel {
 			proxy: Arc::new(crate::types::agent::SimpleBackendReference::InlineBackend(
 				crate::types::agent::Target::from((host, port)),
@@ -627,5 +647,23 @@ mod tests {
 			panic!("expected hostname");
 		};
 		assert_eq!(host.as_str(), "genproxy.corp.example.com");
+	}
+
+	#[test]
+	fn backend_auth_becomes_proxy_authorization_token() {
+		let mut tunnel = inline_tunnel(
+			"proxy.example.com",
+			8080,
+			crate::types::backend::TunnelMode::Connect,
+		);
+		tunnel.policies.push(BackendTrafficPolicy::BackendAuth(
+			crate::http::auth::BackendAuth::new(crate::http::auth::BackendAuthKind::Key {
+				value: secrecy::SecretString::new("my-key".into()),
+				location: None,
+			}),
+		));
+		let spec = build_oidc_tunnel(Some(tunnel)).unwrap().unwrap();
+		let token = spec.token.clone().expect("proxy-auth token should be set");
+		assert_eq!(token.to_str().unwrap(), "Bearer my-key");
 	}
 }

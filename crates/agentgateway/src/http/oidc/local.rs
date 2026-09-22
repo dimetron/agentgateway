@@ -372,6 +372,21 @@ fn build_oidc_tunnel(
 				.map_err(|e| Error::Config(format!("backendTunnel proxy backendAuth: {e}")))
 		})
 		.transpose()?;
+	// Only `TCP` (connection tuning) and `backendAuth` (proxy auth) are honored
+	// for the OIDC tunnel. TLS-to-the-proxy, HTTP transforms, authz, etc. are
+	// not representable in this plain-CONNECT path, so reject them up front
+	// rather than silently ignoring a policy the user configured.
+	for policy in &tunnel.policies {
+		let supported = matches!(
+			policy,
+			BackendTrafficPolicy::TCP(_) | BackendTrafficPolicy::BackendAuth(_)
+		);
+		if !supported {
+			return Err(Error::Config(format!(
+				"ui.policies.oidc.backendTunnel does not support policy {policy:?}; only `tcp` and `backendAuth` are honored on the OIDC tunnel"
+			)));
+		}
+	}
 	Ok(Some(Arc::new(crate::client::TunnelSpec {
 		target,
 		connection,
@@ -665,5 +680,26 @@ mod tests {
 		let spec = build_oidc_tunnel(Some(tunnel)).unwrap().unwrap();
 		let token = spec.token.clone().expect("proxy-auth token should be set");
 		assert_eq!(token.to_str().unwrap(), "Bearer my-key");
+	}
+
+	#[test]
+	fn unsupported_policies_are_rejected() {
+		let mut tunnel = inline_tunnel(
+			"proxy.example.com",
+			8080,
+			crate::types::backend::TunnelMode::Connect,
+		);
+		// A policy other than `tcp`/`backendAuth` (here `http`) is not
+		// representable on the plain-CONNECT OIDC tunnel and must be rejected,
+		// not silently ignored.
+		tunnel.policies.push(BackendTrafficPolicy::HTTP(
+			crate::types::backend::HTTP::default(),
+		));
+		let err = build_oidc_tunnel(Some(tunnel)).unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("does not support policy"),
+			"expected an unsupported-policy config error, got: {msg}"
+		);
 	}
 }

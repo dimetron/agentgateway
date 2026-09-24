@@ -359,7 +359,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 		// Ref: https://gateway-api.sigs.k8s.io/geps/gep-1713/#listener-precedence
 		// - ListenerSet ordered by creation time (oldest first)
 		// - ListenerSet ordered alphabetically by “{namespace}/{name}”
-		slices.SortStableFunc(listenersFromSets, func(a, b *ListenerSet) int {
+		slices.SortFunc(listenersFromSets, func(a, b *ListenerSet) int {
 			// primary sort: creation timestamp (oldest first)
 			if r := a.ParentInfo.CreationTimestamp.Compare(b.ParentInfo.CreationTimestamp.Time); r != 0 {
 				return r
@@ -411,6 +411,11 @@ const (
 )
 
 func validateListenerConflicts(listeners []*GatewayListener) {
+	// Precompute the final size to avoid incremental sizing
+	hostnameCounts := make(map[gwv1.PortNumber]int)
+	for _, listener := range listeners {
+		hostnameCounts[listener.ParentInfo.Port] += len(listener.ParentInfo.Hostnames)
+	}
 	portMap := make(map[gwv1.PortNumber]*portProtocol)
 	for i, listener := range listeners {
 		var conflict ListenerConflict
@@ -429,8 +434,10 @@ func validateListenerConflicts(listeners []*GatewayListener) {
 				conflict = ListenerConflictProtocol
 			}
 		} else {
+			hostnames := sets.NewWithLength[string](hostnameCounts[listener.ParentInfo.Port])
+			hostnames.InsertAll(listener.ParentInfo.Hostnames...)
 			portMap[listener.ParentInfo.Port] = &portProtocol{
-				hostnames: sets.New(listener.ParentInfo.Hostnames...),
+				hostnames: hostnames,
 				protocol:  listener.ParentInfo.Protocol,
 				internal:  listener.ParentInfo.Internal,
 			}
